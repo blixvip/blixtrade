@@ -126,13 +126,13 @@ function applyPair(mint, p) {
   const t = q.getToken.get(mint);
   const mcap = p.marketCap || p.fdv || 0;
   db.prepare(`UPDATE tokens SET
-    symbol = COALESCE(?, symbol), name = COALESCE(?, name), image = COALESCE(image, ?),
+    symbol = COALESCE(?, symbol), name = COALESCE(?, name), image = COALESCE(image, ?), header = COALESCE(?, header),
     pair = ?, dex = ?, pair_created = ?, price = ?, mcap = ?, liquidity = ?,
     vol_m5 = ?, vol_h1 = ?, vol_h24 = ?, buys_m5 = ?, sells_m5 = ?, buys_h1 = ?, sells_h1 = ?,
     chg_m5 = ?, chg_h1 = ?, chg_h24 = ?, links = ?, updated = ?, peak_mcap = MAX(COALESCE(peak_mcap, 0), ?),
     graduated = CASE WHEN ? THEN 1 ELSE graduated END
     WHERE mint = ?`).run(
-    p.baseToken?.symbol || null, p.baseToken?.name || null, p.info?.imageUrl || null,
+    p.baseToken?.symbol || null, p.baseToken?.name || null, p.info?.imageUrl || null, p.info?.header || null,
     p.pairAddress, p.dexId, p.pairCreatedAt || null, +p.priceUsd || 0, mcap, p.liquidity?.usd || 0,
     p.volume?.m5 || 0, p.volume?.h1 || 0, p.volume?.h24 || 0,
     p.txns?.m5?.buys || 0, p.txns?.m5?.sells || 0, p.txns?.h1?.buys || 0, p.txns?.h1?.sells || 0,
@@ -341,6 +341,12 @@ async function cycle() {
   }
 }
 
+// Fetch a coin's market data right away (used before alerting on a coin we just heard about).
+export async function enrichNow(mint) {
+  const p = (await src.dexTokens([mint])).get(mint);
+  if (p) { applyPair(mint, p); safetyQueue.add(mint); }
+}
+
 export function adoptMint(mint) {
   if (q.getToken.get(mint)) return;
   adopt({ mint, source: "wallet" });
@@ -350,7 +356,7 @@ export function start() {
   const pump = startPump();
   const stopWallets = startWallets((ev) => {
     bus.emit("walletTrade", ev);
-    walletSignals(ev, raise, adoptMint);
+    walletSignals(ev, raise, adoptMint, enrichNow).catch((e) => logEvent("error", `wallet signal: ${e.message}`));
   });
   discoverFeeds().then(cycle);
   const timers = [

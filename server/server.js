@@ -59,6 +59,18 @@ function signalsQuery({ kind, limit = 60, since = 0 } = {}) {
   return rows;
 }
 
+// Last ~6 hours of prices, thinned to 24 points, for the mini charts in tables.
+const sparkQ = db.prepare("SELECT price FROM snapshots WHERE mint = ? AND t > ? AND price > 0 ORDER BY t");
+function withSpark(list) {
+  const since = Date.now() - 6 * 60 * MIN;
+  for (const t of list) {
+    const ps = sparkQ.all(t.mint, since).map((r) => r.price);
+    const step = Math.max(1, Math.ceil(ps.length / 24));
+    t.spark = ps.filter((_, i) => i % step === 0 || i === ps.length - 1);
+  }
+  return list;
+}
+
 const SORTS = { score: "score DESC", mcap: "mcap DESC", volume: "vol_h1 DESC", new: "first_seen DESC", change: "chg_h1 DESC", safety: "safety_score DESC" };
 function tokensQuery(p) {
   const where = ["status = 'active'", "pair IS NOT NULL"];
@@ -69,7 +81,9 @@ function tokensQuery(p) {
   if (p.q) { where.push("(symbol LIKE ? OR name LIKE ? OR mint = ?)"); args.push(`%${p.q}%`, `%${p.q}%`, p.q); }
   if (p.graduated === "1") where.push("graduated = 1");
   const sql = `SELECT * FROM tokens WHERE ${where.join(" AND ")} ORDER BY ${SORTS[p.sort] || SORTS.score} LIMIT ?`;
-  return db.prepare(sql).all(...args, Math.min(+p.limit || 100, 400)).map(tokenOut);
+  // Lists don't need each coin's full holder list and risk text; the coin page loads those.
+  const slim = (t) => ({ ...t, description: undefined, safety: t.safety && { danger: t.safety.danger, warn: t.safety.warn, top10: t.safety.top10, devPct: t.safety.devPct, totalHolders: t.safety.totalHolders, lpLockedPct: t.safety.lpLockedPct } });
+  return withSpark(db.prepare(sql).all(...args, Math.min(+p.limit || 100, 400)).map(tokenOut).map(slim));
 }
 
 function overview() {
@@ -106,7 +120,7 @@ async function makeBrief(reason = "scheduled") {
       note: uptime < 60 ? `The radar started ${uptime} minutes ago, so launch counts cover only that window. Do not call the launch pace slow or fast.` : undefined,
       launchesSeen: launchLog.filter((l) => l.t > Date.now() - 60 * MIN).length,
       graduatedCoinsTracked: overview().counts.graduated24h,
-      narratives: nar.themes.slice(0, 8).map((t) => ({ theme: t.name, heat: t.heat, launchShare: +(t.launchShare * 100).toFixed(1), launchLift: +t.launchLift.toFixed(2), trackedVolume1h: Math.round(t.volume), leaders: t.top.slice(0, 3).map((x) => x.symbol) })),
+      narratives: nar.themes.slice(0, 8).map((t) => ({ theme: t.name, heat: t.heat, launchShare: +(t.launchShare * 100).toFixed(1), launchLift: t.launchLift == null ? null : +t.launchLift.toFixed(2), trackedVolume1h: Math.round(t.volume), leaders: t.top.slice(0, 3).map((x) => x.symbol) })),
       emergingWords: nar.emerging.slice(0, 10).map((e) => `${e.word} (${e.count})`),
       topCoins: top,
       recentSignals: signalsQuery({ limit: 15, since: Date.now() - 3 * 60 * MIN }).map((s) => ({ kind: s.kind, title: s.title })),

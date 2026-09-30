@@ -98,6 +98,7 @@ async function pollWallets(emit) {
     const list = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'fomo' DESC, COALESCE(last_poll, 0) ASC").all();
     const budget = sol.rpcStats && settings.rpcUrl ? 30 : 8;   // wallets per round
     for (const w of list.slice(0, budget)) await pollOne(w, emit).catch((e) => logEvent("error", `wallet ${short(w.address)}: ${e.message}`));
+    pauseBots();
   } finally {
     polling = false;
   }
@@ -161,7 +162,7 @@ export function walletPnl(address, prices = new Map()) {
 }
 
 export function listWallets() {
-  const rows = db.prepare("SELECT * FROM wallets ORDER BY source = 'you' DESC, COALESCE(last_trade, 0) DESC").all();
+  const rows = db.prepare("SELECT * FROM wallets ORDER BY watching DESC, source = 'you' DESC, COALESCE(last_trade, 0) DESC").all();
   return rows.map((w) => {
     const p = walletPnl(w.address);
     const hits = db.prepare("SELECT COUNT(DISTINCT mint) n FROM wallet_hits WHERE wallet = ?").get(w.address).n;
@@ -191,7 +192,7 @@ export async function walletDetail(address) {
 export function activity(limit = 60) {
   return db.prepare(`SELECT wt.*, w.label, w.source, t.symbol, t.name, t.image, t.mcap FROM wallet_trades wt
     JOIN wallets w ON w.address = wt.wallet LEFT JOIN tokens t ON t.mint = wt.mint
-    ORDER BY wt.t DESC LIMIT ?`).all(limit);
+    WHERE w.watching = 1 AND COALESCE(wt.usd, 0) >= 1 ORDER BY wt.t DESC LIMIT ?`).all(limit);
 }
 
 // Watched wallets that traded this coin.
@@ -246,7 +247,8 @@ async function harvestEarly() {
     if (!tx) continue;
     const signer = tx.transaction.message.accountKeys.find((k) => k.signer)?.pubkey;
     if (!signer) continue;
-    const sw = sol.parseSwaps(tx, signer).find((x) => x.mint === w.mint && x.side === "buy");
+    // Dust buys (fractions of a cent) are bots spraying every new coin; skip them.
+    const sw = sol.parseSwaps(tx, signer).find((x) => x.mint === w.mint && x.side === "buy" && x.sol >= 0.05);
     if (sw) { ins.run(signer, w.mint, now()); found++; }
   }
   logEvent("discover", `Found ${found} early buyers of ${q.getToken.get(w.mint)?.symbol || short(w.mint)}`);
@@ -263,7 +265,7 @@ export function smartMoney(limit = 50) {
     const mints = r.mints.split(",");
     const coins = mints.map((m) => q.getToken.get(m)).filter(Boolean).map((t) => ({ mint: t.mint, symbol: t.symbol, image: t.image }));
     const w = db.prepare("SELECT label, watching, source FROM wallets WHERE address = ?").get(r.wallet);
-    out.push({ address: r.wallet, coins: r.coins, early: r.early, holder: r.holder, score: r.early * 2 + r.holder, tokens: coins, last: r.last, watching: w?.watching || 0, label: w?.label || null });
+    out.push({ address: r.wallet, coins: r.coins, early: r.early, holder: r.holder, score: r.early * 2 + r.holder, tokens: coins, last: r.last, watching: w?.watching || 0, label: w?.label || null, known: !!w });
     if (out.length >= limit) break;
   }
   return { winners, wallets: out };
@@ -275,17 +277,34 @@ function autoFollow() {
   let room = settings.maxSmartWallets - followed;
   for (const w of smartMoney(40).wallets) {
     if (room <= 0) break;
-    if (w.watching || w.score < 3) continue;
+    // Never re-add a wallet that's already known: paused bots and wallets you paused stay paused.
+    if (w.known || w.score < 3) continue;
     addWallet(w.address, "", "smart");
     room--;
   }
 }
 
 // ---------- signals from wallet activity ----------
-export function walletSignals(event, raise, adopt) {
+// Wallets that buy dozens of different coins every few hours are bots or snipers, not signal.
+const BOT_MINTS_6H = 25;
+export function isBot(address) {
+  return db.prepare("SELECT COUNT(DISTINCT mint) n FROM wallet_trades WHERE wallet = ? AND side = 'buy' AND t > ?").get(address, now() - 6 * 60 * MIN).n >= BOT_MINTS_6H;
+}
+function pauseBots() {
+  const rows = db.prepare("SELECT address, label FROM wallets WHERE watching = 1 AND source IN ('smart', 'fomo')").all();
+  for (const w of rows) if (isBot(w.address)) {
+    db.prepare("UPDATE wallets SET watching = 0, label = ? WHERE address = ?").run(`${w.label || short(w.address)} (bot, paused)`, w.address);
+    logEvent("wallet", `Paused ${short(w.address)}: buys ${BOT_MINTS_6H}+ coins every 6h, looks like a bot`);
+  }
+}
+
+export async function walletSignals(event, raise, adopt, enrich) {
   const { wallet: w, trade } = event;
   if (trade.side !== "buy") return;
+  if (w.source !== "you" && isBot(w.address)) return;
   adopt(trade.mint);
+  // Look the coin up first so alerts carry its ticker, not a raw address.
+  if (!q.getToken.get(trade.mint)?.symbol) await enrich(trade.mint).catch(() => {});
   const t = q.getToken.get(trade.mint);
   const tk = { mint: trade.mint, symbol: t?.symbol || short(trade.mint), score: t?.score || 0, price: t?.price || null, mcap: t?.mcap || null };
   const usd = trade.usd ? `$${Math.round(trade.usd).toLocaleString()}` : `${trade.sol.toFixed(2)} SOL`;
@@ -296,7 +315,8 @@ export function walletSignals(event, raise, adopt) {
     raise(tk, `wallet:${w.address}`, `${nameOf(w)} bought $${tk.symbol}`, `${usd} buy${t?.mcap ? ` at ${fmtUsd(t.mcap)} mcap` : ""}.${fomoNote(w.address)}${safety}`);
 
   const buyers = db.prepare(`SELECT DISTINCT wt.wallet FROM wallet_trades wt JOIN wallets w ON w.address = wt.wallet
-    WHERE wt.mint = ? AND wt.side = 'buy' AND wt.t > ? AND w.watching = 1`).all(trade.mint, now() - 2 * 60 * MIN);
+    WHERE wt.mint = ? AND wt.side = 'buy' AND wt.t > ? AND w.watching = 1 AND wt.sol >= 0.1`).all(trade.mint, now() - 2 * 60 * MIN)
+    .filter((b) => !isBot(b.wallet));
   const danger = json(t?.safety)?.danger > 0;
   if (buyers.length >= 2 && !danger && cool("smart", 6 * 60 * MIN)) {
     const names = buyers.map((b) => nameOf(db.prepare("SELECT * FROM wallets WHERE address = ?").get(b.wallet))).slice(0, 4).join(", ");

@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS events (
 try { db.exec("ALTER TABLE signals ADD COLUMN hidden INTEGER DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE tokens ADD COLUMN creator TEXT"); } catch {}
 try { db.exec("ALTER TABLE tokens ADD COLUMN dev_sol REAL"); } catch {}
+try { db.exec("ALTER TABLE tokens ADD COLUMN header TEXT"); } catch {}
 
 export const q = {
   getToken: db.prepare("SELECT * FROM tokens WHERE mint = ?"),

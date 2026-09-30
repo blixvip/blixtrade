@@ -154,7 +154,7 @@ export function topTraders(limit = 25) {
       realized += pnl; closed++; if (pnl > 0) wins++;
     }
     const f = db.prepare("SELECT watching, label FROM wallets WHERE address = ?").get(w.wallet);
-    out.push({ wallet: w.wallet, handle: handleOf(w.wallet), trades: w.trades, coins: w.mints.size, volume: w.volume, realized, closed, winRate: closed ? wins / closed : null, watching: f?.watching || 0, label: f?.label || null });
+    out.push({ wallet: w.wallet, handle: handleOf(w.wallet), trades: w.trades, coins: w.mints.size, volume: w.volume, realized, closed, winRate: closed ? wins / closed : null, watching: f?.watching || 0, label: f?.label || null, known: !!f });
   }
   return out.filter((t) => t.closed > 0).sort((a, b) => b.realized - a.realized).slice(0, limit);
 }
@@ -165,7 +165,7 @@ function autoFollow(addWallet) {
   let room = settings.fomoFollowTop - following;
   for (const t of topTraders(40)) {
     if (room <= 0) break;
-    if (t.watching || t.realized < 300 || t.closed < 3 || (t.winRate ?? 0) < 0.5) continue;
+    if (t.known || t.realized < 300 || t.closed < 3 || (t.winRate ?? 0) < 0.5) continue;
     addWallet(t.wallet, "", "fomo");
     db.prepare("UPDATE wallets SET fomo = 1 WHERE address = ?").run(t.wallet);
     room--;

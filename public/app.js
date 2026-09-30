@@ -33,11 +33,74 @@ const shortAddr = (a) => a ? `${a.slice(0, 4)}…${a.slice(-4)}` : "";
 // Opens the coin in Fomo (the app on your phone, fomo.family on desktop).
 const fomoUrl = (mint) => `https://fomo.family/tokens/solana/${mint}`;
 const fomoBtn = (mint, big = false) => `<a class="btn ${big ? "fomo" : "fomo sm"}" href="${fomoUrl(mint)}" target="_blank" rel="noreferrer">${big ? "Buy on Fomo" : "Fomo"}</a>`;
-const walletIcon = (source) => source === "fomo" ? "F" : source === "smart" ? "★" : "◆";
-const usd = (n) => n == null ? "—" : `${n < 0 ? "−" : ""}${money(Math.abs(n))}`;
+const usd = (n) => n == null ? "—" : Math.abs(n) < 0.5 ? "$0" : `${n < 0 ? "−" : ""}${money(Math.abs(n))}`;
+
+// ---------- avatars ----------
+function hash(str) { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+const PALETTES = [
+  ["#0f2a1c", "#39ff88", "#0ea5e9"], ["#2a0f1a", "#ff3d6e", "#ffd166"], ["#101a2e", "#5cc8ff", "#b98cff"],
+  ["#2a1a0a", "#ff8a3d", "#facc15"], ["#0a2426", "#2dd4bf", "#f472b6"], ["#15112e", "#818cf8", "#22d3ee"],
+  ["#261010", "#ff4d6d", "#5cc8ff"], ["#122a12", "#a3e635", "#38bdf8"],
+];
+// A soft "marble" gradient from any seed (mint or wallet), with optional initials.
+function genAvatar(seed, text = "") {
+  const h = hash(seed), p = PALETTES[h % PALETTES.length];
+  const x1 = 14 + (h >> 4) % 36, y1 = 14 + (h >> 9) % 36, x2 = 14 + (h >> 14) % 36, y2 = 14 + (h >> 19) % 36;
+  const ang = (h >> 22) % 360;
+  // Bright two-color base with blurred blobs on top, so every avatar reads clearly on the dark UI.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><filter id="b"><feGaussianBlur stdDeviation="8"/></filter>
+<linearGradient id="g" gradientTransform="rotate(${ang} .5 .5)"><stop offset="0" stop-color="${p[1]}"/><stop offset="1" stop-color="${p[2]}"/></linearGradient></defs>
+<rect width="64" height="64" fill="url(#g)"/><g filter="url(#b)"><circle cx="${x1}" cy="${y1}" r="18" fill="${p[2]}"/><circle cx="${x2}" cy="${y2}" r="14" fill="${p[0]}" fill-opacity=".55"/></g>
+${text ? `<text x="32" y="38" text-anchor="middle" font-family="Space Grotesk,Segoe UI,sans-serif" font-weight="700" font-size="${text.length > 2 ? 16 : 20}" fill="#fff" fill-opacity=".95">${text.replace(/[<&>"]/g, "")}</text>` : ""}</svg>`;
+  try { return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`; }
+  catch { return genAvatar(seed); } // odd characters in a ticker: drop the text rather than break the page
+}
+// First few characters of a ticker, counted by whole characters so emoji tickers don't get split in half.
+const initials = (s, n = 3) => Array.from(String(s || "?").replace(/^\$/, "")).slice(0, n).join("").toUpperCase();
+window.avFail = (img) => { const fb = img.dataset.fb; if (fb && img.src !== fb) { img.dataset.fb = ""; img.src = fb; img.classList.add("gen"); } };
+
+// Coin logo: its own image, else DexScreener's copy, else a generated one with the ticker.
 function av(t, size = "") {
-  const sym = esc((t.symbol || "?").slice(0, 4));
-  return t.image ? `<img class="av ${size}" src="${esc(t.image)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=&quot;av ${size}&quot;>${sym}</div>'">` : `<div class="av ${size}">${sym}</div>`;
+  const fb = genAvatar(t.mint || t.symbol || "?", initials(t.symbol));
+  const src = t.image || (t.mint ? `https://dd.dexscreener.com/ds-data/tokens/solana/${t.mint}.png` : fb);
+  return `<img class="av ${size}" src="${esc(src)}" data-fb="${fb}" alt="" loading="lazy" onerror="avFail(this)">`;
+}
+
+// Wallet avatar: the trader's Fomo profile picture when we know their handle, else a generated one.
+const FOMO_CARD = (h) => `https://image-renderer.fomo.cloud/og/profile/${encodeURIComponent(h)}/card.png`;
+function wav(address, w = {}, size = "") {
+  const handle = w.handle || (w.label?.startsWith("@") ? w.label.slice(1) : null);
+  const gen = genAvatar(address || "?");
+  const badge = handle || w.source === "fomo" || w.fomo ? `<i class="badge fomo" title="Trades on Fomo">f</i>`
+    : w.source === "smart" ? `<i class="badge smart" title="Smart money">★</i>` : "";
+  const img = handle
+    ? `<img class="crop" src="${FOMO_CARD(handle)}" data-fb="${gen}" alt="" loading="lazy" onerror="avFail(this)">`
+    : `<img class="gen" src="${gen}" alt="">`;
+  return `<span class="wav ${size}"><span class="pfp">${img}</span>${badge}</span>`;
+}
+const walletName = (address, w = {}) => w.handle ? `@${w.handle}` : w.label || `${address.slice(0, 4)}…${address.slice(-4)}`;
+
+// Tiny inline price chart.
+function spark(points, w = 84, h = 26) {
+  if (!points || points.length < 2) return `<span class="spark-empty"></span>`;
+  const lo = Math.min(...points), hi = Math.max(...points);
+  const d = points.map((v, i) => `${i ? "L" : "M"}${(i / (points.length - 1) * w).toFixed(1)},${(h - 3 - (v - lo) / Math.max(hi - lo, 1e-18) * (h - 6)).toFixed(1)}`).join("");
+  const up = points[points.length - 1] >= points[0];
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path d="${d}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+const SOCIAL = {
+  twitter: ['X', '<path d="M4 4l16 16M20 4L4 20"/>'],
+  telegram: ["Telegram", '<path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/>'],
+  website: ["Website", '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>'],
+  discord: ["Discord", '<path d="M7 7c3-1 7-1 10 0l2 9c-2 2-4 2-5 1l-1-2h-2l-1 2c-1 1-3 1-5-1z"/>'],
+};
+function linkBtn(l) {
+  const [label, icon] = SOCIAL[l.type] || [l.type, SOCIAL.website[1]];
+  return `<a class="btn icon-btn" href="${esc(l.url)}" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>${esc(label)}</a>`;
+}
+function safetyChip(n) {
+  if (n == null) return '<span class="pill">Safety unchecked</span>';
+  return `<span class="pill safe-pill ${n >= 70 ? "ok" : n >= 45 ? "mid" : "bad"}">🛡 Safety ${n}</span>`;
 }
 function safety(n) {
   if (n == null) return `<span class="safe na">—</span>`;
@@ -65,9 +128,22 @@ function md(src) {
   return out + (list ? "</ul>" : "");
 }
 
+// ---------- ticker tape ----------
+let tapeKey = "";
+function renderTape(list) {
+  const items = (list || []).filter((t) => t.symbol);
+  const key = items.map((t) => t.mint + Math.round(t.chg_h1 || 0)).join();
+  if (!items.length || key === tapeKey) return;
+  tapeKey = key;
+  const one = items.map((t) => `<button class="tape-item" data-mint="${esc(t.mint)}">${av(t, "xs")}<b>$${esc(t.symbol)}</b><span class="num">${money(t.mcap)}</span><span class="num ${cls(t.chg_h1)}">${pct(t.chg_h1)}</span></button>`).join("");
+  // Two copies side by side make the scroll loop seamless.
+  $("#tape").innerHTML = `<div class="tape-track">${one}${one}</div>`;
+}
+
 // ---------- stat strip ----------
 let overviewData = null;
 function renderStrip(o) {
+  renderTape(o.top);
   const s = o.stats, c = o.counts;
   const up = s.launchDataMin ?? 0;
   const cells = [
@@ -82,14 +158,31 @@ function renderStrip(o) {
 }
 
 // ---------- views ----------
+// Small glyphs for each alert type, shown as a badge on the coin's avatar.
+const KIND_ICON = {
+  launch: '<path d="M12 3c3 2 5 6 5 10l-2 3H9l-2-3c0-4 2-8 5-10z"/><path d="M9 16l-2 4 3-1M15 16l2 4-3-1"/>',
+  graduated: '<path d="M3 9l9-5 9 5-9 5z"/><path d="M7 11v5c3 2 7 2 10 0v-5"/>',
+  momentum: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  volume: '<path d="M5 20V10M10 20V4M15 20v-7M20 20v-4"/>',
+  milestone: '<path d="M5 21V4h12l-2 4 2 4H5"/>',
+  dump: '<path d="M3 7l6 6 4-4 8 8"/><path d="M15 17h6v-6"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12h2"/>',
+  smart: '<path d="M12 3l2.6 5.6 6 .7-4.5 4 1.2 6L12 16.4 6.7 19.3l1.2-6-4.5-4 6-.7z"/>',
+  "dev-sold": '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>',
+  rugged: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>',
+  fomo: '<path d="M8 20c-2-3-1-6 2-8-1 3 1 4 2 4 0-4 2-7 5-9-1 3 2 6 1 9-1 3-4 4-6 4"/>',
+};
+const kindKey = (k) => k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k;
+const kindGlyph = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${KIND_ICON[kindKey(k)] || ""}</svg>`;
+const BAD = new Set(["dump", "dev-sold", "rugged"]);
+
 function sigRow(s, isNew = false) {
   const [label, color] = kindOf(s.kind);
-  const t = { symbol: s.symbol, image: s.image };
-  const now = s.price_now && s.price ? s.price_now / s.price : null;
+  const since = s.price_now && s.price ? s.price_now / s.price : null;
   return `<div class="sig ${isNew ? "new" : ""}" style="--k:${color}" data-mint="${esc(s.mint)}">
-    ${av(t)}
-    <div style="min-width:0"><span class="tag">${label}</span><h3>${esc(s.title)}</h3><p>${esc(s.detail)}</p></div>
-    <div class="meta"><b>${ago(s.t)} ago</b>${s.kind === "dump" || s.kind === "dev-sold" || s.kind === "rugged" ? "" : fomoBtn(s.mint)}${now != null ? `<span class="${cls(now - 1)}">${mult(now)} since</span>` : ""}</div>
+    <div class="av-wrap">${av({ mint: s.mint, symbol: s.symbol, image: s.image })}<i class="kind-badge">${kindGlyph(s.kind)}</i></div>
+    <div style="min-width:0"><div class="sig-top"><span class="tag">${label}</span><span class="dim">${ago(s.t)} ago</span></div><h3>${esc(s.title)}</h3><p>${esc(s.detail)}</p></div>
+    <div class="meta">${BAD.has(s.kind) ? "" : fomoBtn(s.mint)}${since != null ? `<span class="${cls(since - 1)}">${mult(since)} since</span>` : ""}</div>
   </div>`;
 }
 
@@ -97,19 +190,28 @@ function coinTable(list, { sort, compact } = {}) {
   if (!list.length) return empty("No coins match yet", "The radar fills up over the first few minutes.");
   const th = (k, label, extra = "") => `<th class="${sort != null ? "sortable" : ""} ${sort === k ? "sorted" : ""} ${extra}" data-sort="${k}">${label}</th>`;
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Coin</th>${th("score", "Score")}${th("safety", "Safety")}${th("mcap", "Mcap")}${compact ? "" : th("liq", "Liquidity", "hide-sm")}${th("volume", "Vol 1h")}${th("change", "1h")}${compact ? "" : `<th class="hide-sm">24h</th>`}${th("new", "Age")}</tr></thead>
+    <thead><tr><th>Coin</th><th class="hide-sm">6h</th>${th("score", "Score")}${th("safety", "Safety")}${th("mcap", "Mcap")}${compact ? "" : th("liq", "Liquidity", "hide-sm")}${th("volume", "Vol 1h", "hide-sm")}${th("change", "1h")}${compact ? "" : `<th class="hide-sm">24h</th>`}${th("new", "Age", "hide-sm")}</tr></thead>
     <tbody>${list.map((t) => `<tr class="row" data-mint="${esc(t.mint)}">
       <td><div class="coin">${av(t, "sm")}<div><b>${esc(t.symbol)}</b>${t.graduated ? ' <span class="pill">grad</span>' : ""}<small>${esc(t.name)}</small></div></div></td>
+      <td class="hide-sm">${spark(t.spark)}</td>
       <td>${scoreBar(t.score)}</td><td>${safety(t.safety_score)}</td><td>${money(t.mcap)}</td>
-      ${compact ? "" : `<td class="hide-sm">${money(t.liquidity)}</td>`}<td>${money(t.vol_h1)}</td>
+      ${compact ? "" : `<td class="hide-sm">${money(t.liquidity)}</td>`}<td class="hide-sm">${money(t.vol_h1)}</td>
       <td class="${cls(t.chg_h1)}">${pct(t.chg_h1)}</td>${compact ? "" : `<td class="hide-sm ${cls(t.chg_h24)}">${pct(t.chg_h24)}</td>`}
-      <td class="dim">${ago(t.pair_created || t.first_seen)}</td></tr>`).join("")}</tbody></table></div>`;
+      <td class="dim hide-sm">${ago(t.pair_created || t.first_seen)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
+const THEME_EMOJI = {
+  "AI & Agents": "🤖", Dogs: "🐶", Cats: "🐱", "Frogs & Pepe": "🐸", Politics: "🏛️", "Elon & X": "🚀", "Degen culture": "🦍",
+  Brainrot: "🧠", "Anime & Waifu": "🌸", "Celebrity & Streamers": "🎤", "Finance & Stocks": "📈", "Space & Aliens": "👽",
+  "Religion & Myth": "🐉", Food: "🍕", Animals: "🦦", Gaming: "🎮", "Holidays & Events": "🎃", "Countries & Cities": "🌍",
+};
+const stack = (coins, n = 4) => `<span class="stack">${coins.slice(0, n).map((c) => av(c, "xs")).join("")}</span>`;
+
 function narMini(n) {
-  return `<div class="nar-mini" data-theme="${esc(n.name)}"><h4><span>${esc(n.name)}</span><span class="num dim">${n.heat}</span></h4>
+  return `<div class="nar-mini" data-theme="${esc(n.name)}">
+    <div class="nar-mini-top"><span class="emoji">${THEME_EMOJI[n.name] || "✨"}</span><b>${esc(n.name)}</b><span class="num heat-n">${n.heat}</span></div>
     <div class="heat"><i style="width:${n.heat}%"></i></div>
-    <small>${(n.launchShare * 100).toFixed(1)}% of launches${n.top.length ? ` · ${n.top.slice(0, 3).map((x) => "$" + esc(x.symbol)).join(" ")}` : ""}</small></div>`;
+    <div class="nar-mini-foot">${n.top.length ? stack(n.top) : ""}<small>${(n.launchShare * 100).toFixed(1)}% of launches</small></div></div>`;
 }
 
 async function viewRadar(main) {
@@ -157,13 +259,17 @@ async function loadCoins() {
 
 function tradeRow(a, { showWallet = true } = {}) {
   const buy = a.side === "buy";
-  const who = showWallet ? `<b>${esc(a.label || shortAddr(a.wallet))}</b>${a.source === "smart" ? ' <span class="pill">smart</span>' : ""} ` : "";
-  return `<div class="sig" style="--k:${buy ? "var(--up)" : "var(--down)"}" data-mint="${esc(a.mint)}">
-    ${av({ symbol: a.symbol || "?", image: a.image })}
-    <div style="min-width:0"><span class="tag">${buy ? "Buy" : "Sell"}</span>
+  const who = showWallet ? `<b class="linkish" data-wallet="${esc(a.wallet)}">${esc(walletName(a.wallet, a))}</b> ` : "";
+  // Wallet and coin avatars side by side: who traded what.
+  const lead = showWallet
+    ? `<div class="pair">${wav(a.wallet, a, "sm")}${av({ mint: a.mint, symbol: a.symbol, image: a.image }, "sm")}</div>`
+    : `<div class="av-wrap">${av({ mint: a.mint, symbol: a.symbol, image: a.image })}</div>`;
+  return `<div class="sig trade" style="--k:${buy ? "var(--up)" : "var(--down)"}" data-mint="${esc(a.mint)}">
+    ${lead}
+    <div style="min-width:0"><div class="sig-top"><span class="tag">${buy ? "Buy" : "Sell"}</span><span class="dim">${ago(a.t)} ago</span></div>
       <h3>${who}${buy ? "bought" : "sold"} ${a.symbol ? "$" + esc(a.symbol) : shortAddr(a.mint)}</h3>
-      <p>${usd(a.usd)} · ${a.sol ? a.sol.toFixed(2) + " SOL" : ""}${a.mcap ? ` · coin now ${money(a.mcap)}` : ""}</p></div>
-    <div class="meta"><b>${ago(a.t)} ago</b>${showWallet ? `<span class="linkish" data-wallet="${esc(a.wallet)}">wallet →</span>` : ""}</div></div>`;
+      <p><span class="num ${buy ? "up" : "down"}">${usd(a.usd)}</span>${a.sol ? ` · ${a.sol.toFixed(2)} SOL` : ""}${a.mcap ? ` · coin now ${money(a.mcap)}` : ""}</p></div>
+    <div class="meta">${buy ? fomoBtn(a.mint) : ""}</div></div>`;
 }
 
 function fomoCard(f) {
@@ -188,7 +294,7 @@ function fomoCard(f) {
       : `<p class="note" style="padding:0 16px">No Fomo trades seen yet this hour.</p>`}
     <div class="card-head"><h2>Best Fomo traders seen</h2><small>by profit on trades the radar watched</small></div>
     ${traders.length ? `<div class="table-wrap"><table><thead><tr><th>Trader</th><th>Profit</th><th class="hide-sm">Win rate</th><th class="hide-sm">Coins</th><th></th></tr></thead><tbody>
-      ${traders.slice(0, 15).map((t) => `<tr class="row" data-wallet="${esc(t.wallet)}"><td><div class="coin"><div class="av sm">F</div><div><b>${t.handle ? "@" + esc(t.handle) : esc(t.label || shortAddr(t.wallet))}</b><small>${t.trades} trades</small></div></div></td>
+      ${traders.slice(0, 15).map((t) => `<tr class="row" data-wallet="${esc(t.wallet)}"><td><div class="coin">${wav(t.wallet, { handle: t.handle, source: "fomo" }, "sm")}<div><b>${t.handle ? "@" + esc(t.handle) : esc(t.label || shortAddr(t.wallet))}</b><small>${t.trades} trades</small></div></div></td>
       <td class="${cls(t.realized)}">${usd(t.realized)}</td><td class="hide-sm">${t.winRate == null ? "—" : Math.round(t.winRate * 100) + "%"}</td><td class="hide-sm">${t.coins}</td>
       <td>${t.watching ? '<span class="up">following</span>' : `<button class="btn" data-follow="${esc(t.wallet)}">Follow</button>`}</td></tr>`).join("")}
     </tbody></table></div>` : `<p class="note" style="padding:0 16px 16px">Rankings appear once traders close a few positions.</p>`}</div>`;
@@ -208,14 +314,14 @@ async function viewWallets(main) {
   <div class="radar-grid">
     <div class="stack">
       <div class="card"><div class="card-head"><h2>Following</h2><small>${d.wallets.filter((w) => w.watching).length} wallets</small></div>
-      ${d.wallets.length ? `<div class="table-wrap"><table><thead><tr><th>Wallet</th><th>Trades</th><th>Win rate</th><th>Realized</th><th class="hide-sm">Open PnL</th><th class="hide-sm">Last trade</th></tr></thead><tbody>
-        ${d.wallets.map((w) => `<tr class="row" data-wallet="${esc(w.address)}"><td><div class="coin"><div class="av sm">${walletIcon(w.source)}</div><div><b>${esc(w.label || shortAddr(w.address))}</b>${w.watching ? "" : ' <span class="pill">paused</span>'}<small>${w.source === "fomo" ? "Fomo top trader" : w.source === "smart" ? `smart · ${w.winners} winners` : "added by you"}</small></div></div></td>
-        <td>${w.trades}</td><td>${pct(w.winRate)}</td><td class="${cls(w.realized)}">${usd(w.realized)}</td><td class="hide-sm ${cls(w.unrealized)}">${usd(w.unrealized)}</td><td class="hide-sm dim">${w.last_trade ? ago(w.last_trade) : "—"}</td></tr>`).join("")}
+      ${d.wallets.length ? `<div class="table-wrap"><table><thead><tr><th>Wallet</th><th>Trades</th><th>Win rate</th><th>PnL</th></tr></thead><tbody>
+        ${d.wallets.map((w) => `<tr class="row ${w.watching ? "" : "paused"}" data-wallet="${esc(w.address)}"><td><div class="coin">${wav(w.address, w, "sm")}<div><b>${esc((w.label || shortAddr(w.address)).replace(/ \(bot, paused\)$/, ""))}</b>${w.watching ? "" : ` <span class="pill">${/\(bot/.test(w.label || "") ? "bot · paused" : "paused"}</span>`}<small>${w.source === "fomo" ? "Fomo trader" : w.source === "smart" ? `smart · ${w.winners} winners` : "added by you"}${w.last_trade ? ` · ${ago(w.last_trade)} ago` : ""}</small></div></div></td>
+        <td>${w.trades}</td><td>${pct(w.winRate)}</td><td class="${cls(w.realized + w.unrealized)}">${w.trades ? usd(w.realized + w.unrealized) : "—"}</td></tr>`).join("")}
       </tbody></table></div>` : empty("No wallets yet", "Paste a wallet above, or follow one from Smart money. Auto-follow adds the best discovered wallets for you.")}</div>
       ${fomoCard(d.fomo)}
       <div class="card"><div class="card-head"><h2>Smart money</h2><small>${d.smart.winners} winning coins studied</small></div>
       ${d.smart.wallets.length ? d.smart.wallets.map((w) => `<div class="sig" style="--k:#facc15" data-wallet="${esc(w.address)}">
-        <div class="av">★</div>
+        ${wav(w.address, { ...w, source: "smart" })}
         <div style="min-width:0"><span class="tag">${w.coins} winners</span><h3>${esc(w.label || shortAddr(w.address))}</h3>
         <p>${w.early ? `${w.early} early buys` : ""}${w.early && w.holder ? " · " : ""}${w.holder ? `${w.holder} as top holder` : ""} · ${w.tokens.slice(0, 5).map((t) => "$" + esc(t.symbol)).join(" ")}</p></div>
         <div class="meta">${w.watching ? '<b class="up">following</b>' : `<button class="btn" data-follow="${esc(w.address)}">Follow</button>`}</div></div>`).join("")
@@ -247,9 +353,17 @@ async function openWallet(address) {
   const w = r.wallet, pnl = r.pnl;
   const open = pnl.positions.filter((x) => x.held > 0 && x.value != null && x.value > 1);
   p.innerHTML = `
-    <div class="p-head"><div class="av lg">${walletIcon(w.source)}</div><div style="min-width:0"><h2>${esc(w.label || shortAddr(address))}</h2>
-      <div class="sub">${w.source === "smart" ? "Discovered smart wallet" : w.source === "you" ? "Added by you" : "Not followed"}${w.watching === 0 && w.source ? " · paused" : ""}</div></div>
-      <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="hero">
+      <div class="banner"><span class="banner-gen" style="background-image:url('${genAvatar(address + "banner")}')"></span></div>
+      <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <div class="hero-body">
+        <div class="hero-av">${wav(address, w, "xl")}</div>
+        <div class="hero-id"><h2>${esc(walletName(address, w))}</h2>
+          <div class="sub num">${shortAddr(address)}</div>
+          <div class="chips">${w.source === "smart" ? '<span class="pill">★ Smart money</span>' : w.source === "fomo" || w.fomo ? '<span class="pill fomo-pill">Fomo trader</span>' : w.source === "you" ? '<span class="pill">Followed by you</span>' : '<span class="pill">Not followed</span>'}${w.watching === 0 && w.source ? '<span class="pill">paused</span>' : ""}</div></div>
+        <div class="hero-price"><span class="big num ${cls(pnl.realized + pnl.unrealized)}">${pnl.trades ? usd(pnl.realized + pnl.unrealized) : "—"}</span><small class="dim">total PnL seen</small></div>
+      </div>
+    </div>
     <div class="p-acts">
       ${w.source ? `<button class="btn" data-wtoggle="${esc(address)}" data-on="${w.watching ? 0 : 1}">${w.watching ? "Pause" : "Resume"}</button><button class="btn" data-wrename="${esc(address)}">Rename</button><button class="btn" data-wremove="${esc(address)}">Unfollow</button>` : `<button class="btn primary" data-follow="${esc(address)}">Follow</button>`}
       ${w.label?.startsWith("@") ? `<a class="btn fomo" href="https://fomo.family/profile/${esc(w.label.slice(1))}" target="_blank" rel="noreferrer">Fomo profile</a>` : ""}
@@ -278,7 +392,7 @@ async function viewNarratives(main) {
     ${nar.emerging.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Emerging words</h2><small>showing up far more in the last hour</small></div>
       <div class="words">${nar.emerging.map((e) => `<span class="word">${esc(e.word)}<em>${e.count}× · ${e.lift.toFixed(1)}x</em></span>`).join("")}</div></div>` : ""}
     <div class="nar-grid">${nar.themes.map((n) => `<div class="card nar">
-      <div class="nar-top"><h3>${esc(n.name)}</h3><span class="num" style="font-size:20px">${n.heat}<span class="dim" style="font-size:12px">/100</span></span></div>
+      <div class="nar-top"><h3><span class="emoji">${THEME_EMOJI[n.name] || "✨"}</span> ${esc(n.name)}</h3><span class="num" style="font-size:20px">${n.heat}<span class="dim" style="font-size:12px">/100</span></span></div>
       <div class="heat" style="margin:0"><i style="width:${n.heat}%"></i></div>
       <div class="nar-nums">
         <div><b>Launch share</b><span>${(n.launchShare * 100).toFixed(1)}%</span></div>
@@ -394,7 +508,7 @@ function fomoFlowSection(f) {
       <div class="fact"><b>Bought 1h</b><span>${money(f.bought || 0)}</span></div>
       <div class="fact"><b>Sold 1h</b><span>${money(f.sold || 0)}</span></div>
     </div>
-    ${f.recent.length ? `<div class="leaders" style="margin-top:10px">${f.recent.map((x) => `<div class="leader" data-wallet="${esc(x.wallet)}"><div class="av sm">F</div><span class="grow"><b>${x.handle ? "@" + esc(x.handle) : shortAddr(x.wallet)}</b> <span class="dim">${x.side === "buy" ? "bought" : "sold"} ${ago(x.t)} ago</span></span><span class="num ${x.side === "buy" ? "up" : "down"}">${money(x.usd)}</span></div>`).join("")}</div>` : ""}
+    ${f.recent.length ? `<div class="leaders" style="margin-top:10px">${f.recent.map((x) => `<div class="leader" data-wallet="${esc(x.wallet)}">${wav(x.wallet, { handle: x.handle, source: "fomo" }, "sm")}<span class="grow"><b>${x.handle ? "@" + esc(x.handle) : shortAddr(x.wallet)}</b> <span class="dim">${x.side === "buy" ? "bought" : "sold"} ${ago(x.t)} ago</span></span><span class="num ${x.side === "buy" ? "up" : "down"}">${money(x.usd)}</span></div>`).join("")}</div>` : ""}
   </div>`;
 }
 
@@ -409,7 +523,7 @@ function holdersSection(t, s) {
       <div class="fact"><b>Dev holds</b><span>${flag(s.devPct > 5, s.devPct.toFixed(2) + "%")}</span></div>
     </div>
     <p class="note" style="margin:10px 0">${s.insiderNetworks ? `${s.insiderNetworks} insider networks (wallets funded from each other). ` : ""}${s.devLaunches ? `The dev has launched ${s.devLaunches} other coins. ` : ""}${s.creator ? `Dev wallet: <span class="linkish" data-wallet="${esc(s.creator)}">${shortAddr(s.creator)}</span>` : ""}</p>
-    ${s.holders?.length ? `<div class="leaders">${s.holders.slice(0, 10).map((h, i) => `<div class="leader" data-wallet="${esc(h.owner)}"><span class="num dim" style="width:22px">${i + 1}</span><span class="grow num">${shortAddr(h.owner)}${h.insider ? ' <span class="pill" style="color:var(--down)">insider</span>' : ""}</span><span class="num">${h.pct.toFixed(2)}%</span></div>`).join("")}</div>` : ""}
+    ${s.holders?.length ? `<div class="leaders">${s.holders.slice(0, 10).map((h, i) => `<div class="leader" data-wallet="${esc(h.owner)}"><span class="num dim" style="width:22px">${i + 1}</span>${wav(h.owner, {}, "xs")}<span class="grow num">${shortAddr(h.owner)}${h.insider ? ' <span class="pill" style="color:var(--down)">insider</span>' : ""}</span><span class="num">${h.pct.toFixed(2)}%</span></div>`).join("")}</div>` : ""}
   </div>`;
 }
 
@@ -424,15 +538,23 @@ async function openCoin(mint) {
   const dex = `https://dexscreener.com/solana/${t.pair || t.mint}`;
   const age = Date.now() - (t.pair_created || t.first_seen);
   p.innerHTML = `
-    <div class="p-head">${av(t, "lg")}<div style="min-width:0"><h2>$${esc(t.symbol)}</h2><div class="sub">${esc(t.name)} · ${esc(t.dex || "")}${t.graduated ? " · graduated" : ""} · ${ago(t.pair_created || t.first_seen)} old</div>
-      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">${(t.themes || []).map((x) => `<span class="pill">${esc(x)}</span>`).join("")}</div></div>
-      <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="hero">
+      <div class="banner">${t.header ? `<img src="${esc(t.header)}" alt="" onerror="this.remove()">` : ""}<span class="banner-gen" style="background-image:url('${genAvatar(t.mint + "banner")}')"></span></div>
+      <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <div class="hero-body">
+        <div class="hero-av">${av(t, "xl")}</div>
+        <div class="hero-id"><h2>$${esc(t.symbol)}</h2>
+          <div class="sub">${esc(t.name)}${t.dex ? " · " + esc(t.dex) : ""}${t.graduated ? " · graduated" : ""} · ${ago(t.pair_created || t.first_seen)} old</div>
+          <div class="chips">${safetyChip(t.safety_score)}${(t.themes || []).map((x) => `<span class="pill">${THEME_EMOJI[x] || ""} ${esc(x)}</span>`).join("")}</div></div>
+        <div class="hero-price"><span class="big num">${price(t.price)}</span><span class="chg ${cls(t.chg_h1)}">${pct(t.chg_h1)} <small>1h</small></span><small class="dim">${money(t.mcap)} mcap</small></div>
+      </div>
+    </div>
     <div class="p-acts">
       ${fomoBtn(t.mint, true)}
       <a class="btn" href="${dex}" target="_blank" rel="noreferrer">DexScreener</a>
       <a class="btn" href="https://pump.fun/coin/${esc(t.mint)}" target="_blank" rel="noreferrer">pump.fun</a>
       <a class="btn" href="https://rugcheck.xyz/tokens/${esc(t.mint)}" target="_blank" rel="noreferrer">RugCheck</a>
-      ${links.map((l) => `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noreferrer">${esc(l.type === "twitter" ? "X" : l.type)}</a>`).join("")}
+      ${links.map(linkBtn).join("")}
       <button class="btn" data-copy="${esc(t.mint)}">Copy mint</button>
     </div>
     <div class="p-sec"><div class="facts">
@@ -447,7 +569,7 @@ async function openCoin(mint) {
     </div></div>
     <div class="p-sec"><h3>AI take</h3><div id="take"><button class="btn" data-explain="${esc(t.mint)}">Ask Claude about this coin</button></div></div>
     ${holdersSection(t, s)}
-    ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}"><div class="av sm">${walletIcon(w.source)}</div><span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
+    ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}">${wav(w.wallet, w, "sm")}<span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
     ${fomoFlowSection(r.fomo)}
     <div class="p-sec"><h3>Safety check</h3>${s ? (s.risks.length ? `<div class="risks">${s.risks.map((x) => `<div class="risk"><i style="background:${x.level === "danger" ? "var(--down)" : x.level === "warn" ? "var(--warn)" : "var(--info)"}"></i><div><b>${esc(x.name)}</b>${x.value ? ` <span class="dim">${esc(x.value)}</span>` : ""}<small>${esc(x.description || "")}</small></div></div>`).join("")}</div>` : `<p class="up">RugCheck found no risks.</p>`) : `<p class="note">Not checked yet. Coins are checked when they first show real trading.</p>`}</div>
     <div class="p-sec"><h3>Price while tracked</h3>${sparkline(r.snapshots)}</div>
@@ -469,7 +591,7 @@ async function render() {
   try { await (VIEWS[r] || viewRadar)(main); }
   catch (e) { main.innerHTML = `<div class="card">${empty("Radar isn't responding", e.message)}</div>`; }
 }
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => { if (!$("#drawer").hidden) closeCoin(); render(); });
 
 // ---------- events ----------
 document.addEventListener("click", async (e) => {

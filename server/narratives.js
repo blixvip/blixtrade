@@ -61,7 +61,8 @@ export function computeNarratives({ recentMin = 60, baseMin = 6 * 60, launches =
     const launchNow = lNow.filter((l) => re.test(`${l.name} ${l.symbol}`)).length;
     const launchOld = launches.filter((l) => l.t <= now - recentMin * 60_000 && re.test(`${l.name} ${l.symbol}`)).length;
     const launchShare = lNow.length ? launchNow / lNow.length : 0;
-    const launchLift = launchOld && lOld ? launchShare / (launchOld / lOld) : launchNow ? 2 : 0;
+    // No earlier launches to compare against yet: no lift rather than a made-up one.
+    const launchLift = launchOld && lOld >= 200 ? launchShare / (launchOld / lOld) : null;
     // Heat mixes money (volume of tracked coins), survivors (tracked coins), and attention (share of all launches).
     const heat = Math.round(100 * Math.min(1,
       Math.min(1, Math.log10(volume + 1) / 7) * 0.45 + Math.min(1, rNow.length / 15) * 0.25 + Math.min(1, launchShare / 0.08) * 0.3));
