@@ -4,6 +4,7 @@ import { db, q, json, logEvent, prune } from "./db.js";
 import * as src from "./sources.js";
 import { themesFor } from "./narratives.js";
 import { settings } from "./settings.js";
+import { startWallets, walletSignals } from "./wallets.js";
 
 export const bus = new EventEmitter();
 export const stats = { launchesSeen: 0, nursery: 0, graduated: 0, tracked: 0, signals: 0, pump: "connecting", lastCycle: 0, errors: 0, startedAt: Date.now() };
@@ -16,6 +17,26 @@ const MIN = 60_000;
 const nursery = new Map(); // mint -> { seen, symbol, name, source }
 // Every launch name in the last 6h, for narrative trends (~30k short strings at most).
 export const launchLog = [];
+// How many coins each dev wallet launched in the last 6h (serial launchers are mostly rugs).
+export const devLaunches = new Map();
+
+// The launch log is kept in SQLite too, so a restart doesn't wipe 6 hours of narrative history.
+db.exec("CREATE TABLE IF NOT EXISTS launches (t INTEGER, name TEXT, symbol TEXT, creator TEXT)");
+db.exec("CREATE INDEX IF NOT EXISTS launches_t ON launches(t)");
+for (const l of db.prepare("SELECT t, name, symbol, creator FROM launches WHERE t > ? ORDER BY t").all(Date.now() - 6 * 3600e3)) {
+  launchLog.push(l);
+  if (l.creator) devLaunches.set(l.creator, (devLaunches.get(l.creator) || 0) + 1);
+}
+let unsaved = [];
+function saveLaunches() {
+  if (!unsaved.length) return;
+  const ins = db.prepare("INSERT INTO launches (t, name, symbol, creator) VALUES (?, ?, ?, ?)");
+  db.exec("BEGIN");
+  for (const l of unsaved) ins.run(l.t, l.name, l.symbol, l.creator || null);
+  db.exec("COMMIT");
+  unsaved = [];
+  db.prepare("DELETE FROM launches WHERE t < ?").run(Date.now() - 6 * 3600e3);
+}
 
 function adopt(t) {
   if (!t.mint || q.getToken.get(t.mint)) {
@@ -25,6 +46,7 @@ function adopt(t) {
   }
   q.insertToken.run(t.mint, t.symbol || null, t.name || null, t.description || "", t.image || null, t.source, now(), JSON.stringify(t.links || []), 0);
   if (t.boosts) db.prepare("UPDATE tokens SET boosts = ? WHERE mint = ?").run(t.boosts, t.mint);
+  if (t.creator) db.prepare("UPDATE tokens SET creator = ?, dev_sol = ? WHERE mint = ?").run(t.creator, t.devSol ?? null, t.mint);
   safetyQueue.add(t.mint);
   return true;
 }
@@ -34,7 +56,10 @@ function startPump() {
     onStatus: (s) => { stats.pump = s; },
     onToken: (t) => {
       stats.launchesSeen++;
-      launchLog.push({ t: now(), name: t.name || "", symbol: t.symbol || "" });
+      const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
+      launchLog.push(entry);
+      unsaved.push(entry);
+      if (t.creator) devLaunches.set(t.creator, (devLaunches.get(t.creator) || 0) + 1);
       if (nursery.size < 20000) nursery.set(t.mint, { ...t, seen: now() });
     },
     onMigration: ({ mint }) => {
@@ -55,8 +80,12 @@ async function graduateNursery() {
   for (const t of ripe) nursery.delete(t.mint);
   // Drop anything that has waited too long without being checked.
   for (const [m, t] of nursery) if (t.seen < now() - 30 * MIN) nursery.delete(m);
+  saveLaunches();
   const keepFrom = now() - 6 * 60 * MIN;
-  while (launchLog.length && launchLog[0].t < keepFrom) launchLog.shift();
+  while (launchLog.length && launchLog[0].t < keepFrom) {
+    const l = launchLog.shift();
+    if (l.creator) { const n = (devLaunches.get(l.creator) || 1) - 1; n > 0 ? devLaunches.set(l.creator, n) : devLaunches.delete(l.creator); }
+  }
   stats.nursery = nursery.size;
   if (!ripe.length) return;
   const pairs = await src.dexTokens(ripe.map((t) => t.mint));
@@ -153,14 +182,22 @@ function cull() {
 // ---------- safety ----------
 const safetyQueue = new Set();
 async function runSafety() {
-  const stale = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND score >= 50 AND (safety_checked IS NULL OR safety_checked < ?) LIMIT 10`).all(now() - 30 * MIN);
+  const stale = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND score >= 50 AND (safety_checked IS NULL OR safety_checked < ?) ORDER BY score DESC LIMIT 10`).all(now() - 12 * MIN);
   for (const r of stale) safetyQueue.add(r.mint);
   const batch = [...safetyQueue].slice(0, 12);
   for (const mint of batch) {
     safetyQueue.delete(mint);
     try {
+      const before = q.getToken.get(mint);
+      const prev = json(before?.safety);
       const s = await src.rugcheck(mint);
-      db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ? WHERE mint = ?").run(JSON.stringify(s), s.clean, now(), mint);
+      db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ?, creator = COALESCE(creator, ?) WHERE mint = ?").run(JSON.stringify(s), s.clean, now(), s.creator, mint);
+      const t = q.getToken.get(mint);
+      const watched = (t.score || 0) >= 45 || q.lastSignal.get(mint, "launch") || q.lastSignal.get(mint, "momentum") || q.lastSignal.get(mint, "smart");
+      if (watched && prev && prev.devPct >= 1 && s.devPct < 0.2 && cooldownOk(mint, "dev-sold", 1e12))
+        raise(t, "dev-sold", `Dev sold $${t.symbol}`, `The creator held ${prev.devPct.toFixed(1)}% and now holds ${s.devPct.toFixed(2)}%. Mcap ${fmt$(t.mcap)}.`);
+      if (watched && s.rugged && !prev?.rugged && cooldownOk(mint, "rugged", 1e12))
+        raise(t, "rugged", `$${t.symbol} flagged as rugged`, `RugCheck marks this coin as rugged. Mcap ${fmt$(t.mcap)}, liquidity ${fmt$(t.liquidity)}.`);
     } catch (e) {
       if (e.status === 429) { safetyQueue.add(mint); break; }
       db.prepare("UPDATE tokens SET safety_checked = ? WHERE mint = ?").run(now(), mint);
@@ -191,7 +228,8 @@ export function scoreToken(t) {
 
 function isSafe(t) {
   const s = json(t.safety);
-  return s && s.danger === 0 && (t.safety_score ?? 0) >= settings.minSafety;
+  if (t.creator && (devLaunches.get(t.creator) || 0) >= 4) return false; // serial launcher
+  return s && s.danger === 0 && !s.rugged && (t.safety_score ?? 0) >= settings.minSafety;
 }
 
 function cooldownOk(mint, kind, ms) {
@@ -223,14 +261,16 @@ function rescore(t) {
 
   if (pendingGraduations.has(t.mint) && t.safety_checked) {
     pendingGraduations.delete(t.mint);
-    if (safe) found.push(["graduated", `$${t.symbol} graduated from pump.fun`, `Bonding curve completed at ${fmt$(t.mcap)} mcap. Liquidity ${fmt$(t.liquidity)}.`]);
+    // Dozens of coins graduate every hour; only the ones with real demand behind them are worth an alert.
+    if (safe && score >= 50 && (t.vol_h1 || 0) >= 30000 && buyShare > 0.5) found.push(["graduated", `$${t.symbol} graduated from pump.fun`, `Bonding curve completed at ${fmt$(t.mcap)} mcap. Liquidity ${fmt$(t.liquidity)}.`]);
   }
   if (!safe && !found.length) return;
 
   if (age < 2 * H && score >= settings.launchScore && (t.mcap || 0) >= 35000 && (t.vol_h1 || 0) >= 40000 && buyShare > 0.52 && cooldownOk(t.mint, "launch", 24 * H))
     found.push(["launch", `New launch: $${t.symbol} is taking off`, `${fmt$(t.mcap)} mcap, ${fmt$(t.vol_h1)} volume in the last hour, ${t.buys_h1} buys vs ${t.sells_h1} sells.`]);
 
-  if ((t.vol_m5 || 0) >= settings.spikeMinVol && (t.vol_m5 * 12) > 3 * Math.max(t.vol_h1 || 0, 1) && (t.chg_m5 || 0) > 0 && cooldownOk(t.mint, "volume", H))
+  // A coin under ~15 minutes old has no hourly baseline (its 5m volume IS its hourly volume), so skip it.
+  if (age >= 15 * MIN && (t.mcap || 0) >= 30000 && (t.vol_m5 || 0) >= settings.spikeMinVol && (t.vol_m5 * 12) > 3 * Math.max(t.vol_h1 || 0, 1) && (t.chg_m5 || 0) > 0 && cooldownOk(t.mint, "volume", H))
     found.push(["volume", `Volume spike on $${t.symbol}`, `${fmt$(t.vol_m5)} traded in 5 minutes, about ${((t.vol_m5 * 12) / Math.max(t.vol_h1, 1)).toFixed(1)}x its hourly pace, price ${t.chg_m5 >= 0 ? "+" : ""}${Math.round(t.chg_m5)}%.`]);
 
   if (score >= settings.momentumScore && (t.chg_h1 || 0) >= 10 && cooldownOk(t.mint, "momentum", 3 * H))
@@ -254,7 +294,7 @@ function rescore(t) {
 // Warn about coins we signalled that then dumped hard.
 function dumpWatch() {
   const rows = db.prepare(`SELECT DISTINCT t.* FROM tokens t JOIN signals s ON s.mint = t.mint
-    WHERE s.t > ? AND s.kind != 'dump' AND t.peak_mcap > 0 AND t.mcap < t.peak_mcap * 0.4`).all(now() - 24 * 60 * MIN);
+    WHERE s.t > ? AND s.hidden = 0 AND s.kind NOT IN ('dump', 'dev-sold', 'rugged') AND t.peak_mcap >= 40000 AND t.mcap < t.peak_mcap * 0.4`).all(now() - 24 * 60 * MIN);
   for (const t of rows) if (cooldownOk(t.mint, "dump", 12 * 60 * MIN))
     raise(t, "dump", `Warning: $${t.symbol} is down ${Math.round(100 - 100 * t.mcap / t.peak_mcap)}% from its peak`, `Peak ${fmt$(t.peak_mcap)}, now ${fmt$(t.mcap)}. Liquidity ${fmt$(t.liquidity)}.`);
 }
@@ -295,8 +335,17 @@ async function cycle() {
   }
 }
 
+export function adoptMint(mint) {
+  if (q.getToken.get(mint)) return;
+  adopt({ mint, source: "wallet" });
+}
+
 export function start() {
   const pump = startPump();
+  const stopWallets = startWallets((ev) => {
+    bus.emit("walletTrade", ev);
+    walletSignals(ev, raise, adoptMint);
+  });
   discoverFeeds().then(cycle);
   const timers = [
     setInterval(cycle, 30_000),
@@ -304,5 +353,5 @@ export function start() {
     setInterval(prune, 60 * MIN),
   ];
   logEvent("system", "Radar started");
-  return () => { pump.stop(); timers.forEach(clearInterval); };
+  return () => { pump.stop(); stopWallets(); timers.forEach(clearInterval); };
 }

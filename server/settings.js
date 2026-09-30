@@ -12,16 +12,21 @@ export const DEFAULTS = {
   maxTracked: 900,
   // signals
   minSafety: 60,             // RugCheck-based 0..100, and no "danger" risks
-  launchScore: 58,
+  launchScore: 62,
   momentumScore: 72,
   spikeMinVol: 8000,
   // updates
   discordWebhook: "",
   telegramToken: "",
   telegramChat: "",
-  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief"],
+  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief", "wallet", "smart", "dev-sold", "rugged"],
   briefEveryMin: 60,
   aiBriefs: true,
+  // wallets
+  rpcUrl: "",               // blank = free public Solana RPC (slow). A free Helius URL is ~10x faster.
+  autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
+  maxSmartWallets: 20,
+  walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
 };
 
 function load() {

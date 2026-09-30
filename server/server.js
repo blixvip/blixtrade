@@ -9,6 +9,8 @@ import { computeNarratives } from "./narratives.js";
 import { settings, saveSettings, DEFAULTS } from "./settings.js";
 import { writeBrief, explainCoin } from "./ai.js";
 import { notifySignal, notifyBrief, testNotify } from "./notify.js";
+import * as wallets from "./wallets.js";
+import { rpcStats } from "./solana.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC = path.join(ROOT, "public");
@@ -22,7 +24,7 @@ function perf() {
   const rows = db.prepare("SELECT kind, p15, p1h, p6h, p24h, peak FROM signals WHERE kind != 'dump' AND hidden = 0 AND t > ?").all(Date.now() - 14 * 24 * 60 * MIN);
   const group = new Map();
   for (const r of rows) {
-    const k = r.kind.startsWith("mcap-") ? "milestone" : r.kind;
+    const k = r.kind.startsWith("mcap-") ? "milestone" : r.kind.startsWith("wallet:") ? "wallet" : r.kind;
     if (!group.has(k)) group.set(k, []);
     group.get(k).push(r);
   }
@@ -70,7 +72,7 @@ function overview() {
   const count = (sql, ...a) => db.prepare(sql).get(...a).n;
   const hour = Date.now() - 60 * MIN;
   return {
-    stats: { ...stats, launchesLastHour: launchLog.filter((l) => l.t > hour).length },
+    stats: { ...stats, launchesLastHour: launchLog.filter((l) => l.t > hour).length, launchDataMin: launchLog.length ? Math.round((Date.now() - launchLog[0].t) / MIN) : 0 },
     counts: {
       tracked: count("SELECT COUNT(*) n FROM tokens WHERE status = 'active' AND pair IS NOT NULL"),
       safe: count("SELECT COUNT(*) n FROM tokens WHERE status = 'active' AND safety_score >= ?", settings.minSafety),
@@ -94,7 +96,7 @@ async function makeBrief(reason = "scheduled") {
       chg1h: t.chg_h1, chg24h: t.chg_h24, score: t.score, safety: t.safety_score, themes: t.themes, graduated: !!t.graduated,
       buys1h: t.buys_h1, sells1h: t.sells_h1, ageMin: Math.round((Date.now() - (t.pair_created || t.first_seen)) / MIN),
     }));
-    const uptime = Math.round((Date.now() - stats.startedAt) / MIN);
+    const uptime = launchLog.length ? Math.round((Date.now() - launchLog[0].t) / MIN) : 0;
     const data = {
       radarUptimeMinutes: uptime,
       note: uptime < 60 ? `The radar started ${uptime} minutes ago, so launch counts cover only that window. Do not call the launch pace slow or fast.` : undefined,
@@ -105,6 +107,7 @@ async function makeBrief(reason = "scheduled") {
       topCoins: top,
       recentSignals: signalsQuery({ limit: 15, since: Date.now() - 3 * 60 * MIN }).map((s) => ({ kind: s.kind, title: s.title })),
       hitRate: perf().all,
+      followedWalletBuys: wallets.activity(40).filter((a) => a.side === "buy" && a.t > Date.now() - 2 * 60 * MIN).map((a) => ({ wallet: a.label || a.wallet.slice(0, 6), ticker: a.symbol, usd: Math.round(a.usd || 0) })).slice(0, 15),
     };
     const { text, model } = await writeBrief(data);
     db.prepare("INSERT INTO briefs (t, body, model) VALUES (?, ?, ?)").run(Date.now(), text, model);
@@ -180,6 +183,21 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { settings, defaults: DEFAULTS });
     }
     if (p === "/api/test-notify" && req.method === "POST") return send(res, 200, { errors: await testNotify() });
+    if (p === "/api/wallets") {
+      if (req.method === "POST") { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
+      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl } });
+    }
+    const wm = p.match(/^\/api\/wallet\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (wm) {
+      if (req.method === "DELETE") { wallets.removeWallet(wm[1]); return send(res, 200, { ok: true }); }
+      if (req.method === "POST") {
+        const b = await readBody(req);
+        if (b.scan) await wallets.scanWallet(wm[1]);
+        else if (b.follow) wallets.addWallet(wm[1], b.label || "", "you");
+        else wallets.updateWallet(wm[1], b);
+      }
+      return send(res, 200, await wallets.walletDetail(wm[1]));
+    }
     const m = p.match(/^\/api\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})(\/explain)?$/);
     if (m) {
       if (m[2]) return send(res, 200, await explain(m[1]));
@@ -187,7 +205,7 @@ const server = http.createServer(async (req, res) => {
       if (!t) return send(res, 404, { error: "Unknown coin" });
       const snaps = db.prepare("SELECT t, price, mcap, liquidity, vol_m5 FROM snapshots WHERE mint = ? AND t > ? ORDER BY t").all(m[1], Date.now() - 24 * 60 * MIN);
       const sigs = db.prepare("SELECT * FROM signals WHERE mint = ? AND hidden = 0 ORDER BY t DESC").all(m[1]);
-      return send(res, 200, { token: t, snapshots: snaps, signals: sigs });
+      return send(res, 200, { token: t, snapshots: snaps, signals: sigs, wallets: wallets.coinWallets(m[1]) });
     }
     send(res, 404, { error: "not found" });
   } catch (e) {
@@ -198,6 +216,11 @@ const server = http.createServer(async (req, res) => {
 bus.on("signal", (s) => { broadcast("signal", s); notifySignal(s).catch((e) => logEvent("error", `notify: ${e.message}`)); });
 bus.on("tick", (s) => broadcast("tick", s));
 bus.on("brief", (b) => broadcast("brief", b));
+bus.on("walletTrade", (ev) => broadcast("walletTrade", ev));
+
+// A bad API response should never take the radar down.
+process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.message || e}`));
+process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message || e}`));
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);

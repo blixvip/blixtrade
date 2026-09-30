@@ -223,3 +223,8 @@ tr.row { cursor: pointer; } tr.row:hover td { background: var(--card-2); }
   .embed { height: 340px; }
   .hide-sm { display: none; }
 }
+
+/* wallets */
+.linkish { color: var(--info); cursor: pointer; font-family: var(--mono); }
+.linkish:hover { text-decoration: underline; }
+.sig .meta .btn { padding: 5px 11px; font-size: 12px; }

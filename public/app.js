@@ -26,8 +26,11 @@ function price(p) {
 const KIND = {
   launch: ["New launch", "var(--up)"], graduated: ["Graduated", "var(--violet)"], momentum: ["Momentum", "var(--warn)"],
   volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "#7ee0c3"],
+  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
 };
-const kindOf = (k) => KIND[k.startsWith("mcap-") ? "milestone" : k] || [k, "var(--muted)"];
+const kindOf = (k) => KIND[k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k] || [k, "var(--muted)"];
+const shortAddr = (a) => a ? `${a.slice(0, 4)}…${a.slice(-4)}` : "";
+const usd = (n) => n == null ? "—" : `${n < 0 ? "−" : ""}${money(Math.abs(n))}`;
 function av(t, size = "") {
   const sym = esc((t.symbol || "?").slice(0, 4));
   return t.image ? `<img class="av ${size}" src="${esc(t.image)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=&quot;av ${size}&quot;>${sym}</div>'">` : `<div class="av ${size}">${sym}</div>`;
@@ -62,7 +65,7 @@ function md(src) {
 let overviewData = null;
 function renderStrip(o) {
   const s = o.stats, c = o.counts;
-  const up = Math.round((Date.now() - s.startedAt) / 60000);
+  const up = s.launchDataMin ?? 0;
   const cells = [
     ["Launches / hr", s.launchesLastHour.toLocaleString(), up < 60 ? `${up}m of data` : "pump.fun live"],
     ["Tracking", c.tracked.toLocaleString(), `${s.nursery} waiting`],
@@ -148,6 +151,86 @@ async function loadCoins() {
   if (box) box.innerHTML = coinTable(list, { sort: coinState.sort });
 }
 
+function tradeRow(a, { showWallet = true } = {}) {
+  const buy = a.side === "buy";
+  const who = showWallet ? `<b>${esc(a.label || shortAddr(a.wallet))}</b>${a.source === "smart" ? ' <span class="pill">smart</span>' : ""} ` : "";
+  return `<div class="sig" style="--k:${buy ? "var(--up)" : "var(--down)"}" data-mint="${esc(a.mint)}">
+    ${av({ symbol: a.symbol || "?", image: a.image })}
+    <div style="min-width:0"><span class="tag">${buy ? "Buy" : "Sell"}</span>
+      <h3>${who}${buy ? "bought" : "sold"} ${a.symbol ? "$" + esc(a.symbol) : shortAddr(a.mint)}</h3>
+      <p>${usd(a.usd)} · ${a.sol ? a.sol.toFixed(2) + " SOL" : ""}${a.mcap ? ` · coin now ${money(a.mcap)}` : ""}</p></div>
+    <div class="meta"><b>${ago(a.t)} ago</b>${showWallet ? `<span class="linkish" data-wallet="${esc(a.wallet)}">wallet →</span>` : ""}</div></div>`;
+}
+
+async function viewWallets(main) {
+  const d = await api("wallets");
+  const pct = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+  const rpcNote = d.rpc.custom ? "Using your RPC." : "Using the free public Solana RPC, which is slow. Add a free Helius RPC URL in Settings for ~10x faster wallet tracking.";
+  main.innerHTML = `<div class="page-head"><div><h1>Wallets</h1><p>Follow wallets across every Solana DEX. Their buys raise alerts, and when two wallets you follow buy the same coin you get a Smart money alert. The radar also studies coins that ran 3x or more and finds the wallets that keep getting in early.</p></div></div>
+  <form class="filters" id="addWallet" onsubmit="return false">
+    <input class="input num" id="waddr" placeholder="Wallet address" style="flex:2;min-width:240px" autocomplete="off" spellcheck="false">
+    <input class="input" id="wlabel" placeholder="Name (optional)" style="flex:1;min-width:140px">
+    <button class="btn primary" id="wadd" type="submit">Follow wallet</button>
+  </form>
+  <p class="note" style="margin:-4px 0 14px">${esc(rpcNote)}</p>
+  <div class="radar-grid">
+    <div class="stack">
+      <div class="card"><div class="card-head"><h2>Following</h2><small>${d.wallets.filter((w) => w.watching).length} wallets</small></div>
+      ${d.wallets.length ? `<div class="table-wrap"><table><thead><tr><th>Wallet</th><th>Trades</th><th>Win rate</th><th>Realized</th><th class="hide-sm">Open PnL</th><th class="hide-sm">Last trade</th></tr></thead><tbody>
+        ${d.wallets.map((w) => `<tr class="row" data-wallet="${esc(w.address)}"><td><div class="coin"><div class="av sm">${w.source === "smart" ? "★" : "◆"}</div><div><b>${esc(w.label || shortAddr(w.address))}</b>${w.watching ? "" : ' <span class="pill">paused</span>'}<small>${w.source === "smart" ? `smart · ${w.winners} winners` : "added by you"}</small></div></div></td>
+        <td>${w.trades}</td><td>${pct(w.winRate)}</td><td class="${cls(w.realized)}">${usd(w.realized)}</td><td class="hide-sm ${cls(w.unrealized)}">${usd(w.unrealized)}</td><td class="hide-sm dim">${w.last_trade ? ago(w.last_trade) : "—"}</td></tr>`).join("")}
+      </tbody></table></div>` : empty("No wallets yet", "Paste a wallet above, or follow one from Smart money. Auto-follow adds the best discovered wallets for you.")}</div>
+      <div class="card"><div class="card-head"><h2>Smart money</h2><small>${d.smart.winners} winning coins studied</small></div>
+      ${d.smart.wallets.length ? d.smart.wallets.map((w) => `<div class="sig" style="--k:#facc15" data-wallet="${esc(w.address)}">
+        <div class="av">★</div>
+        <div style="min-width:0"><span class="tag">${w.coins} winners</span><h3>${esc(w.label || shortAddr(w.address))}</h3>
+        <p>${w.early ? `${w.early} early buys` : ""}${w.early && w.holder ? " · " : ""}${w.holder ? `${w.holder} as top holder` : ""} · ${w.tokens.slice(0, 5).map((t) => "$" + esc(t.symbol)).join(" ")}</p></div>
+        <div class="meta">${w.watching ? '<b class="up">following</b>' : `<button class="btn" data-follow="${esc(w.address)}">Follow</button>`}</div></div>`).join("")
+        : empty("Still learning", "Smart money shows up once coins the radar watched have run 3x or more. Give it a few hours.")}</div>
+    </div>
+    <div class="card"><div class="card-head"><h2>Live wallet activity</h2><small>buys and sells by wallets you follow</small></div>
+      <div class="feed" id="wfeed">${d.activity.length ? d.activity.map((a) => tradeRow(a)).join("") : empty("Nothing yet", "Trades show up here within a minute of happening.")}</div></div>
+  </div>`;
+  $("#addWallet").onsubmit = async () => {
+    const address = $("#waddr").value.trim(), label = $("#wlabel").value.trim();
+    if (!address) return;
+    try { await post("wallets", { address, label }); toast(`Following ${label || shortAddr(address)}`); viewWallets(main); }
+    catch (e) { toast(e.message); }
+  };
+}
+
+async function openWallet(address) {
+  const d = $("#drawer"), p = $("#panel");
+  d.hidden = false;
+  p.innerHTML = `<div class="skel" style="margin-top:22px"></div><div class="skel"></div>`;
+  const r = await api(`wallet/${address}`);
+  const w = r.wallet, pnl = r.pnl;
+  const open = pnl.positions.filter((x) => x.held > 0 && x.value != null && x.value > 1);
+  p.innerHTML = `
+    <div class="p-head"><div class="av lg">${w.source === "smart" ? "★" : "◆"}</div><div style="min-width:0"><h2>${esc(w.label || shortAddr(address))}</h2>
+      <div class="sub">${w.source === "smart" ? "Discovered smart wallet" : w.source === "you" ? "Added by you" : "Not followed"}${w.watching === 0 && w.source ? " · paused" : ""}</div></div>
+      <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="p-acts">
+      ${w.source ? `<button class="btn" data-wtoggle="${esc(address)}" data-on="${w.watching ? 0 : 1}">${w.watching ? "Pause" : "Resume"}</button><button class="btn" data-wrename="${esc(address)}">Rename</button><button class="btn" data-wremove="${esc(address)}">Unfollow</button>` : `<button class="btn primary" data-follow="${esc(address)}">Follow</button>`}
+      <a class="btn" href="https://gmgn.ai/sol/address/${esc(address)}" target="_blank" rel="noreferrer">GMGN</a>
+      <a class="btn" href="https://solscan.io/account/${esc(address)}" target="_blank" rel="noreferrer">Solscan</a>
+      <button class="btn" data-copy="${esc(address)}">Copy address</button>
+    </div>
+    <div class="p-sec"><div class="facts">
+      <div class="fact"><b>Trades seen</b><span>${pnl.trades}</span></div>
+      <div class="fact"><b>Win rate</b><span>${pnl.winRate == null ? "—" : Math.round(pnl.winRate * 100) + "%"}</span></div>
+      <div class="fact"><b>Realized</b><span class="${cls(pnl.realized)}">${pnl.closed ? usd(pnl.realized) : "—"}</span></div>
+      <div class="fact"><b>Open PnL</b><span class="${cls(pnl.unrealized)}">${pnl.trades ? usd(pnl.unrealized) : "—"}</span></div>
+    </div><p class="note" style="margin:10px 0 0">PnL covers trades since the radar started watching this wallet, priced in USD at the time.</p></div>
+    ${open.length ? `<div class="p-sec"><h3>Holding now</h3>${open.map((x) => `<div class="leader" data-mint="${esc(x.mint)}">${av(x, "sm")}<span class="grow"><b>$${esc(x.symbol || shortAddr(x.mint))}</b> <span class="dim">${esc(x.name || "")}</span></span><span class="num">${money(x.value)}</span><span class="num ${cls(x.unrealized)}" style="width:80px;text-align:right">${usd(x.unrealized)}</span></div>`).join("")}</div>` : ""}
+    ${r.hits.length ? `<div class="p-sec"><h3>Why it's smart</h3>${r.hits.map((h) => `<div class="leader" data-mint="${esc(h.mint)}">${av(h, "sm")}<span class="grow"><b>$${esc(h.symbol || shortAddr(h.mint))}</b> <span class="dim">${h.kind === "early" ? "early buyer" : "top holder"}</span></span><span class="num up">${h.multiple ? h.multiple.toFixed(1) + "x run" : ""}</span></div>`).join("")}</div>` : ""}
+    <div class="p-sec" style="padding:0"><h3 style="padding:16px 22px 0">Trades</h3>${r.trades.length ? r.trades.map((a) => tradeRow(a, { showWallet: false })).join("") : w.source
+      ? `<p class="note" style="padding:0 22px 16px">No trades seen yet. New wallets get their last ~25 transactions checked within a minute or two.</p>`
+      : `<div style="padding:0 22px 16px"><p class="note">The radar hasn't looked at this wallet yet.</p><button class="btn" data-wscan="${esc(address)}">Scan recent trades</button></div>`}</div>
+    <div class="p-sec"><div class="mint">${esc(address)}</div></div>`;
+  p.scrollTop = 0;
+}
+
 async function viewNarratives(main) {
   const nar = await api("narratives");
   main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>What coins are being launched around, and where the money is going. Heat mixes trading volume, coins that survive, and share of all new launches. Lift compares the last hour with the hours before.</p></div></div>
@@ -189,7 +272,7 @@ async function viewRecord(main) {
     </div>`;
 }
 
-const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["brief", "AI briefs"]];
+const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["brief", "AI briefs"]];
 async function viewSettings(main) {
   const { settings: s } = await api("settings");
   const num = (k, label, help) => `<div class="field"><label for="s-${k}">${label}</label><input class="input num" id="s-${k}" name="${k}" type="number" value="${s[k]}"><small>${help}</small></div>`;
@@ -203,6 +286,13 @@ async function viewSettings(main) {
         <div class="field" style="grid-column:1/-1"><label>Send me</label><div class="checks">${NOTIFY.map(([k, l]) => `<label class="check"><input type="checkbox" name="notifyKinds" value="${k}" ${s.notifyKinds.includes(k) ? "checked" : ""}> ${l}</label>`).join("")}</div></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="aiBriefs" ${s.aiBriefs ? "checked" : ""}> Write AI briefs automatically</label></div>
         ${num("briefEveryMin", "Brief every (minutes)", "How often Claude writes a market brief.")}
+      </div></div>
+    <div class="card"><div class="card-head"><h2>Wallets</h2></div>
+      <div class="form">
+        <div class="field" style="grid-column:1/-1"><label for="s-rpcUrl">Solana RPC URL</label><input class="input num" id="s-rpcUrl" name="rpcUrl" value="${esc(s.rpcUrl)}" placeholder="Blank = free public RPC (slow)"><small>For fast wallet tracking, make a free account at helius.dev and paste its mainnet RPC URL here. Blank uses the public RPC, which only allows about one transaction lookup a second.</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="autoFollowSmart" ${s.autoFollowSmart ? "checked" : ""}> Auto-follow discovered smart wallets</label><small>Adds the best wallets the radar finds, up to the limit below.</small></div>
+        ${num("maxSmartWallets", "Max auto-followed wallets", "More wallets means more RPC calls.")}
+        ${num("walletMinSol", "Smart wallet alert minimum (SOL)", "Buys by auto-followed wallets below this are logged but not alerted. Wallets you add always alert.")}
       </div></div>
     <div class="card"><div class="card-head"><h2>Filters</h2><small>higher = fewer, stronger signals</small></div>
       <div class="form">
@@ -249,6 +339,21 @@ function sparkline(snaps) {
     <p class="note">${pts.length} readings over ${ago(x0)} · ${up ? "up" : "down"} ${mult(ys[ys.length - 1] / ys[0])} since first seen</p>`;
 }
 
+function holdersSection(t, s) {
+  if (!s || s.totalHolders == null) return "";
+  const flag = (bad, text) => `<span class="${bad ? "down" : "up"}">${text}</span>`;
+  return `<div class="p-sec"><h3>Holders & dev</h3>
+    <div class="facts">
+      <div class="fact"><b>Holders</b><span>${s.totalHolders.toLocaleString()}</span></div>
+      <div class="fact"><b>Top 10 hold</b><span>${flag(s.top10 > 35, s.top10.toFixed(1) + "%")}</span></div>
+      <div class="fact"><b>Insiders hold</b><span>${flag(s.insiderPct > 15, s.insiderPct.toFixed(1) + "%")}</span></div>
+      <div class="fact"><b>Dev holds</b><span>${flag(s.devPct > 5, s.devPct.toFixed(2) + "%")}</span></div>
+    </div>
+    <p class="note" style="margin:10px 0">${s.insiderNetworks ? `${s.insiderNetworks} insider networks (wallets funded from each other). ` : ""}${s.devLaunches ? `The dev has launched ${s.devLaunches} other coins. ` : ""}${s.creator ? `Dev wallet: <span class="linkish" data-wallet="${esc(s.creator)}">${shortAddr(s.creator)}</span>` : ""}</p>
+    ${s.holders?.length ? `<div class="leaders">${s.holders.slice(0, 10).map((h, i) => `<div class="leader" data-wallet="${esc(h.owner)}"><span class="num dim" style="width:22px">${i + 1}</span><span class="grow num">${shortAddr(h.owner)}${h.insider ? ' <span class="pill" style="color:var(--down)">insider</span>' : ""}</span><span class="num">${h.pct.toFixed(2)}%</span></div>`).join("")}</div>` : ""}
+  </div>`;
+}
+
 async function openCoin(mint) {
   const d = $("#drawer"), p = $("#panel");
   d.hidden = false;
@@ -281,6 +386,8 @@ async function openCoin(mint) {
       <div class="fact"><b>Age</b><span>${ago(t.pair_created || t.first_seen)}</span></div>
     </div></div>
     <div class="p-sec"><h3>AI take</h3><div id="take"><button class="btn" data-explain="${esc(t.mint)}">Ask Claude about this coin</button></div></div>
+    ${holdersSection(t, s)}
+    ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}"><div class="av sm">${w.source === "smart" ? "★" : "◆"}</div><span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
     <div class="p-sec"><h3>Safety check</h3>${s ? (s.risks.length ? `<div class="risks">${s.risks.map((x) => `<div class="risk"><i style="background:${x.level === "danger" ? "var(--down)" : x.level === "warn" ? "var(--warn)" : "var(--info)"}"></i><div><b>${esc(x.name)}</b>${x.value ? ` <span class="dim">${esc(x.value)}</span>` : ""}<small>${esc(x.description || "")}</small></div></div>`).join("")}</div>` : `<p class="up">RugCheck found no risks.</p>`) : `<p class="note">Not checked yet. Coins are checked when they first show real trading.</p>`}</div>
     <div class="p-sec"><h3>Price while tracked</h3>${sparkline(r.snapshots)}</div>
     ${r.signals.length ? `<div class="p-sec"><h3>Signals</h3>${r.signals.map((x) => `<div class="risk"><i style="background:${kindOf(x.kind)[1]}"></i><div><b>${esc(x.title)}</b> <span class="dim">${ago(x.t)} ago</span><small>${esc(x.detail)}${x.p1h != null ? ` · 1h later: ${mult(x.p1h)}` : ""}${x.peak != null ? ` · peak ${mult(x.peak)}` : ""}</small></div></div>`).join("")}</div>` : ""}
@@ -292,7 +399,7 @@ async function openCoin(mint) {
 function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; }
 
 // ---------- routing ----------
-const VIEWS = { "": viewRadar, coins: viewCoins, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
+const VIEWS = { "": viewRadar, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 async function render() {
   const r = route();
@@ -323,6 +430,30 @@ document.addEventListener("click", async (e) => {
     catch (err) { toast(err.message); br.disabled = false; br.textContent = "Write one now"; }
     return;
   }
+  const follow = el.closest("[data-follow]");
+  if (follow) {
+    const label = prompt("Name this wallet (optional):", "") ?? "";
+    await post(`wallet/${follow.dataset.follow}`, { follow: true, label });
+    toast("Following wallet");
+    if (!$("#drawer").hidden) openWallet(follow.dataset.follow);
+    if (route() === "wallets") viewWallets($("#main"));
+    return;
+  }
+  const ws = el.closest("[data-wscan]");
+  if (ws) {
+    ws.disabled = true; ws.textContent = "Scanning… (up to a minute on the free RPC)";
+    try { await post(`wallet/${ws.dataset.wscan}`, { scan: true }); openWallet(ws.dataset.wscan); }
+    catch (err) { toast(err.message); ws.disabled = false; ws.textContent = "Scan recent trades"; }
+    return;
+  }
+  const wt = el.closest("[data-wtoggle]");
+  if (wt) { await post(`wallet/${wt.dataset.wtoggle}`, { watching: wt.dataset.on === "1" }); openWallet(wt.dataset.wtoggle); if (route() === "wallets") viewWallets($("#main")); return; }
+  const wr = el.closest("[data-wrename]");
+  if (wr) { const label = prompt("New name:"); if (label != null) { await post(`wallet/${wr.dataset.wrename}`, { label }); openWallet(wr.dataset.wrename); if (route() === "wallets") viewWallets($("#main")); } return; }
+  const wx = el.closest("[data-wremove]");
+  if (wx) { if (confirm("Stop following this wallet and delete its trade history?")) { await api(`wallet/${wx.dataset.wremove}`, { method: "DELETE" }); closeCoin(); toast("Unfollowed"); if (route() === "wallets") viewWallets($("#main")); } return; }
+  const wal = el.closest("[data-wallet]");
+  if (wal && !el.closest("a")) return openWallet(wal.dataset.wallet);
   const theme = el.closest("[data-theme]");
   if (theme) { coinState.theme = theme.dataset.theme; location.hash = "#/coins"; return; }
   const ct = el.closest("[data-ctheme]");
@@ -363,6 +494,13 @@ function connect() {
       feed.insertAdjacentHTML("afterbegin", sigRow({ ...s, symbol: s.token?.symbol, image: s.token?.image }, true));
     }
     if (document.hidden && Notification?.permission === "granted") new Notification(s.title, { body: s.detail, icon: s.token?.image || "/icon.svg" });
+  });
+  es.addEventListener("walletTrade", (ev) => {
+    const { wallet: w, trade } = JSON.parse(ev.data);
+    const feed = $("#wfeed");
+    if (!feed) return;
+    if (feed.querySelector(".empty")) feed.innerHTML = "";
+    feed.insertAdjacentHTML("afterbegin", tradeRow({ ...trade, wallet: w.address, label: w.label, source: w.source }).replace('class="sig"', 'class="sig new"'));
   });
   es.addEventListener("brief", (ev) => { const b = JSON.parse(ev.data); const c = $("#briefCard"); if (c) c.innerHTML = briefCard(b); toast("New AI brief"); });
   es.onerror = () => { live.classList.remove("on"); live.querySelector("span").textContent = "reconnecting"; };

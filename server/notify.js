@@ -2,11 +2,11 @@
 import { settings } from "./settings.js";
 import { db } from "./db.js";
 
-const COLORS = { launch: 0x22c55e, graduated: 0xa855f7, momentum: 0xf59e0b, volume: 0x38bdf8, dump: 0xef4444, brief: 0xe2e8f0 };
+const COLORS = { launch: 0x22c55e, graduated: 0xa855f7, momentum: 0xf59e0b, volume: 0x38bdf8, dump: 0xef4444, brief: 0xe2e8f0, wallet: 0x2dd4bf, smart: 0xfacc15, "dev-sold": 0xef4444, rugged: 0xef4444 };
 const fmt$ = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n || 0)}`;
 
-const kindOf = (k) => k.startsWith("mcap-") ? "milestone" : k;
-const wants = (kind) => settings.notifyKinds.includes(kind) || (kind.startsWith("mcap-") && settings.notifyKinds.includes(kind));
+const kindOf = (k) => k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k;
+const wants = (kind) => settings.notifyKinds.includes(kind) || settings.notifyKinds.includes(kindOf(kind));
 
 async function post(url, body) {
   const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

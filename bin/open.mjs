@@ -12,7 +12,7 @@ const up = () => fetch(`${URL_}/api/overview`).then((r) => r.ok).catch(() => fal
 if (!(await up())) {
   fs.mkdirSync(path.join(ROOT, "data"), { recursive: true });
   const log = fs.openSync(path.join(ROOT, "data", "server.log"), "a");
-  spawn(process.execPath, ["--no-warnings", path.join(ROOT, "server", "server.js")], {
+  spawn(process.execPath, [path.join(ROOT, "bin", "supervise.mjs")], {
     cwd: ROOT, detached: true, windowsHide: true, stdio: ["ignore", log, log],
   }).unref();
   for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
