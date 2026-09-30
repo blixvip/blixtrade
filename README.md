@@ -20,8 +20,9 @@ From a terminal: `npm start` (radar + dashboard, foreground).
 6. **Narratives.** Theme detection (AI, dogs, cats, politics, brainrot…) on every launch and tracked coin. Heat, launch share, lift vs the previous hours, and emerging words.
 7. **Briefs.** Every hour Claude writes a market brief from the radar's data (uses this PC's Claude Code login). "Ask Claude about this coin" on any coin.
 8. **Wallets.** Follow any wallet: its swaps on every Solana DEX are read from the chain (public RPC, or your own RPC URL in Settings), with PnL, win rate and open positions. A buy by a wallet you follow is an alert; two followed wallets buying the same coin is a Smart money alert. Coins that run 3x+ are studied for their early buyers and top holders; wallets that keep showing up are ranked under Smart money and auto-followed (up to a limit). Every coin shows holders, top-10 share, insider networks, how much the dev still holds, and the dev's other launches. Dev sells and rugs raise warnings, and serial launchers (4+ coins in 6h) never get positive alerts. "Scan recent trades" looks at any wallet without following it.
-9. **Updates.** Live dashboard, desktop notifications, Discord webhook and Telegram bot (Settings).
-10. **Track record.** Every signal is re-priced at 15 minutes, 1 hour, 6 hours and 24 hours, plus its 24h peak, so you can see hit rates per signal type before trusting it.
+9. **Fomo.** Every coin and alert has a Buy on Fomo button (fomo.family/tokens/solana/<mint>; opens the Fomo app on your phone). With a free fomoapi.io key (unofficial, 250k credits/month) the radar imports the Fomo leaderboard and follows the top traders' Solana wallets on-chain (their trades cost no credits), follows any @handle you add, and shows which Fomo traders hold a coin. A budget guard stops at 90% of the monthly credits.
+10. **Updates.** Live dashboard, desktop notifications, Discord webhook and Telegram bot (Settings).
+11. **Track record.** Every signal is re-priced at 15 minutes, 1 hour, 6 hours and 24 hours, plus its 24h peak, so you can see hit rates per signal type before trusting it.
 
 ## Files
 
@@ -30,6 +31,7 @@ From a terminal: `npm start` (radar + dashboard, foreground).
 - `server/ai.js` — Claude briefs and coin explanations
 - `server/wallets.js` — watchlist, wallet PnL, smart-money discovery
 - `server/solana.js` — RPC pacing and swap parsing
+- `server/fomo.js` — Fomo links, leaderboard, handle lookup, holders, credit budget
 - `server/notify.js` — Discord and Telegram
 - `bin/supervise.mjs` — restarts the radar if it ever exits
 - `server/server.js` — API, live event stream, brief schedule

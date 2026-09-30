@@ -1,6 +1,7 @@
 // Pushes signals and briefs to Discord (webhook) and Telegram (bot), when configured in Settings.
 import { settings } from "./settings.js";
 import { db } from "./db.js";
+import { fomoLink } from "./fomo.js";
 
 const COLORS = { launch: 0x22c55e, graduated: 0xa855f7, momentum: 0xf59e0b, volume: 0x38bdf8, dump: 0xef4444, brief: 0xe2e8f0, wallet: 0x2dd4bf, smart: 0xfacc15, "dev-sold": 0xef4444, rugged: 0xef4444 };
 const fmt$ = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n || 0)}`;
@@ -30,6 +31,7 @@ export async function notifySignal(sig) {
           { name: "Score", value: `${sig.score}/100`, inline: true },
           { name: "Safety", value: safety, inline: true },
           { name: "Mcap", value: fmt$(t.mcap), inline: true },
+          { name: "Trade", value: `[Buy on Fomo](${fomoLink(t.mint)}) · [Chart](${dex})` },
           { name: "Mint", value: `\`${t.mint}\`` },
         ],
         timestamp: new Date(sig.t).toISOString(),
@@ -37,7 +39,7 @@ export async function notifySignal(sig) {
     }));
   }
   if (settings.telegramToken && settings.telegramChat) {
-    const text = `*${sig.title}*\n${sig.detail}\nScore ${sig.score}/100 · Safety ${safety} · ${fmt$(t.mcap)}\n[Chart](${dex}) · \`${t.mint}\``;
+    const text = `*${sig.title}*\n${sig.detail}\nScore ${sig.score}/100 · Safety ${safety} · ${fmt$(t.mcap)}\n[Buy on Fomo](${fomoLink(t.mint)}) · [Chart](${dex}) · \`${t.mint}\``;
     jobs.push(post(`https://api.telegram.org/bot${settings.telegramToken}/sendMessage`, { chat_id: settings.telegramChat, text, parse_mode: "Markdown", disable_web_page_preview: true }));
   }
   if (!jobs.length) return;

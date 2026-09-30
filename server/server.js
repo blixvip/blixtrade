@@ -10,6 +10,7 @@ import { settings, saveSettings, DEFAULTS } from "./settings.js";
 import { writeBrief, explainCoin } from "./ai.js";
 import { notifySignal, notifyBrief, testNotify } from "./notify.js";
 import * as wallets from "./wallets.js";
+import * as fomo from "./fomo.js";
 import { rpcStats } from "./solana.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -185,8 +186,20 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/test-notify" && req.method === "POST") return send(res, 200, { errors: await testNotify() });
     if (p === "/api/wallets") {
       if (req.method === "POST") { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
-      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl } });
+      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl }, fomo: { ...fomo.status(), leaderboard: fomo.leaderboard() } });
     }
+    if (p === "/api/fomo") return send(res, 200, { ...fomo.status(), leaderboard: fomo.leaderboard() });
+    if (p === "/api/fomo/refresh" && req.method === "POST") {
+      await fomo.refreshLeaderboard((w, label, source) => wallets.addWallet(w, label, source));
+      return send(res, 200, { ...fomo.status(), leaderboard: fomo.leaderboard() });
+    }
+    if (p === "/api/fomo/follow" && req.method === "POST") {
+      const b = await readBody(req);
+      const t = await fomo.resolveHandle(b.handle || "");
+      return send(res, 200, { trader: t, wallet: wallets.addWallet(t.wallet, `@${t.handle}`, "you") });
+    }
+    const fh = p.match(/^\/api\/fomo\/holders\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (fh) return send(res, 200, { holders: await fomo.tokenHolders(fh[1]) });
     const wm = p.match(/^\/api\/wallet\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (wm) {
       if (req.method === "DELETE") { wallets.removeWallet(wm[1]); return send(res, 200, { ok: true }); }
@@ -225,6 +238,7 @@ process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();
+  fomo.startFomo((w, label, source) => wallets.addWallet(w, label, source));
   // First brief once there's data to talk about, then on schedule.
   const tryBrief = () => settings.aiBriefs && makeBrief().catch((e) => logEvent("error", `brief: ${e.message}`));
   setTimeout(tryBrief, 12 * MIN);

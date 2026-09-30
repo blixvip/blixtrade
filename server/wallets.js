@@ -4,6 +4,7 @@ import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import * as sol from "./solana.js";
 import * as src from "./sources.js";
+import { traderByWallet } from "./fomo.js";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS wallets (
@@ -54,7 +55,9 @@ export function addWallet(address, label = "", source = "you") {
   if (!sol.validAddress(address)) throw Object.assign(new Error("That doesn't look like a Solana wallet address."), { status: 400 });
   const cur = db.prepare("SELECT * FROM wallets WHERE address = ?").get(address);
   if (cur) {
-    db.prepare("UPDATE wallets SET label = COALESCE(NULLIF(?, ''), label), watching = 1, source = CASE WHEN ? = 'you' THEN 'you' ELSE source END WHERE address = ?").run(label, source, address);
+    // Your own follows win; a Fomo label beats an anonymous smart-money one.
+    db.prepare(`UPDATE wallets SET label = CASE WHEN label IS NULL OR label = '' OR ? = 'fomo' THEN COALESCE(NULLIF(?, ''), label) ELSE label END, watching = 1,
+      source = CASE WHEN ? = 'you' THEN 'you' WHEN ? = 'fomo' AND source = 'smart' THEN 'fomo' ELSE source END WHERE address = ?`).run(source, label, source, source, address);
   } else {
     db.prepare("INSERT INTO wallets (address, label, source, watching, added) VALUES (?, ?, ?, 1, ?)").run(address, label || null, source, now());
     logEvent("wallet", `Watching ${label || short(address)}`);
@@ -87,7 +90,7 @@ async function pollWallets(emit) {
   if (polling) return;
   polling = true;
   try {
-    const list = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, COALESCE(last_poll, 0) ASC").all();
+    const list = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'fomo' DESC, COALESCE(last_poll, 0) ASC").all();
     const budget = sol.rpcStats && settings.rpcUrl ? 30 : 8;   // wallets per round
     for (const w of list.slice(0, budget)) await pollOne(w, emit).catch((e) => logEvent("error", `wallet ${short(w.address)}: ${e.message}`));
   } finally {
@@ -283,7 +286,7 @@ export function walletSignals(event, raise, adopt) {
   const cool = (kind, ms) => { const l = q.lastSignal.get(trade.mint, kind); return !l || now() - l.t > ms; };
 
   if ((w.source === "you" || trade.sol >= settings.walletMinSol) && cool(`wallet:${w.address}`, 6 * 60 * MIN))
-    raise(tk, `wallet:${w.address}`, `${nameOf(w)} bought $${tk.symbol}`, `${usd} buy${t?.mcap ? ` at ${fmtUsd(t.mcap)} mcap` : ""}.${safety}`);
+    raise(tk, `wallet:${w.address}`, `${nameOf(w)} bought $${tk.symbol}`, `${usd} buy${t?.mcap ? ` at ${fmtUsd(t.mcap)} mcap` : ""}.${fomoNote(w.address)}${safety}`);
 
   const buyers = db.prepare(`SELECT DISTINCT wt.wallet FROM wallet_trades wt JOIN wallets w ON w.address = wt.wallet
     WHERE wt.mint = ? AND wt.side = 'buy' AND wt.t > ? AND w.watching = 1`).all(trade.mint, now() - 2 * 60 * MIN);
@@ -292,6 +295,14 @@ export function walletSignals(event, raise, adopt) {
     const names = buyers.map((b) => nameOf(db.prepare("SELECT * FROM wallets WHERE address = ?").get(b.wallet))).slice(0, 4).join(", ");
     raise(tk, "smart", `Smart money piling into $${tk.symbol}`, `${buyers.length} wallets you follow bought in the last 2 hours: ${names}.${safety}`);
   }
+}
+// "Fomo #3 on the 7d board, +$41k" when the wallet belongs to a Fomo trader.
+function fomoNote(address) {
+  const f = traderByWallet(address);
+  if (!f) return "";
+  const rank = f.rank ? ` #${f.rank} on the ${f.win} board` : "";
+  const pnl = f.pnl != null ? `, ${f.pnl >= 0 ? "+" : "−"}${fmtUsd(Math.abs(f.pnl))} PnL` : "";
+  return ` Fomo trader @${f.handle}${rank}${pnl}.`;
 }
 const fmtUsd = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n || 0)}`;
 

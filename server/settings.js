@@ -27,6 +27,10 @@ export const DEFAULTS = {
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
+  // fomo
+  fomoApiKey: "",            // free key from fomoapi.io (250k credits/month)
+  fomoWindow: "7d",          // leaderboard window: 24h | 7d | 30d
+  fomoFollowTop: 15,         // follow this many top Fomo traders' wallets
 };
 
 function load() {

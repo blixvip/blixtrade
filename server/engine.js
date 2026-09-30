@@ -285,7 +285,13 @@ function rescore(t) {
   }
 
   if (!found.length) return;
-  // One alert per coin per scan: the strongest reason leads, the rest ride along.
+  // One alert per coin per scan, and at most one every 20 minutes per coin (graduations excepted).
+  const recent = db.prepare(`SELECT 1 FROM signals WHERE mint = ? AND hidden = 0 AND t > ?
+    AND kind NOT IN ('dump', 'dev-sold', 'rugged', 'smart') AND kind NOT LIKE 'wallet:%'`).get(t.mint, now() - 20 * MIN);
+  if (recent && found[0][0] !== "graduated") {
+    for (const r of found) raise(t, r[0], r[1], r[2], 1); // remember them so they don't fire right after
+    return;
+  }
   const [lead, ...rest] = found;
   raise(t, lead[0], lead[1], [lead[2], ...rest.map((r) => r[1] + ".")].join(" "));
   for (const r of rest) raise(t, r[0], r[1], r[2], 1);
