@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meme Radar</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><img src="/icon.svg" alt="" width="26" height="26"><span>Meme Radar</span></a>
+  <nav class="tabs" id="tabs">
+    <a href="#/" data-r="">Radar</a>
+    <a href="#/coins" data-r="coins">Coins</a>
+    <a href="#/narratives" data-r="narratives">Narratives</a>
+    <a href="#/briefs" data-r="briefs">Briefs</a>
+    <a href="#/record" data-r="record">Track record</a>
+    <a href="#/settings" data-r="settings">Settings</a>
+  </nav>
+  <div class="live" id="live"><i></i><span>connecting</span></div>
+</header>
+<div class="strip" id="strip"></div>
+<main id="main"></main>
+<aside class="drawer" id="drawer" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" id="panel" role="dialog" aria-modal="true"></section>
+</aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
