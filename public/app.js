@@ -26,7 +26,7 @@ function price(p) {
 const KIND = {
   launch: ["New launch", "var(--up)"], graduated: ["Graduated", "var(--violet)"], momentum: ["Momentum", "var(--warn)"],
   volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "#7ee0c3"],
-  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
+  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
 };
 const kindOf = (k) => KIND[k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k] || [k, "var(--muted)"];
 const shortAddr = (a) => a ? `${a.slice(0, 4)}…${a.slice(-4)}` : "";
@@ -167,17 +167,31 @@ function tradeRow(a, { showWallet = true } = {}) {
 }
 
 function fomoCard(f) {
-  const head = `<div class="card-head"><h2><span class="fomo-mark">fomo</span> Top traders</h2>${f.connected ? `<div style="display:flex;gap:8px;align-items:center"><small>${Math.round(f.creditsUsed / 1000)}k / ${f.monthly / 1000}k credits</small><button class="btn" data-fomorefresh>Refresh</button></div>` : ""}</div>`;
-  if (!f.connected) return `<div class="card">${head}<div class="empty" style="text-align:left;padding:4px 16px 18px">
-    <b>Connect Fomo trader data</b>Get a free key at <a class="linkish" href="https://fomoapi.io/dashboard" target="_blank" rel="noreferrer">fomoapi.io</a> and paste it in Settings. The radar then follows the ${f.followTop || 15} best Fomo traders' wallets and alerts you when they buy. Buy on Fomo buttons already work without a key.</div></div>`;
-  const list = f.leaderboard || [];
-  return `<div class="card">${head}
-    <form class="filters" style="padding:0 16px" id="fomoFollow" onsubmit="return false"><input class="input" id="fhandle" placeholder="@handle on Fomo" style="flex:1;min-width:160px" autocomplete="off"><button class="btn primary" type="submit">Follow trader</button></form>
-    ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Trader</th><th>PnL ${esc(f.window)}</th><th class="hide-sm">Volume</th><th class="hide-sm">Trades</th><th class="hide-sm"></th></tr></thead><tbody>
-      ${list.slice(0, 25).map((t) => `<tr class="row" ${t.wallet ? `data-wallet="${esc(t.wallet)}"` : ""}><td><div class="coin">${t.avatar ? `<img class="av sm" src="${esc(t.avatar)}" alt="" loading="lazy">` : `<div class="av sm">${t.rank}</div>`}<div><b>@${esc(t.handle)}</b>${t.verified ? ' <span class="pill">✓</span>' : ""}<small>#${t.rank}${t.top_tokens.length ? " · " + t.top_tokens.slice(0, 3).map((x) => "$" + esc(x)).join(" ") : ""}</small></div></div></td>
-      <td class="${cls(t.pnl)}">${usd(t.pnl)}</td><td class="hide-sm">${money(t.volume)}</td><td class="hide-sm">${t.trades ?? "—"}</td>
-      <td class="dim hide-sm">${t.wallet ? "wallet →" : "no Solana wallet"}</td></tr>`).join("")}
-    </tbody></table></div>` : `<p class="note" style="padding:0 16px 16px">Loading the leaderboard… press Refresh if it doesn't appear within a minute.</p>`}</div>`;
+  const head = `<div class="card-head"><h2><span class="fomo-mark">fomo</span> On-chain</h2><small>${f.connected ? `${f.tradesLastHour} Fomo trades seen in the last hour${f.sampled ? " (sampled)" : ""}` : "free, no API key"}</small></div>`;
+  const addForm = `<form class="filters" style="padding:0 16px" id="fomoAdd" onsubmit="return false">
+      <input class="input num" id="fwallet" placeholder="Fomo trader's Solana wallet" style="flex:2;min-width:200px" autocomplete="off" spellcheck="false">
+      <input class="input" id="fhandle" placeholder="@handle (optional)" style="flex:1;min-width:120px" autocomplete="off">
+      <button class="btn fomo" type="submit">Add Fomo trader</button></form>`;
+  if (!f.connected) return `<div class="card">${head}
+    <div class="empty" style="text-align:left;padding:0 16px 12px"><b>Connect Fomo for free</b>
+      Fomo pays its users' Solana fees, so every Fomo trade carries Fomo's fee-payer signature. Add one Fomo wallet and the radar learns that signature from its trades, then watches Fomo trades as they happen. No API key, nothing to pay.
+      <ol style="margin:10px 0 0;padding-left:18px;color:var(--ink-2)">
+        <li>Your own: Fomo app → Profile → Deposit → Solana → copy the address.</li>
+        <li>Or any trader: look up their handle on <a class="linkish" href="https://fomowalletfinder.com/" target="_blank" rel="noreferrer">fomowalletfinder.com</a> (free) and paste the Solana wallet.</li>
+      </ol>
+      <p class="note" style="margin:10px 0 0">${f.fomoWallets ? `${f.fomoWallets} Fomo wallet${f.fomoWallets > 1 ? "s" : ""} added. Learning starts once the radar has seen 2 of their trades.` : "Buy on Fomo buttons already work."}</p></div>
+    ${addForm}</div>`;
+  const hot = f.hot || [], traders = f.traders || [];
+  return `<div class="card">${head}${addForm}
+    <div class="card-head" style="padding-top:4px"><h2>What Fomo is buying</h2><small>last hour</small></div>
+    ${hot.length ? hot.map((c) => `<div class="leader" style="margin:0 10px" data-mint="${esc(c.mint)}">${av(c, "sm")}<span class="grow"><b>$${esc(c.symbol || shortAddr(c.mint))}</b> <span class="dim">${c.buyers} buyers · ${c.sellers} sellers</span></span><span class="num ${cls((c.bought || 0) - (c.sold || 0))}">${usd((c.bought || 0) - (c.sold || 0))}</span>${fomoBtn(c.mint)}</div>`).join("")
+      : `<p class="note" style="padding:0 16px">No Fomo trades seen yet this hour.</p>`}
+    <div class="card-head"><h2>Best Fomo traders seen</h2><small>by profit on trades the radar watched</small></div>
+    ${traders.length ? `<div class="table-wrap"><table><thead><tr><th>Trader</th><th>Profit</th><th class="hide-sm">Win rate</th><th class="hide-sm">Coins</th><th></th></tr></thead><tbody>
+      ${traders.slice(0, 15).map((t) => `<tr class="row" data-wallet="${esc(t.wallet)}"><td><div class="coin"><div class="av sm">F</div><div><b>${t.handle ? "@" + esc(t.handle) : esc(t.label || shortAddr(t.wallet))}</b><small>${t.trades} trades</small></div></div></td>
+      <td class="${cls(t.realized)}">${usd(t.realized)}</td><td class="hide-sm">${t.winRate == null ? "—" : Math.round(t.winRate * 100) + "%"}</td><td class="hide-sm">${t.coins}</td>
+      <td>${t.watching ? '<span class="up">following</span>' : `<button class="btn" data-follow="${esc(t.wallet)}">Follow</button>`}</td></tr>`).join("")}
+    </tbody></table></div>` : `<p class="note" style="padding:0 16px 16px">Rankings appear once traders close a few positions.</p>`}</div>`;
 }
 
 async function viewWallets(main) {
@@ -210,12 +224,11 @@ async function viewWallets(main) {
     <div class="card"><div class="card-head"><h2>Live wallet activity</h2><small>buys and sells by wallets you follow</small></div>
       <div class="feed" id="wfeed">${d.activity.length ? d.activity.map((a) => tradeRow(a)).join("") : empty("Nothing yet", "Trades show up here within a minute of happening.")}</div></div>
   </div>`;
-  const ff = $("#fomoFollow");
-  if (ff) ff.onsubmit = async () => {
-    const handle = $("#fhandle").value.trim();
-    if (!handle) return;
-    toast("Looking up the trader on Fomo…");
-    try { const r = await post("fomo/follow", { handle }); toast(`Following @${r.trader.handle}`); viewWallets(main); }
+  const fa = $("#fomoAdd");
+  if (fa) fa.onsubmit = async () => {
+    const wallet = $("#fwallet").value.trim(), handle = $("#fhandle").value.trim();
+    if (!wallet) return toast("Paste the trader's Solana wallet");
+    try { await post("fomo/trader", { wallet, handle }); toast(`Added ${handle || "Fomo trader"}; reading their trades`); viewWallets(main); }
     catch (e) { toast(e.message); }
   };
   $("#addWallet").onsubmit = async () => {
@@ -239,6 +252,7 @@ async function openWallet(address) {
       <button class="close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="p-acts">
       ${w.source ? `<button class="btn" data-wtoggle="${esc(address)}" data-on="${w.watching ? 0 : 1}">${w.watching ? "Pause" : "Resume"}</button><button class="btn" data-wrename="${esc(address)}">Rename</button><button class="btn" data-wremove="${esc(address)}">Unfollow</button>` : `<button class="btn primary" data-follow="${esc(address)}">Follow</button>`}
+      ${w.label?.startsWith("@") ? `<a class="btn fomo" href="https://fomo.family/profile/${esc(w.label.slice(1))}" target="_blank" rel="noreferrer">Fomo profile</a>` : ""}
       <a class="btn" href="https://gmgn.ai/sol/address/${esc(address)}" target="_blank" rel="noreferrer">GMGN</a>
       <a class="btn" href="https://solscan.io/account/${esc(address)}" target="_blank" rel="noreferrer">Solscan</a>
       <button class="btn" data-copy="${esc(address)}">Copy address</button>
@@ -299,7 +313,7 @@ async function viewRecord(main) {
     </div>`;
 }
 
-const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["brief", "AI briefs"]];
+const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["fomo", "Fomo crowd buys"], ["brief", "AI briefs"]];
 async function viewSettings(main) {
   const { settings: s } = await api("settings");
   const num = (k, label, help) => `<div class="field"><label for="s-${k}">${label}</label><input class="input num" id="s-${k}" name="${k}" type="number" value="${s[k]}"><small>${help}</small></div>`;
@@ -314,11 +328,10 @@ async function viewSettings(main) {
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="aiBriefs" ${s.aiBriefs ? "checked" : ""}> Write AI briefs automatically</label></div>
         ${num("briefEveryMin", "Brief every (minutes)", "How often Claude writes a market brief.")}
       </div></div>
-    <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>Buy on Fomo buttons work without a key</small></div>
+    <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
       <div class="form">
-        <div class="field" style="grid-column:1/-1"><label for="s-fomoApiKey">fomoapi.io API key</label><input class="input num" id="s-fomoApiKey" name="fomoApiKey" value="${esc(s.fomoApiKey)}" placeholder="Paste your free key"><small>Free at fomoapi.io/dashboard (250k credits a month). Used for the Fomo leaderboard, following @handles, and "Fomo traders holding" on coins. The radar follows traders' wallets on-chain itself, so their live trades cost no credits. Unofficial service, not run by Fomo.</small></div>
-        <div class="field"><label for="s-fomoWindow">Leaderboard</label><select class="input" id="s-fomoWindow" name="fomoWindow"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><small>Which Fomo leaderboard to follow.</small></div>
-        ${num("fomoFollowTop", "Follow top Fomo traders", "How many of the leaderboard's best traders to follow.")}
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="fomoAutoFollow" ${s.fomoAutoFollow ? "checked" : ""}> Auto-follow the best Fomo traders</label><small>Traders the radar watched make money on Fomo (3+ closed coins, $300+ profit, 50%+ win rate).</small></div>
+        ${num("fomoFollowTop", "Max Fomo traders to follow", "Each followed wallet costs RPC calls.")}
       </div></div>
     <div class="card"><div class="card-head"><h2>Wallets</h2></div>
       <div class="form">
@@ -348,7 +361,6 @@ async function viewSettings(main) {
     out.notifyKinds = [...f.querySelectorAll('input[name="notifyKinds"]:checked')].map((e) => e.value);
     return out;
   };
-  $("#s-fomoWindow").value = s.fomoWindow || "7d";
   $("#save").onclick = async () => { await post("settings", collect()); toast("Saved"); };
   $("#testN").onclick = async () => {
     await post("settings", collect());
@@ -371,6 +383,19 @@ function sparkline(snaps) {
     <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#39ff88" : "#ff4d6d"}" stop-opacity=".25"/><stop offset="1" stop-color="${up ? "#39ff88" : "#ff4d6d"}" stop-opacity="0"/></linearGradient></defs>
     <path d="${d}L${W},${H}L0,${H}Z" fill="url(#fill)"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
     <p class="note">${pts.length} readings over ${ago(x0)} · ${up ? "up" : "down"} ${mult(ys[ys.length - 1] / ys[0])} since first seen</p>`;
+}
+
+function fomoFlowSection(f) {
+  if (!f || (!f.buyers && !f.sellers && !f.recent?.length)) return "";
+  return `<div class="p-sec"><h3><span class="fomo-mark">fomo</span> Fomo traders on this coin</h3>
+    <div class="facts">
+      <div class="fact"><b>Buyers 1h</b><span class="up">${f.buyers || 0}</span></div>
+      <div class="fact"><b>Sellers 1h</b><span class="down">${f.sellers || 0}</span></div>
+      <div class="fact"><b>Bought 1h</b><span>${money(f.bought || 0)}</span></div>
+      <div class="fact"><b>Sold 1h</b><span>${money(f.sold || 0)}</span></div>
+    </div>
+    ${f.recent.length ? `<div class="leaders" style="margin-top:10px">${f.recent.map((x) => `<div class="leader" data-wallet="${esc(x.wallet)}"><div class="av sm">F</div><span class="grow"><b>${x.handle ? "@" + esc(x.handle) : shortAddr(x.wallet)}</b> <span class="dim">${x.side === "buy" ? "bought" : "sold"} ${ago(x.t)} ago</span></span><span class="num ${x.side === "buy" ? "up" : "down"}">${money(x.usd)}</span></div>`).join("")}</div>` : ""}
+  </div>`;
 }
 
 function holdersSection(t, s) {
@@ -423,7 +448,7 @@ async function openCoin(mint) {
     <div class="p-sec"><h3>AI take</h3><div id="take"><button class="btn" data-explain="${esc(t.mint)}">Ask Claude about this coin</button></div></div>
     ${holdersSection(t, s)}
     ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}"><div class="av sm">${walletIcon(w.source)}</div><span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
-    <div class="p-sec"><h3>Fomo traders holding</h3><div id="fomoHolders"><button class="btn" data-fomoholders="${esc(t.mint)}">Check Fomo holders</button> <span class="note">uses 250 of your monthly Fomo credits</span></div></div>
+    ${fomoFlowSection(r.fomo)}
     <div class="p-sec"><h3>Safety check</h3>${s ? (s.risks.length ? `<div class="risks">${s.risks.map((x) => `<div class="risk"><i style="background:${x.level === "danger" ? "var(--down)" : x.level === "warn" ? "var(--warn)" : "var(--info)"}"></i><div><b>${esc(x.name)}</b>${x.value ? ` <span class="dim">${esc(x.value)}</span>` : ""}<small>${esc(x.description || "")}</small></div></div>`).join("")}</div>` : `<p class="up">RugCheck found no risks.</p>`) : `<p class="note">Not checked yet. Coins are checked when they first show real trading.</p>`}</div>
     <div class="p-sec"><h3>Price while tracked</h3>${sparkline(r.snapshots)}</div>
     ${r.signals.length ? `<div class="p-sec"><h3>Signals</h3>${r.signals.map((x) => `<div class="risk"><i style="background:${kindOf(x.kind)[1]}"></i><div><b>${esc(x.title)}</b> <span class="dim">${ago(x.t)} ago</span><small>${esc(x.detail)}${x.p1h != null ? ` · 1h later: ${mult(x.p1h)}` : ""}${x.peak != null ? ` · peak ${mult(x.peak)}` : ""}</small></div></div>`).join("")}</div>` : ""}
@@ -473,23 +498,6 @@ document.addEventListener("click", async (e) => {
     toast("Following wallet");
     if (!$("#drawer").hidden) openWallet(follow.dataset.follow);
     if (route() === "wallets") viewWallets($("#main"));
-    return;
-  }
-  if (el.closest("[data-fomorefresh]")) {
-    const b = el.closest("[data-fomorefresh]"); b.disabled = true; b.textContent = "Refreshing…";
-    try { await post("fomo/refresh"); toast("Fomo leaderboard updated"); viewWallets($("#main")); }
-    catch (err) { toast(err.message); b.disabled = false; b.textContent = "Refresh"; }
-    return;
-  }
-  const fhb = el.closest("[data-fomoholders]");
-  if (fhb) {
-    fhb.disabled = true; fhb.textContent = "Checking Fomo…";
-    try {
-      const r = await api(`fomo/holders/${fhb.dataset.fomoholders}`);
-      $("#fomoHolders").innerHTML = r.holders.length
-        ? `<div class="leaders">${r.holders.map((h) => `<div class="leader" ${h.wallet ? `data-wallet="${esc(h.wallet)}"` : ""}><div class="av sm">F</div><span class="grow"><b>@${esc(h.handle)}</b>${h.rank ? ` <span class="dim">#${h.rank} on the leaderboard</span>` : ""}</span><span class="num">${money(h.valueUsd)}</span></div>`).join("")}</div>`
-        : `<p class="note">No Fomo traders hold this coin right now.</p>`;
-    } catch (err) { $("#fomoHolders").innerHTML = `<p class="down">${esc(err.message)}</p>`; }
     return;
   }
   const ws = el.closest("[data-wscan]");

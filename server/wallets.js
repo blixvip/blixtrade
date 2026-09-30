@@ -4,23 +4,25 @@ import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import * as sol from "./solana.js";
 import * as src from "./sources.js";
-import { traderByWallet } from "./fomo.js";
+import { handleOf } from "./fomo.js";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS wallets (
   address TEXT PRIMARY KEY,
   label TEXT,
-  source TEXT,              -- you | smart
+  source TEXT,              -- you | smart | fomo
   watching INTEGER DEFAULT 1,
   added INTEGER,
   last_sig TEXT,
   last_poll INTEGER,
   last_trade INTEGER,
-  backfilled INTEGER DEFAULT 0
+  backfilled INTEGER DEFAULT 0,
+  fomo INTEGER DEFAULT 0    -- trades on Fomo
 );
 CREATE TABLE IF NOT EXISTS wallet_trades (
   sig TEXT, wallet TEXT, mint TEXT, side TEXT,
   tokens REAL, sol REAL, usd REAL, t INTEGER,
+  payer TEXT,               -- who paid the network fee (Fomo pays for its users)
   PRIMARY KEY (sig, wallet, mint)
 );
 CREATE INDEX IF NOT EXISTS wt_wallet ON wallet_trades(wallet, t);
@@ -33,6 +35,9 @@ CREATE TABLE IF NOT EXISTS winners (
   mint TEXT PRIMARY KEY, t INTEGER, multiple REAL, holders_done INTEGER DEFAULT 0, early_done INTEGER DEFAULT 0
 );
 `);
+
+try { db.exec("ALTER TABLE wallets ADD COLUMN fomo INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE wallet_trades ADD COLUMN payer TEXT"); } catch {}
 
 const MIN = 60_000;
 const now = () => Date.now();
@@ -106,13 +111,15 @@ async function pollOne(w, emit) {
   // Busy bots can do hundreds of txs a minute; only look at the newest few per round.
   const cap = settings.rpcUrl ? 15 : first ? 12 : 6;
   const price = await solPrice();
-  const ins = db.prepare("INSERT OR IGNORE INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const ins = db.prepare("INSERT OR IGNORE INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t, payer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const s of fresh.slice(0, cap)) {
     if (db.prepare("SELECT 1 FROM wallet_trades WHERE sig = ? AND wallet = ?").get(s.signature, w.address)) continue;
     const tx = await sol.transaction(s.signature).catch(() => null);
     for (const sw of sol.parseSwaps(tx, w.address)) {
       const usd = sw.usd ?? sw.sol * price;
-      const r = ins.run(s.signature, w.address, sw.mint, sw.side, sw.tokens, sw.sol, usd, sw.t || (s.blockTime || 0) * 1000);
+      const k0 = tx.transaction.message.accountKeys[0];
+      const payer = typeof k0 === "string" ? k0 : k0?.pubkey;
+      const r = ins.run(s.signature, w.address, sw.mint, sw.side, sw.tokens, sw.sol, usd, sw.t || (s.blockTime || 0) * 1000, payer || null);
       if (!r.changes) continue;
       db.prepare("UPDATE wallets SET last_trade = MAX(COALESCE(last_trade, 0), ?) WHERE address = ?").run(sw.t, w.address);
       if (!first && now() - sw.t < 30 * MIN) emit?.({ wallet: w, trade: { ...sw, usd, sig: s.signature } });
@@ -296,13 +303,12 @@ export function walletSignals(event, raise, adopt) {
     raise(tk, "smart", `Smart money piling into $${tk.symbol}`, `${buyers.length} wallets you follow bought in the last 2 hours: ${names}.${safety}`);
   }
 }
-// "Fomo #3 on the 7d board, +$41k" when the wallet belongs to a Fomo trader.
+// " Trades on Fomo as @handle." when the wallet is a known Fomo trader.
 function fomoNote(address) {
-  const f = traderByWallet(address);
-  if (!f) return "";
-  const rank = f.rank ? ` #${f.rank} on the ${f.win} board` : "";
-  const pnl = f.pnl != null ? `, ${f.pnl >= 0 ? "+" : "−"}${fmtUsd(Math.abs(f.pnl))} PnL` : "";
-  return ` Fomo trader @${f.handle}${rank}${pnl}.`;
+  const w = db.prepare("SELECT fomo FROM wallets WHERE address = ?").get(address);
+  if (!w?.fomo) return "";
+  const h = handleOf(address);
+  return h ? ` Trades on Fomo as @${h}.` : " Trades on Fomo.";
 }
 const fmtUsd = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n || 0)}`;
 

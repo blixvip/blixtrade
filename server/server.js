@@ -11,6 +11,9 @@ import { writeBrief, explainCoin } from "./ai.js";
 import { notifySignal, notifyBrief, testNotify } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
+import { raise, adoptMint } from "./engine.js";
+
+const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 import { rpcStats } from "./solana.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,6 +111,7 @@ async function makeBrief(reason = "scheduled") {
       topCoins: top,
       recentSignals: signalsQuery({ limit: 15, since: Date.now() - 3 * 60 * MIN }).map((s) => ({ kind: s.kind, title: s.title })),
       hitRate: perf().all,
+      fomoBuying: fomo.hotCoins(60, 8).map((c) => ({ ticker: c.symbol, fomoBuyers: c.buyers, fomoSellers: c.sellers, netUsd: Math.round((c.bought || 0) - (c.sold || 0)) })),
       followedWalletBuys: wallets.activity(40).filter((a) => a.side === "buy" && a.t > Date.now() - 2 * 60 * MIN).map((a) => ({ wallet: a.label || a.wallet.slice(0, 6), ticker: a.symbol, usd: Math.round(a.usd || 0) })).slice(0, 15),
     };
     const { text, model } = await writeBrief(data);
@@ -186,20 +190,14 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/test-notify" && req.method === "POST") return send(res, 200, { errors: await testNotify() });
     if (p === "/api/wallets") {
       if (req.method === "POST") { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
-      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl }, fomo: { ...fomo.status(), leaderboard: fomo.leaderboard() } });
+      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl }, fomo: fomoOverview() });
     }
-    if (p === "/api/fomo") return send(res, 200, { ...fomo.status(), leaderboard: fomo.leaderboard() });
-    if (p === "/api/fomo/refresh" && req.method === "POST") {
-      await fomo.refreshLeaderboard((w, label, source) => wallets.addWallet(w, label, source));
-      return send(res, 200, { ...fomo.status(), leaderboard: fomo.leaderboard() });
-    }
-    if (p === "/api/fomo/follow" && req.method === "POST") {
+    if (p === "/api/fomo") return send(res, 200, fomoOverview());
+    if (p === "/api/fomo/trader" && req.method === "POST") {
       const b = await readBody(req);
-      const t = await fomo.resolveHandle(b.handle || "");
-      return send(res, 200, { trader: t, wallet: wallets.addWallet(t.wallet, `@${t.handle}`, "you") });
+      const w = fomo.markFomo(String(b.wallet || "").trim(), b.handle, wallets.addWallet);
+      return send(res, 200, { wallet: w, fomo: fomoOverview() });
     }
-    const fh = p.match(/^\/api\/fomo\/holders\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
-    if (fh) return send(res, 200, { holders: await fomo.tokenHolders(fh[1]) });
     const wm = p.match(/^\/api\/wallet\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (wm) {
       if (req.method === "DELETE") { wallets.removeWallet(wm[1]); return send(res, 200, { ok: true }); }
@@ -218,7 +216,7 @@ const server = http.createServer(async (req, res) => {
       if (!t) return send(res, 404, { error: "Unknown coin" });
       const snaps = db.prepare("SELECT t, price, mcap, liquidity, vol_m5 FROM snapshots WHERE mint = ? AND t > ? ORDER BY t").all(m[1], Date.now() - 24 * 60 * MIN);
       const sigs = db.prepare("SELECT * FROM signals WHERE mint = ? AND hidden = 0 ORDER BY t DESC").all(m[1]);
-      return send(res, 200, { token: t, snapshots: snaps, signals: sigs, wallets: wallets.coinWallets(m[1]) });
+      return send(res, 200, { token: t, snapshots: snaps, signals: sigs, wallets: wallets.coinWallets(m[1]), fomo: fomo.coinFlow(m[1]) });
     }
     send(res, 404, { error: "not found" });
   } catch (e) {
@@ -238,7 +236,11 @@ process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();
-  fomo.startFomo((w, label, source) => wallets.addWallet(w, label, source));
+  fomo.startFomo({
+    addWallet: wallets.addWallet,
+    raise, adoptMint,
+    onTrade: (tr) => broadcast("fomoTrade", { ...tr, handle: fomo.handleOf(tr.wallet) }),
+  });
   // First brief once there's data to talk about, then on schedule.
   const tryBrief = () => settings.aiBriefs && makeBrief().catch((e) => logEvent("error", `brief: ${e.message}`));
   setTimeout(tryBrief, 12 * MIN);

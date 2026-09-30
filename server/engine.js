@@ -237,7 +237,7 @@ function cooldownOk(mint, kind, ms) {
   return !last || now() - last.t > ms;
 }
 
-function raise(t, kind, title, detail, hidden = 0) {
+export function raise(t, kind, title, detail, hidden = 0) {
   q.addSignal.run(t.mint, kind, now(), title, detail, t.score, t.price, t.mcap);
   const sig = db.prepare("SELECT * FROM signals WHERE id = last_insert_rowid()").get();
   if (hidden) { db.prepare("UPDATE signals SET hidden = 1 WHERE id = ?").run(sig.id); return; }
