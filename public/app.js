@@ -388,6 +388,8 @@ async function openWallet(address) {
 
 // ---------- research desk ----------
 const gradeClass = (g) => !g ? "" : g.startsWith("A") ? "ga" : g.startsWith("B") ? "gb" : g.startsWith("C") ? "gc" : g === "D" ? "gd" : "gf";
+const tierMark = (r) => r?.tier === "fast" ? `<span class="tier fast" title="Fast read${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}">⚡</span>` : r?.tier === "deep" ? `<span class="tier deep" title="Deep read by Claude">◆</span>` : "";
+const modelName = (m) => String(m || "").split("/").pop();
 const gradeBadge = (g, size = "") => `<span class="grade ${gradeClass(g)} ${size}">${esc(g || "?")}</span>`;
 
 function researchChip(t) {
@@ -396,11 +398,11 @@ function researchChip(t) {
   if (r.status === "queued") return `<span class="pill">Queued</span>`;
   if (r.status === "running") return `<span class="pill running">Researching…</span>`;
   if (r.status === "error") return `<button class="btn sm-btn" data-research="${esc(t.mint)}" title="Last try failed">Retry</button>`;
-  return gradeBadge(r.grade);
+  return `${r.status === "deep" ? `<span class="pill running" title="Claude is double-checking this one">checking</span>` : ""}${tierMark(r)}${gradeBadge(r.grade)}`;
 }
 
 function deskRow(t, kind) {
-  const r = t.research?.status === "done" ? t.research : null;
+  const r = ["done", "deep"].includes(t.research?.status) ? t.research : null;
   const pctDone = Math.round((t.progress ?? 1) * 100);
   return `<div class="desk-row" data-mint="${esc(t.mint)}">
     ${av(t)}
@@ -423,12 +425,20 @@ async function viewResearch(main) {
   const d = await api("research");
   const count = (s) => d.stats.find((x) => x.status === s)?.n || 0;
   main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
-      <p>Coins about to bond on pump.fun and coins that just bonded get researched automatically: their own description, X account, the tweet they're built on, their website, live news, copycats with the same ticker, holders, dev, and who's buying. Claude then grades the narrative and how high it could realistically go.</p></div>
-      <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done")} graded</span><span class="pill">up to ${d.perHour}/hour</span></div></div>
+      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
+      <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done") + count("deep")} graded</span>
+        ${d.fast.ready ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour</span></div></div>
+    ${d.fast.ready ? (d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>Groq limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : "")
+      : `<div class="card lane-note" style="margin-bottom:16px"><b>⚡ Turn on the fast lane.</b> Paste a free Groq key in <a class="linkish" href="#/settings">Settings</a> (console.groq.com/keys, no card) and every candidate gets graded in about a second instead of ${d.perHour} an hour.</div>`}
+    ${d.narratives.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Narratives the AI rates</h2><small>average score of the coins carrying them, last 12h</small></div>
+      <div class="nar-rank">${d.narratives.map((n, i) => `<div class="nar-row"><span class="num dim">${i + 1}</span><span class="emoji">${THEME_EMOJI[n.theme] || "✨"}</span><b class="grow">${esc(n.theme)}</b>
+        <span class="dim small">${n.coins} coin${n.coins === 1 ? "" : "s"}${n.strong ? ` · ${n.strong} strong` : ""}</span>
+        <div class="meter-bar" style="width:90px"><i style="width:${n.avg}%"></i></div><span class="num">${n.avg}</span>
+        ${n.best ? `<span class="nar-best" data-mint="${esc(n.best.mint)}">${av(n.best, "sm")}<b>$${esc(n.best.symbol)}</b>${gradeBadge(n.best.grade)}</span>` : ""}</div>`).join("")}</div></div>` : ""}
     ${d.top.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Best narratives right now</h2><small>graded in the last 12 hours</small></div>
       <div class="best">${d.top.map((t) => `<div class="best-card ${gradeClass(t.grade)}" data-mint="${esc(t.mint)}">
-        <div class="best-top">${av(t, "lg")}${gradeBadge(t.grade, "lg")}</div>
-        <b>$${esc(t.symbol)}</b><small class="dim">${esc(t.name || "")}</small>
+        <div class="best-top">${av(t, "lg")}<span>${tierMark(t)}${gradeBadge(t.grade, "lg")}</span></div>
+        <b>$${esc(t.symbol)}</b><small class="dim">${esc(t.tag || t.name || "")}</small>
         <p>${esc(t.verdict || "")}</p>
         <div class="best-foot"><span class="pill">Ceiling ${esc(t.ceiling || "?")}</span><span class="num ${cls((t.mcap || 0) - (t.mcap_at || 0))}">${t.mcap_at ? mult((t.mcap || 0) / t.mcap_at) + " since" : ""}</span></div>
       </div>`).join("")}</div></div>` : ""}
@@ -444,12 +454,13 @@ const bar10 = (label, v) => `<div class="meter"><span>${label}</span><div class=
 
 function researchSection(r, mint) {
   if (!r || !r.status) return `<div class="p-sec"><h3>AI research</h3><div id="researchBox"><p class="note" style="margin:0 0 10px">Claude reads this coin's metadata, X, linked tweet, website, news and copycats, then grades the narrative and its ceiling. About 30 seconds.</p><button class="btn primary" data-research="${esc(mint)}">Research this coin</button></div></div>`;
-  if (r.status !== "done") return `<div class="p-sec"><h3>AI research</h3><div id="researchBox">${r.status === "error" ? `<p class="down">Last attempt failed: ${esc(r.error || "")}</p><button class="btn" data-research="${esc(mint)}">Try again</button>` : `<p class="note"><span class="pill running">${r.status === "running" ? "Researching…" : "Queued"}</span> This updates by itself in a moment.</p>`}</div></div>`;
+  if (!["done", "deep"].includes(r.status)) return `<div class="p-sec"><h3>AI research</h3><div id="researchBox">${r.status === "error" ? `<p class="down">Last attempt failed: ${esc(r.error || "")}</p><button class="btn" data-research="${esc(mint)}">Try again</button>` : `<p class="note"><span class="pill running">${r.status === "running" ? "Researching…" : "Queued"}</span> This updates by itself in a moment.</p>`}</div></div>`;
   const x = r.report, s = r.sources || {};
   const so = s.socials || {};
   const list = (title, items, klass = "") => items?.length ? `<div class="r-list ${klass}"><h4>${title}</h4><ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></div>` : "";
   return `<div class="p-sec research">
-    <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${esc(x.confidence || "")} confidence · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p></div></div>
+    <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${esc(x.confidence || "")} confidence · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p>
+      <p class="dim small" style="margin:6px 0 0">${tierMark(r)} ${r.tier === "fast" ? "Fast read" : "Deep read"} by ${esc(modelName(r.model || x.model))}${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}${r.status === "deep" ? " · Claude is double-checking it now" : ""}${x.fast ? ` · fast read said ${esc(x.fast.grade)} (${esc(modelName(x.fast.model))})` : ""}</p></div></div>
     <div class="r-grid">
       <div class="r-card"><h4>The narrative</h4><p>${esc(x.narrative?.summary || "")}</p>
         ${bar10("Strength", x.narrative?.strength)}${bar10("Timeliness", x.narrative?.timeliness)}${bar10("Originality", x.narrative?.originality)}${bar10("Reach", x.narrative?.reach)}</div>
@@ -527,8 +538,12 @@ async function viewSettings(main) {
       </div></div>
     <div class="card"><div class="card-head"><h2>AI research</h2><small>coins about to bond and just bonded</small></div>
       <div class="form">
-        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="researchAuto" ${s.researchAuto ? "checked" : ""}> Research automatically</label><small>Coins 80%+ to bonding, and bonded coins with real volume, get researched and graded.</small></div>
-        ${num("researchPerHour", "Max research runs per hour", "Each run uses your Claude subscription (about one normal Claude message). Lower this if you hit your Claude limits.")}
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="researchAuto" ${s.researchAuto ? "checked" : ""}> Research automatically</label><small>With a Groq key: every coin 60%+ to bonding and every bonded coin with volume. Without: only the strongest.</small></div>
+        <div class="field" style="grid-column:1/-1"><label for="s-groqKey">⚡ Groq API key (fast lane, free)</label><div style="display:flex;gap:8px"><input class="input num" id="s-groqKey" name="groqKey" type="password" value="${esc(s.groqKey)}" placeholder="gsk_…" style="flex:1"><button class="btn" type="button" id="testG">Test</button></div><small>Free at console.groq.com/keys (no card). Grades a coin in about a second. When one model hits its free limit the radar switches to the next one.</small></div>
+        <div class="field"><label for="s-fastModel">Fast model</label><select class="input" id="s-fastModel" name="fastModel">${["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"].map((m) => `<option ${s.fastModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>Tried first. The rest are fallbacks.</small></div>
+        ${num("fastPerHour", "Max fast reads per hour", "Groq's free tier has daily limits per model; this keeps a steady pace.")}
+        ${num("deepMinScore", "Claude double-checks at score", "Fast reads scoring this or higher get a deeper read from Claude.")}
+        ${num("researchPerHour", "Max Claude reads per hour", "Each uses your Claude subscription (about one normal Claude message). Lower this if you hit your Claude limits.")}
       </div></div>
     <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
       <div class="form">
@@ -564,6 +579,11 @@ async function viewSettings(main) {
     return out;
   };
   $("#save").onclick = async () => { await post("settings", collect()); toast("Saved"); };
+  $("#testG").onclick = async () => {
+    await post("settings", collect());
+    const r = await post("test-fast");
+    toast(r.ok ? `Groq works: ${modelName(r.model)} answered in ${(r.ms / 1000).toFixed(2)}s` : r.error);
+  };
   $("#testN").onclick = async () => {
     await post("settings", collect());
     const r = await post("test-notify");
@@ -671,6 +691,11 @@ async function openCoin(mint) {
 function pollResearch(mint, tries = 0) {
   setTimeout(async () => {
     const r = await api(`research/${mint}`).catch(() => null);
+    if (r?.status === "deep" && !pollResearch.shown?.has(mint)) {
+      (pollResearch.shown ||= new Set()).add(mint);
+      if (!$("#drawer").hidden && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      toast(`Fast read: ${r.grade}. Claude is double-checking`);
+    }
     if (r?.status === "done" || r?.status === "error" || tries > 40) {
       if (!$("#drawer").hidden && $("#panel").innerHTML.includes(mint)) openCoin(mint);
       if (route() === "research") viewResearch($("#main"));

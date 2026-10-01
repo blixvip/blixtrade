@@ -29,7 +29,11 @@ export const DEFAULTS = {
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
   // research
   researchAuto: true,        // research coins about to bond and just bonded automatically
-  researchPerHour: 20,       // cap on AI research runs per hour (each uses your Claude subscription)
+  researchPerHour: 20,       // cap on Claude research runs per hour (each uses your Claude subscription)
+  groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
+  fastModel: "openai/gpt-oss-120b",
+  fastPerHour: 240,          // cap on fast (Groq) grades per hour
+  deepMinScore: 70,          // fast grades at or above this get a second, deeper read from Claude
   // fomo (free, on-chain)
   fomoAutoFollow: true,      // follow the best Fomo traders the radar sees on-chain
   fomoFollowTop: 15,

@@ -407,3 +407,17 @@ tr.row.paused:hover td { opacity: .85; }
   .hero-bond { width: 100%; justify-content: flex-start; }
   .grade.xl { min-width: 52px; height: 52px; font-size: 22px; }
 }
+
+/* fast lane */
+.tier { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 4px; border-radius: 6px; font-size: 12px; vertical-align: middle; }
+.tier.fast { color: #ffd166; background: rgba(255,209,102,.12); }
+.tier.deep { color: #5cc8ff; background: rgba(92,200,255,.12); }
+.desk-side .pill.running { font-size: 11px; padding: 2px 8px; }
+.lane-note { padding: 12px 16px; font-size: 13px; color: var(--muted); border-color: rgba(255,209,102,.35); }
+.lane-note b { color: var(--ink); }
+.nar-rank { display: flex; flex-direction: column; }
+.nar-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.nar-row:first-child { border-top: 0; }
+.nar-row .grow { flex: 1; min-width: 0; }
+.nar-best { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; min-width: 150px; justify-content: flex-end; }
+@media (max-width: 700px) { .nar-row .meter-bar, .nar-row .small { display: none; } .nar-best { min-width: 0; } }

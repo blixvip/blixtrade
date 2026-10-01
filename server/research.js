@@ -4,7 +4,8 @@
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { ask } from "./ai.js";
-import { themesFor, computeNarratives } from "./narratives.js";
+import { askFast, fastReady, fastStatus } from "./fast.js";
+import { THEMES, themesFor, computeNarratives } from "./narratives.js";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS research (
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS research (
 );
 `);
 try { db.exec("ALTER TABLE tokens ADD COLUMN uri TEXT"); } catch {}
+for (const c of ["tier TEXT", "model TEXT", "ms INTEGER", "fast TEXT"]) try { db.exec(`ALTER TABLE research ADD COLUMN ${c}`); } catch {}
 
 const MIN = 60_000;
 const now = () => Date.now();
@@ -45,7 +47,7 @@ export function candidates() {
 }
 
 // ---------- gathering ----------
-async function getText(url, ms = 12000) {
+async function getText(url, ms = 7000) {
   const r = await fetch(url, { signal: AbortSignal.timeout(ms), headers: { "user-agent": "Mozilla/5.0 meme-radar research", accept: "text/html,application/json,*/*" }, redirect: "follow" });
   if (!r.ok) throw new Error(`${r.status}`);
   return (await r.text()).slice(0, 400_000);
@@ -116,7 +118,7 @@ async function copycats(t) {
   } catch { return null; }
 }
 
-async function gather(t, stage) {
+export async function gather(t, stage) {
   const meta = await metadata(t);
   const links = json(t.links, []);
   const xUrl = meta?.twitter || links.find((l) => /twitter|x\.com/i.test(`${l.type} ${l.url}`))?.url;
@@ -170,76 +172,157 @@ Be blunt. Most coins are C or worse. Give A only to coins with a genuinely stron
 
 Reply with ONLY a JSON object, no prose around it:
 {"grade":"A+|A|A-|B+|B|B-|C+|C|C-|D|F","score":0-100,"verdict":"one punchy sentence",
-"narrative":{"summary":"what the meme is, 1-2 sentences","strength":0-10,"timeliness":0-10,"originality":0-10,"reach":0-10},
+"narrative":{"summary":"what the meme is, 1-2 sentences","theme":"one of: THEME_LIST","tag":"2-4 word name for the specific narrative, e.g. 'Trump tariff joke'","strength":0-10,"timeliness":0-10,"originality":0-10,"reach":0-10},
 "catalyst":"the live catalyst, or 'none found'",
 "ceiling":{"tier":"<$250k|$250k-$1M|$1M-$10M|$10M-$100M|$100M+","why":"1-2 sentences"},
 "bull":["..."],"bear":["..."],"redFlags":["..."],"confidence":"low|medium|high"}`;
 
+const SYSTEM_FULL = SYSTEM.replace("THEME_LIST", [...THEMES.map(([n]) => n), "Viral moment", "Other"].join(" | "));
 const GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
-async function grade(data) {
-  const { text, model } = await ask(SYSTEM, `Research (JSON):\n${JSON.stringify(data)}`, 1200);
-  const raw = text.match(/\{[\s\S]*\}/)?.[0];
-  const r = JSON.parse(raw);
+function parse(text) {
+  const r = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0]);
+  r.grade = String(r.grade || "").trim().toUpperCase();
   if (!GRADES.includes(r.grade)) throw new Error(`bad grade ${r.grade}`);
-  return { ...r, model };
+  r.score = Math.max(0, Math.min(100, Math.round(Number(r.score) || 0)));
+  return r;
+}
+
+// Groq: the fast first read. Smaller payload so it stays quick and inside the free quota.
+function slim(data) {
+  const d = structuredClone(data);
+  if (d.socials?.website?.text) d.socials.website.text = d.socials.website.text.slice(0, 700);
+  if (d.news) d.news = d.news.slice(0, 4);
+  return d;
+}
+export async function gradeFast(data) {
+  const { text, model, ms } = await askFast(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(slim(data))}`, 900);
+  return { ...parse(text), model, ms, tier: "fast" };
+}
+// Claude: the slower, deeper second opinion for coins the fast read liked (or everything, without a Groq key).
+async function gradeDeep(data, fast) {
+  const extra = fast ? `\n\nA fast first-pass model graded it ${fast.grade} (${fast.score}): "${fast.verdict}". Check that read against the data; disagree if it is wrong.` : "";
+  const t0 = Date.now();
+  const { text, model } = await ask(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(data)}${extra}`, 1200);
+  return { ...parse(text), model, ms: Date.now() - t0, tier: "deep" };
 }
 
 // ---------- queue ----------
-let busy = false, hourCount = [], raiseFn = null;
+// status: queued (needs a first read) -> done, or deep (fast read liked it, waiting for Claude) -> done
+let raiseFn = null;
+const running = new Set();
+const fastHour = [], deepHour = [];
+const inHour = (list) => { while (list.length && list[0] < now() - 60 * MIN) list.shift(); return list.length; };
+const FAST_WORKERS = 4;
+
 export function enqueue(mint, stage, priority = 0) {
   const cur = db.prepare("SELECT * FROM research WHERE mint = ?").get(mint);
-  if (cur && (cur.status === "queued" || cur.status === "running")) return;
+  if (cur && ["queued", "running", "deep"].includes(cur.status)) return;
   if (cur && cur.stage === stage && cur.status === "done") return;
   db.prepare(`INSERT INTO research (mint, stage, status, queued) VALUES (?, ?, 'queued', ?)
-    ON CONFLICT(mint) DO UPDATE SET stage = excluded.stage, status = 'queued', queued = excluded.queued, error = NULL`).run(mint, stage, now() - priority);
+    ON CONFLICT(mint) DO UPDATE SET stage = excluded.stage, status = 'queued', queued = excluded.queued, error = NULL, fast = NULL, tier = NULL`).run(mint, stage, now() - priority);
 }
 
-async function work() {
-  if (busy) return;
-  hourCount = hourCount.filter((t) => t > now() - 60 * MIN);
-  if (hourCount.length >= settings.researchPerHour) return;
-  const job = db.prepare("SELECT * FROM research WHERE status = 'queued' ORDER BY queued ASC LIMIT 1").get();
-  if (!job) return;
+function save(mint, t, r, data, status = "done") {
+  db.prepare(`UPDATE research SET status = ?, t = ?, grade = ?, score = ?, ceiling = ?, verdict = ?, report = ?, sources = ?, mcap_at = ?,
+    tier = ?, model = ?, ms = ?, error = NULL WHERE mint = ?`)
+    .run(status, now(), r.grade, r.score, r.ceiling?.tier || null, r.verdict, JSON.stringify(r), JSON.stringify(data), t.mcap, r.tier, r.model, r.ms, mint);
+}
+
+function alertIfStrong(t, stage, r) {
+  if (!["A+", "A", "A-"].includes(r.grade) || !raiseFn) return;
+  const last = q.lastSignal.get(t.mint, "research");
+  if (last && now() - last.t < 6 * 60 * MIN) return;
+  const who = r.tier === "fast" ? "Fast read" : "Deep read";
+  raiseFn(t, "research", `${who}: $${t.symbol} ${r.grade}${stage === "near" ? " before bonding" : " after bonding"}`,
+    `${r.verdict} Ceiling ${r.ceiling?.tier || "?"}. ${r.narrative?.summary || ""}`.slice(0, 400));
+}
+
+function fail(job, t, e) {
+  // One automatic retry a minute later (a flaky site or a malformed answer usually clears up).
+  if (!String(job.error || "").startsWith("retry:")) {
+    db.prepare("UPDATE research SET status = ?, queued = ?, error = ? WHERE mint = ?").run(job.status, now() + 60_000, `retry: ${String(e.message).slice(0, 280)}`, job.mint);
+    return;
+  }
+  db.prepare("UPDATE research SET status = 'error', t = ?, error = ? WHERE mint = ?").run(now(), String(e.message).slice(0, 300).replace(/^retry: /, ""), job.mint);
+  logEvent("error", `research $${t?.symbol}: ${e.message}`);
+}
+
+const nextJob = (status) => db.prepare(`SELECT * FROM research WHERE status = ? AND queued <= ? ${running.size ? `AND mint NOT IN (${[...running].map(() => "?").join(",")})` : ""}
+  ORDER BY queued ASC LIMIT 1`).get(status, now(), ...running);
+
+async function runFast(job) {
   const t = q.getToken.get(job.mint);
   if (!t) { db.prepare("DELETE FROM research WHERE mint = ?").run(job.mint); return; }
-  busy = true;
-  hourCount.push(now());
+  fastHour.push(now());
   db.prepare("UPDATE research SET status = 'running' WHERE mint = ?").run(job.mint);
   try {
     const data = await gather(t, job.stage);
-    const r = await grade(data);
-    db.prepare(`UPDATE research SET status = 'done', t = ?, grade = ?, score = ?, ceiling = ?, verdict = ?, report = ?, sources = ?, mcap_at = ?, error = NULL WHERE mint = ?`)
-      .run(now(), r.grade, r.score, r.ceiling?.tier || null, r.verdict, JSON.stringify(r), JSON.stringify(data), t.mcap, job.mint);
-    logEvent("research", `$${t.symbol} graded ${r.grade}: ${r.verdict}`);
-    if (["A+", "A", "A-"].includes(r.grade) && raiseFn) {
-      const last = q.lastSignal.get(t.mint, "research");
-      if (!last || now() - last.t > 6 * 60 * MIN)
-        raiseFn(t, "research", `AI grades $${t.symbol} ${r.grade}${job.stage === "near" ? " before bonding" : " after bonding"}`, `${r.verdict} Ceiling ${r.ceiling?.tier || "?"}. ${r.narrative?.summary || ""}`.slice(0, 400));
-    }
+    const r = await gradeFast(data);
+    const wantsDeep = r.score >= settings.deepMinScore;
+    save(job.mint, t, r, data, wantsDeep ? "deep" : "done");
+    if (wantsDeep) db.prepare("UPDATE research SET fast = ?, queued = ? WHERE mint = ?").run(JSON.stringify(r), now() - r.score * 1000, job.mint);
+    logEvent("research", `$${t.symbol} fast ${r.grade} in ${r.ms}ms (${r.model.split("/").pop()}): ${r.verdict}`);
+    alertIfStrong(t, job.stage, r);
+  } catch (e) { fail({ ...job, status: "queued" }, t, e); }
+}
+
+async function runDeep(job) {
+  const t = q.getToken.get(job.mint);
+  if (!t) { db.prepare("DELETE FROM research WHERE mint = ?").run(job.mint); return; }
+  deepHour.push(now());
+  const fast = json(job.fast);
+  db.prepare("UPDATE research SET status = 'running' WHERE mint = ?").run(job.mint);
+  try {
+    // Fast read just gathered the sources; refresh them only if they're getting old.
+    const data = fast && job.t > now() - 10 * MIN ? json(job.sources) : await gather(t, job.stage);
+    const r = await gradeDeep(data, fast);
+    if (fast) r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms };
+    save(job.mint, t, r, data);
+    logEvent("research", `$${t.symbol} ${fast ? `deep ${r.grade} (fast said ${fast.grade})` : `graded ${r.grade}`}: ${r.verdict}`);
+    if (!fast || !["A+", "A", "A-"].includes(fast.grade)) alertIfStrong(t, job.stage, r);
   } catch (e) {
-    // One automatic retry a minute later (a flaky site or a malformed answer usually clears up).
-    if (!String(job.error || "").startsWith("retry:")) {
-      db.prepare("UPDATE research SET status = 'queued', queued = ?, error = ? WHERE mint = ?").run(now() + 60_000, `retry: ${String(e.message).slice(0, 280)}`, job.mint);
+    // Claude failed or is out of quota: keep the fast read rather than losing the coin.
+    if (fast && String(job.error || "").startsWith("retry:")) {
+      db.prepare("UPDATE research SET status = 'done', error = ? WHERE mint = ?").run(`deep read failed: ${String(e.message).slice(0, 200)}`, job.mint);
       return;
     }
-    db.prepare("UPDATE research SET status = 'error', t = ?, error = ? WHERE mint = ?").run(now(), String(e.message).slice(0, 300).replace(/^retry: /, ""), job.mint);
-    logEvent("error", `research $${t.symbol}: ${e.message}`);
-  } finally {
-    busy = false;
+    fail({ ...job, status: fast ? "deep" : "queued" }, t, e);
   }
 }
 
-// Pick up new candidates: near-bond coins once they're 80%+ there, bonded coins once they have real volume.
+function pump() {
+  // Fast lane: several Groq reads in parallel (gathering is the slow part, the model answers in ~1s).
+  if (fastReady()) {
+    while (running.size < FAST_WORKERS && inHour(fastHour) < settings.fastPerHour) {
+      const job = nextJob("queued");
+      if (!job) break;
+      running.add(job.mint);
+      runFast(job).finally(() => running.delete(job.mint));
+    }
+  }
+  // Deep lane: one Claude read at a time, capped per hour.
+  if (!running.has("__deep") && inHour(deepHour) < settings.researchPerHour) {
+    const job = nextJob("deep") || (!fastReady() ? nextJob("queued") : null);
+    if (job) {
+      running.add("__deep"); running.add(job.mint);
+      runDeep(job).finally(() => { running.delete("__deep"); running.delete(job.mint); });
+    }
+  }
+}
+
+// Pick up new candidates. With the fast lane on, rate every coin close to bonding or freshly bonded;
+// without it, only the strongest (Claude's hourly budget is small).
 function scout() {
   if (!settings.researchAuto) return;
+  const fast = fastReady();
   const { near, bonded } = candidates();
   for (const t of near) {
-    if (t.progress < 0.8 || (t.vol_h1 || 0) < 8000 || json(t.safety)?.danger > 0) continue;
+    if (t.progress < (fast ? 0.6 : 0.8) || (t.vol_h1 || 0) < (fast ? 3000 : 8000) || json(t.safety)?.danger > 0) continue;
     enqueue(t.mint, "near", Math.round(t.progress * 100) * 1000);
   }
   for (const t of bonded) {
-    if ((t.mcap || 0) < 35000 || (t.vol_h1 || 0) < 15000 || json(t.safety)?.danger > 0) continue;
+    if ((t.mcap || 0) < (fast ? 25000 : 35000) || (t.vol_h1 || 0) < (fast ? 5000 : 15000) || json(t.safety)?.danger > 0) continue;
     enqueue(t.mint, "bonded", Math.round((t.vol_h1 || 0) / 1000));
   }
 }
@@ -252,19 +335,40 @@ export function researchFor(mint) {
 export function desk() {
   const { near, bonded } = candidates();
   const attach = (t) => {
-    const r = db.prepare("SELECT status, grade, score, ceiling, verdict, stage, t FROM research WHERE mint = ?").get(t.mint);
+    const r = db.prepare("SELECT status, grade, score, ceiling, verdict, stage, t, tier, ms FROM research WHERE mint = ?").get(t.mint);
     return { mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, mcap: t.mcap, vol_h1: t.vol_h1, chg_h1: t.chg_h1, buys_h1: t.buys_h1, sells_h1: t.sells_h1,
       safety_score: t.safety_score, progress: t.progress ?? null, bonded_at: t.pair_created || t.first_seen, research: r || null, themes: json(t.themes, []) };
   };
-  const top = db.prepare(`SELECT r.mint, r.grade, r.score, r.ceiling, r.verdict, r.stage, r.t, r.mcap_at, t.symbol, t.name, t.image, t.mcap, t.chg_h1
-    FROM research r JOIN tokens t ON t.mint = r.mint WHERE r.status = 'done' AND r.t > ? ORDER BY r.score DESC LIMIT 12`).all(now() - 12 * 60 * MIN);
+  const graded = db.prepare(`SELECT r.mint, r.grade, r.score, r.ceiling, r.verdict, r.stage, r.t, r.mcap_at, r.tier, r.ms, r.model, r.status, r.report,
+    t.symbol, t.name, t.image, t.mcap, t.chg_h1, t.peak_mcap, t.themes, t.description
+    FROM research r JOIN tokens t ON t.mint = r.mint WHERE r.status IN ('done', 'deep') AND r.t > ? ORDER BY r.score DESC`).all(now() - 12 * 60 * MIN);
+  const top = graded.slice(0, 12).map(({ report, themes, description, ...r }) => ({ ...r, summary: json(report)?.narrative?.summary || null, tag: json(report)?.narrative?.tag || null, fast: json(report)?.fast || null }));
+  // Narratives ranked by what the AI thought of the coins carrying them.
+  const byTheme = new Map();
+  for (const g of graded) {
+    const ai = json(g.report)?.narrative?.theme;
+    const themes = ai && ai !== "Other" ? [ai] : (json(g.themes, null) || themesFor(g));
+    for (const th of themes.length ? themes : ["Other"]) {
+      const e = byTheme.get(th) || { theme: th, coins: 0, total: 0, best: null, strong: 0 };
+      e.coins++; e.total += g.score;
+      if (g.score >= 70) e.strong++;
+      if (!e.best || g.score > e.best.score) e.best = { mint: g.mint, symbol: g.symbol, image: g.image, grade: g.grade, score: g.score };
+      byTheme.set(th, e);
+    }
+  }
+  const narratives = [...byTheme.values()].filter((e) => e.theme !== "Other" || byTheme.size === 1).map((e) => ({ ...e, avg: Math.round(e.total / e.coins), rank: Math.round(e.total / e.coins) + Math.min(15, e.strong * 5) }))
+    .sort((a, b) => b.rank - a.rank).slice(0, 10);
   const stats = db.prepare("SELECT status, COUNT(*) n FROM research GROUP BY status").all();
-  return { near: near.slice(0, 30).map(attach), bonded: bonded.slice(0, 30).map(attach), top, stats, perHour: settings.researchPerHour, auto: settings.researchAuto };
+  const hour = { fast: inHour(fastHour), deep: inHour(deepHour) };
+  return { near: near.slice(0, 30).map(attach), bonded: bonded.slice(0, 30).map(attach), top, narratives, stats, hour,
+    perHour: settings.researchPerHour, fastPerHour: settings.fastPerHour, auto: settings.researchAuto, fast: fastStatus() };
 }
 
 export function startResearch(raise) {
   raiseFn = raise;
-  const timers = [setInterval(scout, 60_000), setInterval(() => work().catch(() => {}), 8_000)];
+  // Jobs that were mid-read when the radar stopped go back in the queue.
+  db.prepare("UPDATE research SET status = CASE WHEN fast IS NOT NULL THEN 'deep' ELSE 'queued' END WHERE status = 'running'").run();
+  const timers = [setInterval(scout, 60_000), setInterval(pump, 2_000)];
   setTimeout(scout, 15_000);
   return () => timers.forEach(clearInterval);
 }

@@ -12,6 +12,7 @@ import { notifySignal, notifyBrief, testNotify } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
 import * as research from "./research.js";
+import { testFast } from "./fast.js";
 import { raise, adoptMint } from "./engine.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
@@ -203,6 +204,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST") saveSettings(await readBody(req));
       return send(res, 200, { settings, defaults: DEFAULTS });
     }
+    if (p === "/api/test-fast" && req.method === "POST") return send(res, 200, await testFast());
     if (p === "/api/test-notify" && req.method === "POST") return send(res, 200, { errors: await testNotify() });
     if (p === "/api/wallets") {
       if (req.method === "POST") { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
