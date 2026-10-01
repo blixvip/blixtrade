@@ -13,6 +13,7 @@ import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
 import * as research from "./research.js";
 import { testFast } from "./fast.js";
+import { testGrok, detectVersion, grokTier } from "./grok.js";
 import { raise, adoptMint } from "./engine.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
@@ -204,6 +205,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST") saveSettings(await readBody(req));
       return send(res, 200, { settings, defaults: DEFAULTS });
     }
+    if (p === "/api/test-grok" && req.method === "POST") return send(res, 200, await testGrok());
     if (p === "/api/test-fast" && req.method === "POST") return send(res, 200, await testFast());
     if (p === "/api/test-notify" && req.method === "POST") return send(res, 200, { errors: await testNotify() });
     if (p === "/api/wallets") {
@@ -266,6 +268,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();
   research.startResearch(raise);
+  detectVersion().then(grokTier).catch(() => {});
   const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});
   syncSol(); setInterval(syncSol, 5 * MIN);
   fomo.startFomo({

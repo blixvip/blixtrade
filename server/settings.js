@@ -30,6 +30,9 @@ export const DEFAULTS = {
   // research
   researchAuto: true,        // research coins about to bond and just bonded automatically
   researchPerHour: 20,       // cap on Claude research runs per hour (each uses your Claude subscription)
+  fastProvider: "grok",      // "grok" = this PC's Grok CLI login (SuperGrok, searches X live); "groq" = free Groq key
+  grokModel: "grok-4.7-build-fast",
+  grokSearch: true,          // let Grok search X and the web for every coin it reads
   groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
   fastModel: "openai/gpt-oss-120b",
   fastPerHour: 240,          // cap on fast (Groq) grades per hour

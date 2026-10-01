@@ -4,7 +4,19 @@
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { ask } from "./ai.js";
-import { askFast, fastReady, fastStatus } from "./fast.js";
+import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
+import { askGrok, grokInstalled, grokStatus } from "./grok.js";
+
+// Fast lane: Grok on this PC's SuperGrok login (searches X live), Groq as the fallback when a key is set.
+const grokOn = () => settings.fastProvider !== "groq" && grokInstalled();
+const fastReady = () => grokOn() || groqReady();
+const fastStatus = () => {
+  const g = grokStatus(), q2 = groqStatus();
+  const provider = grokOn() ? "grok" : q2.ready ? "groq" : null;
+  const cur = provider === "grok" ? g : q2;
+  return { ready: Boolean(provider), provider, search: provider === "grok" && settings.grokSearch, avgMs: cur.avgMs, lastError: cur.lastError,
+    limits: provider === "grok" ? g.limits : null, cooling: provider === "grok" ? (g.coolingSecs ? [{ model: "Grok", secs: g.coolingSecs }] : []) : q2.cooling, grok: g, groq: q2 };
+};
 import { THEMES, themesFor, computeNarratives } from "./narratives.js";
 
 db.exec(`
@@ -178,6 +190,11 @@ Reply with ONLY a JSON object, no prose around it:
 "bull":["..."],"bear":["..."],"redFlags":["..."],"confidence":"low|medium|high"}`;
 
 const SYSTEM_FULL = SYSTEM.replace("THEME_LIST", [...THEMES.map(([n]) => n), "Viral moment", "Other"].join(" | "));
+// Grok can search X itself, so it also reports what X is actually saying about the coin.
+const SYSTEM_GROK = SYSTEM_FULL.replace("Reply with ONLY a JSON object", `Before grading, use x_search to look the coin up on X by its contract address (mint) and by $TICKER: posts from the last 24 hours, who is posting (follower counts, known traders/KOLs), real engagement, and whether it is spreading organically or only bots, raid groups and "AI signal" accounts are posting it. If the narrative is tied to a news story, person or trend, use web or X search to confirm that story is real and current. Count what you found as evidence in the grade.
+Add to the JSON: "xBuzz":{"summary":"what X is saying, 1-2 sentences","sentiment":"bullish|mixed|bearish|none","organic":"organic|mixed|botted|none","notable":["@handle (followers) - what they said"],"posts":[{"handle":"","text":"short quote","url":"https://x.com/..."}]} with up to 4 real posts you actually found (never invent posts or URLs; empty list if none).
+
+Reply with ONLY a JSON object`);
 const GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
 function parse(text) {
@@ -196,12 +213,22 @@ function slim(data) {
   return d;
 }
 export async function gradeFast(data) {
+  if (grokOn()) {
+    try {
+      const search = settings.grokSearch;
+      const { text, model, ms, searches } = await askGrok(search ? SYSTEM_GROK : SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(slim(data))}`,
+        { model: settings.grokModel, search, maxTokens: search ? 2500 : 1200 });
+      return { ...parse(text), model, ms, searches, tier: "fast" };
+    } catch (e) {
+      if (!groqReady()) throw e;
+    }
+  }
   const { text, model, ms } = await askFast(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(slim(data))}`, 900);
   return { ...parse(text), model, ms, tier: "fast" };
 }
 // Claude: the slower, deeper second opinion for coins the fast read liked (or everything, without a Groq key).
 async function gradeDeep(data, fast) {
-  const extra = fast ? `\n\nA fast first-pass model graded it ${fast.grade} (${fast.score}): "${fast.verdict}". Check that read against the data; disagree if it is wrong.` : "";
+  const extra = fast ? `\n\nA fast first-pass model graded it ${fast.grade} (${fast.score}): "${fast.verdict}". Check that read against the data; disagree if it is wrong.${fast.xBuzz ? `\nIt also searched X live and found (JSON): ${JSON.stringify(fast.xBuzz)}` : ""}` : "";
   const t0 = Date.now();
   const { text, model } = await ask(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(data)}${extra}`, 1200);
   return { ...parse(text), model, ms: Date.now() - t0, tier: "deep" };
@@ -277,7 +304,7 @@ async function runDeep(job) {
     // Fast read just gathered the sources; refresh them only if they're getting old.
     const data = fast && job.t > now() - 10 * MIN ? json(job.sources) : await gather(t, job.stage);
     const r = await gradeDeep(data, fast);
-    if (fast) r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms };
+    if (fast) { r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms }; r.xBuzz ||= fast.xBuzz; }
     save(job.mint, t, r, data);
     logEvent("research", `$${t.symbol} ${fast ? `deep ${r.grade} (fast said ${fast.grade})` : `graded ${r.grade}`}: ${r.verdict}`);
     if (!fast || !["A+", "A", "A-"].includes(fast.grade)) alertIfStrong(t, job.stage, r);

@@ -425,11 +425,11 @@ async function viewResearch(main) {
   const d = await api("research");
   const count = (s) => d.stats.find((x) => x.status === s)?.n || 0;
   main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
-      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
+      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.provider === "grok" ? `Grok (your SuperGrok login) reads every coin${d.fast.search ? " and searches X live for who is posting it" : ""} (⚡ about ${d.fast.avgMs ? Math.round(d.fast.avgMs / 1000) : 8}s); the strong ones get a deeper second read from Claude (◆).` : d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
       <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done") + count("deep")} graded</span>
         ${d.fast.ready ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour</span></div></div>
-    ${d.fast.ready ? (d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>Groq limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : "")
-      : `<div class="card lane-note" style="margin-bottom:16px"><b>⚡ Turn on the fast lane.</b> Paste a free Groq key in <a class="linkish" href="#/settings">Settings</a> (console.groq.com/keys, no card) and every candidate gets graded in about a second instead of ${d.perHour} an hour.</div>`}
+    ${d.fast.ready ? (d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>${d.fast.provider === "grok" ? "Grok" : "Groq"} limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : "")
+      : `<div class="card lane-note" style="margin-bottom:16px"><b>⚡ Turn on the fast lane.</b> Run <code>grok login</code> once (uses your SuperGrok subscription), or paste a free Groq key in <a class="linkish" href="#/settings">Settings</a>, and every candidate gets graded instead of ${d.perHour} an hour.</div>`}
     ${d.narratives.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Narratives the AI rates</h2><small>average score of the coins carrying them, last 12h</small></div>
       <div class="nar-rank">${d.narratives.map((n, i) => `<div class="nar-row"><span class="num dim">${i + 1}</span><span class="emoji">${THEME_EMOJI[n.theme] || "✨"}</span><b class="grow">${esc(n.theme)}</b>
         <span class="dim small">${n.coins} coin${n.coins === 1 ? "" : "s"}${n.strong ? ` · ${n.strong} strong` : ""}</span>
@@ -469,6 +469,11 @@ function researchSection(r, mint) {
     </div>
     <div class="r-grid">${list("Bull case", x.bull, "bull")}${list("Bear case", x.bear, "bear")}</div>
     ${list("Red flags", x.redFlags, "flags")}
+    ${x.xBuzz ? `<div class="r-sources xbuzz"><h4>On X right now <span class="dim">· ${esc(x.xBuzz.sentiment || "?")} · ${esc(x.xBuzz.organic || "?")}</span></h4>
+      <p style="margin:4px 0 8px">${esc(x.xBuzz.summary || "")}</p>
+      ${(x.xBuzz.posts || []).map((po) => `<div class="src"><span><b>@${esc(String(po.handle || "?").replace(/^@/, ""))}</b>${/^https:\/\/(x|twitter)\.com\//.test(po.url || "") ? ` · <a class="linkish" href="${esc(po.url)}" target="_blank" rel="noreferrer">open</a>` : ""}<small>${esc(po.text || "")}</small></span></div>`).join("")}
+      ${(x.xBuzz.notable || []).length ? `<div class="src"><span><b>Accounts</b>${x.xBuzz.notable.slice(0, 5).map((n) => `<small>· ${esc(n)}</small>`).join("")}</span></div>` : ""}
+    </div>` : ""}
     <div class="r-sources"><h4>What it found</h4>
       ${so.x && !so.x.error ? `<div class="src"><img class="av sm" src="${esc(so.x.avatar || "")}" alt="" onerror="this.remove()"><span><b>@${esc(so.x.user)}</b> · ${(so.x.followers ?? 0).toLocaleString()} followers${so.x.joined ? ` · joined ${esc(String(so.x.joined).slice(0, 16))}` : ""}<small>${esc(so.x.description || "")}</small></span></div>` : `<div class="src dim">No X account linked${so.x?.error ? ` (${esc(so.x.error)})` : ""}</div>`}
       ${so.linkedTweet ? `<div class="src"><span><b>Linked tweet</b> by @${esc(so.linkedTweet.author || "?")} · ${(so.linkedTweet.likes ?? 0).toLocaleString()} likes<small>${esc(so.linkedTweet.text || "")}</small></span></div>` : ""}
@@ -539,7 +544,10 @@ async function viewSettings(main) {
     <div class="card"><div class="card-head"><h2>AI research</h2><small>coins about to bond and just bonded</small></div>
       <div class="form">
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="researchAuto" ${s.researchAuto ? "checked" : ""}> Research automatically</label><small>With a Groq key: every coin 60%+ to bonding and every bonded coin with volume. Without: only the strongest.</small></div>
-        <div class="field" style="grid-column:1/-1"><label for="s-groqKey">⚡ Groq API key (fast lane, free)</label><div style="display:flex;gap:8px"><input class="input num" id="s-groqKey" name="groqKey" type="password" value="${esc(s.groqKey)}" placeholder="gsk_…" style="flex:1"><button class="btn" type="button" id="testG">Test</button></div><small>Free at console.groq.com/keys (no card). Grades a coin in about a second. When one model hits its free limit the radar switches to the next one.</small></div>
+        <div class="field"><label for="s-fastProvider">⚡ Fast lane</label><div style="display:flex;gap:8px"><select class="input" id="s-fastProvider" name="fastProvider" style="flex:1"><option value="grok" ${s.fastProvider !== "groq" ? "selected" : ""}>Grok (my SuperGrok login)</option><option value="groq" ${s.fastProvider === "groq" ? "selected" : ""}>Groq (free key)</option></select><button class="btn" type="button" id="testK">Test Grok</button></div><small>Grok uses this PC's Grok CLI login, no key. If Grok fails and a Groq key is set, Groq takes over.</small></div>
+        <div class="field"><label for="s-grokModel">Grok model</label><select class="input" id="s-grokModel" name="grokModel">${["grok-4.7-build-fast", "grok-4.7", "grok-4.6"].map((m) => `<option ${s.grokModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>build-fast is the quick one. grok-4.7 thinks harder but takes much longer.</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="grokSearch" ${s.grokSearch ? "checked" : ""}> Grok searches X live</label><small>Grok looks the coin up on X by contract and ticker: who's posting, real engagement, organic or botted. About 8s per coin.</small></div>
+        <div class="field" style="grid-column:1/-1"><label for="s-groqKey">Groq API key (optional fallback, free)</label><div style="display:flex;gap:8px"><input class="input num" id="s-groqKey" name="groqKey" type="password" value="${esc(s.groqKey)}" placeholder="gsk_…" style="flex:1"><button class="btn" type="button" id="testG">Test</button></div><small>Free at console.groq.com/keys (no card). Grades a coin in about a second. When one model hits its free limit the radar switches to the next one.</small></div>
         <div class="field"><label for="s-fastModel">Fast model</label><select class="input" id="s-fastModel" name="fastModel">${["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"].map((m) => `<option ${s.fastModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>Tried first. The rest are fallbacks.</small></div>
         ${num("fastPerHour", "Max fast reads per hour", "Groq's free tier has daily limits per model; this keeps a steady pace.")}
         ${num("deepMinScore", "Claude double-checks at score", "Fast reads scoring this or higher get a deeper read from Claude.")}
@@ -579,6 +587,11 @@ async function viewSettings(main) {
     return out;
   };
   $("#save").onclick = async () => { await post("settings", collect()); toast("Saved"); };
+  $("#testK").onclick = async () => {
+    await post("settings", collect());
+    const r = await post("test-grok");
+    toast(r.ok ? `Grok works${r.tier ? ` (${r.tier})` : ""}: ${r.model} answered in ${(r.ms / 1000).toFixed(1)}s` : r.error);
+  };
   $("#testG").onclick = async () => {
     await post("settings", collect());
     const r = await post("test-fast");
