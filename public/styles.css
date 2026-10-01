@@ -570,3 +570,19 @@ body.pulse-mode main { max-width: none; padding: 16px 18px 24px; }
 
 @media (max-width: 1280px) { .pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto; } .pcol { height: 70vh; } }
 @media (max-width: 800px) { .pulse { grid-template-columns: 1fr; } .pcol { height: 75vh; } .pulse-tools { margin-left: 0; } .pulse-tools .input { width: 100%; } }
+
+/* live trade ticks */
+.fl-up { animation: fl-up .7s ease-out; }
+.fl-down { animation: fl-down .7s ease-out; }
+@keyframes fl-up { 0% { color: #fff; background: rgba(62,240,143,.45); border-radius: 4px; box-shadow: 0 0 10px rgba(62,240,143,.6); } 100% { background: transparent; box-shadow: none; } }
+@keyframes fl-down { 0% { color: #fff; background: rgba(255,84,112,.45); border-radius: 4px; box-shadow: 0 0 10px rgba(255,84,112,.6); } 100% { background: transparent; box-shadow: none; } }
+.lv-mc, .lv-tx { padding: 0 2px; margin: 0 -2px; }
+.pr.is-live .pr-age::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--up); margin-right: 5px; vertical-align: 1px; animation: ping 1.6s infinite; }
+.pr.buying .pr-av { box-shadow: 0 0 14px -4px rgba(62,240,143,.7); }
+.pr.selling .pr-av { box-shadow: 0 0 14px -4px rgba(255,84,112,.6); }
+.pr-av { transition: box-shadow .4s, background .4s; }
+.pr-l2 b { font-weight: 600; }
+.pulse-live .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+.pulse-live .feed-on { color: var(--up); border-color: rgba(62,240,143,.3); }
+.pulse-live .feed-on .dot { background: var(--up); animation: ping 1.4s infinite; }
+.pulse-live .feed-on b { color: var(--up); }

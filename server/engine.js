@@ -65,6 +65,7 @@ function startPump() {
       if (t.creator) devLaunches.set(t.creator, (devLaunches.get(t.creator) || 0) + 1);
       if (nursery.size < 20000) nursery.set(t.mint, { ...t, seen: now() });
       recentLaunches.push({ ...t, seen: now(), devCount: t.creator ? devLaunches.get(t.creator) : 1 });
+      bus.emit("launch", { mint: t.mint, symbol: t.symbol, name: t.name, mcapSol: t.mcapSol, devSol: t.devSol, devCount: t.creator ? devLaunches.get(t.creator) : 1 });
       if (recentLaunches.length > 200) recentLaunches.splice(0, recentLaunches.length - 200);
     },
     onMigration: ({ mint }) => {

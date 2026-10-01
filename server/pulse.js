@@ -3,6 +3,18 @@
 import { db, json } from "./db.js";
 import { recentLaunches, devLaunches } from "./engine.js";
 import { candidates, ipfs, bondingProgress } from "./research.js";
+import { liveStats, feed } from "./livetrades.js";
+
+// Mints currently on the Pulse page; the live trade feed only pushes updates for these.
+export const watched = new Set();
+
+// Overlay the live trade feed on a row (fresher than DexScreener for coins still on the curve).
+function withLive(r) {
+  const x = liveStats(r.mint);
+  if (!x || now() - x.last > 15 * MIN) return r;
+  return { ...r, mcap: x.mc, buys: r.graduated ? r.buys : x.buys, sells: r.graduated ? r.sells : x.sells, liveVol: x.vol, traders: x.traders,
+    progress: r.graduated ? r.progress : x.progress, chg1m: x.chg1m, side: x.side, lastTrade: x.last, live: true };
+}
 
 const now = () => Date.now();
 const MIN = 60_000;
@@ -73,14 +85,18 @@ export function pulseData() {
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
       desc: m.description || null, devSol: l.devSol, startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
-  });
-  const stretch = near.slice(0, 50).map((t) => row(t, ai.get(t.mint)));
+  }).map(withLive);
+  // A coin that's still trading isn't faded, whatever the 4-minute check said.
+  for (const r of newPairs) if (r.state === "faded" && r.lastTrade && now() - r.lastTrade < 2 * MIN) r.state = "watching";
+  const stretch = near.slice(0, 50).map((t) => withLive(row(t, ai.get(t.mint))));
   const migrated = bonded.filter((t) => (t.mcap || 0) >= 5000).slice(0, 50).map((t) => row(t, ai.get(t.mint)));
   const running = db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'running'").get().n;
   const queued = db.prepare("SELECT COUNT(*) n FROM research WHERE status IN ('queued', 'deep')").get().n;
   const ratedHour = db.prepare("SELECT COUNT(*) n FROM research WHERE t > ? AND status IN ('done', 'deep')").get(now() - 60 * MIN).n;
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
-  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin }, ts: now() } };
+  watched.clear();
+  for (const r of [...newPairs, ...stretch, ...migrated]) watched.add(r.mint);
+  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd }, ts: now() } };
   return cache.v;
 }
 

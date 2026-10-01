@@ -13,7 +13,8 @@ import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
 import * as research from "./research.js";
 import * as brain from "./brain.js";
-import { pulseData, startPulse } from "./pulse.js";
+import { pulseData, startPulse, watched } from "./pulse.js";
+import { startLiveTrades, drainUpdates, feed as liveFeed } from "./livetrades.js";
 import { testFast } from "./fast.js";
 import { testGrok, detectVersion, grokTier } from "./grok.js";
 import { raise, adoptMint } from "./engine.js";
@@ -288,6 +289,13 @@ bus.on("signal", (s) => { broadcast("signal", s); notifySignal(s).catch((e) => l
 bus.on("tick", (s) => broadcast("tick", s));
 bus.on("brief", (b) => broadcast("brief", b));
 bus.on("walletTrade", (ev) => broadcast("walletTrade", ev));
+// New pump.fun coins go to the page the moment they're created; live trade numbers every 400ms.
+bus.on("launch", (l) => { watched.add(l.mint); if (clients.size) broadcast("launch", { ...l, solUsd: liveFeed.solUsd }); });
+setInterval(() => {
+  if (!clients.size) return;
+  const u = drainUpdates(watched);
+  if (u.length) broadcast("live", { u, sol: liveFeed.solUsd });
+}, 400);
 
 // A bad API response should never take the radar down.
 process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.message || e}`));
@@ -303,6 +311,7 @@ server.listen(PORT, "127.0.0.1", () => {
   research.startResearch(raise);
   brain.startBrain(raise, research.enqueue);
   startPulse();
+  startLiveTrades();
   if (!settings.buyMigrated) saveSettings({ notifyKinds: [...new Set([...settings.notifyKinds, "buy"])], buyMigrated: true });
   detectVersion().then(grokTier).catch(() => {});
   const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});

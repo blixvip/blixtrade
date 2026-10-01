@@ -606,23 +606,24 @@ function pulseRow(t, col) {
   const buyShare = tx ? (t.buys || 0) / tx : null;
   const a = t.ai;
   const verdict = a && a.verdict && ["done", "deep"].includes(a.status) ? `<div class="pr-verdict">${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}</div>` : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
-  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""}" data-mint="${esc(t.mint)}" style="--ring:${ring}">
-    <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct">${prog}%</span>` : ""}</div>
+  const vol = t.vol ?? t.liveVol;
+  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
+    <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
     <div class="pr-main">
       <div class="pr-l1"><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span>
         <span class="pr-links">${t.x ? `<a href="${esc(t.x)}" target="_blank" rel="noreferrer" title="X">${ICON.x}</a>` : ""}${t.web ? `<a href="${esc(t.web)}" target="_blank" rel="noreferrer" title="Website">${ICON.web}</a>` : ""}${t.tg ? `<a href="${esc(t.tg)}" target="_blank" rel="noreferrer" title="Telegram">${ICON.tg}</a>` : ""}</span></div>
       <div class="pr-l2"><span class="pr-age">${ageStr(t.age)}</span>
-        ${t.holders != null ? `<span title="Holders">${ICON.users}${t.holders}</span>` : ""}
+        ${t.holders != null ? `<span title="Holders">${ICON.users}${t.holders}</span>` : t.traders != null ? `<span title="Traders seen live">${ICON.users}<b class="lv-tr">${t.traders}</b></span>` : ""}
         ${t.top10 != null ? `<span class="${t.top10 > 45 ? "down" : ""}" title="Top 10 holders">${ICON.crown}${Math.round(t.top10)}%</span>` : ""}
         ${t.dev != null ? `<span class="${t.dev > 8 ? "down" : ""}" title="Dev holds">${ICON.chef}${t.dev.toFixed(1)}%</span>` : t.devSol != null ? `<span title="Dev bought at launch">${ICON.chef}${(+t.devSol).toFixed(2)} SOL</span>` : ""}
         ${t.devCount >= 4 ? `<span class="${t.devCount >= 10 ? "down" : "dim"}" title="Coins this dev wallet launched in the last 6h">dev ×${t.devCount}</span>` : ""}
-        ${tx ? `<span title="Buys / sells (1h)">TX ${tx}<i class="bs"><i style="width:${Math.round(buyShare * 100)}%"></i></i></span>` : ""}
+        <span title="Buys / sells" class="lv-txw" ${tx ? "" : "hidden"}>TX <b class="lv-tx">${tx}</b><i class="bs"><i class="lv-bs" style="width:${Math.round((buyShare ?? 0.5) * 100)}%"></i></i></span>
       </div>
       ${verdict}
     </div>
     <div class="pr-side">
-      <div class="pr-mc"><small>MC</small><b class="num">${t.mcap ? compact(t.mcap) : t.startMcapSol ? `${Math.round(t.startMcapSol)} SOL` : "—"}</b></div>
-      <div class="pr-v"><small>V</small><span class="num">${compact(t.vol)}</span>${t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : ""}</div>
+      <div class="pr-mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></div>
+      <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
       <div class="pr-act">${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a></div>
     </div>
   </div>`;
@@ -666,7 +667,7 @@ function patchColumn(el, list, col) {
       const oldAv = node.querySelector(".pr-av img"), newAv = fresh.querySelector(".pr-av img");
       if (oldAv && newAv) newAv.replaceWith(oldAv);
       if (graded) fresh.classList.add("graded");
-      else if (up) fresh.classList.add("tick-up"); else if (down) fresh.classList.add("tick-down");
+      else if (up || down) flash(fresh.querySelector(".lv-mc"), up);
       node.replaceWith(fresh);
       node = fresh;
     }
@@ -696,8 +697,78 @@ async function pulseTick() {
   }
   pulseState.first = false;
   const L = d.live;
-  $("#pulseLive").innerHTML = `<span><b class="num">${L.launchesPerMin}</b> launches/min</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
+  pulseState.sol = L.solUsd;
+  $("#pulseLive").innerHTML = `<span class="${L.feed ? "feed-on" : ""}"><i class="dot"></i><b class="num">${L.tradesPerSec}</b> trades/s</span><span><b class="num">${L.launchesPerMin}</b> launches/min</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
 }
+
+function flash(el, up) {
+  if (!el) return;
+  el.classList.remove("fl-up", "fl-down");
+  void el.offsetWidth;
+  el.classList.add(up ? "fl-up" : "fl-down");
+}
+
+// Live trade numbers pushed by the server every 400ms.
+function applyLive(u) {
+  for (const [mint, mc, buys, sells, vol, traders, prog, side, chg] of u) {
+    for (const row of document.querySelectorAll(`.pcol-body [data-mint="${CSS.escape(mint)}"]`)) {
+      const mcEl = row.querySelector(".lv-mc");
+      if (mcEl) {
+        const txt = compact(mc);
+        if (mcEl.textContent !== txt) { const prev = Number(mcEl.dataset.v || 0); mcEl.textContent = txt; flash(mcEl, mc >= prev); }
+        mcEl.dataset.v = mc;
+      }
+      const tx = buys + sells;
+      const txw = row.querySelector(".lv-txw");
+      if (txw && !row.closest("#pcol-migrated")) {
+        txw.hidden = false;
+        const txEl = row.querySelector(".lv-tx");
+        if (txEl.textContent !== String(tx)) { txEl.textContent = tx; flash(txEl, side === "b"); }
+        row.querySelector(".lv-bs").style.width = `${Math.round((buys / Math.max(tx, 1)) * 100)}%`;
+      }
+      const v = row.querySelector(".lv-v");
+      if (v && !row.closest("#pcol-migrated")) v.textContent = compact(vol);
+      const tr = row.querySelector(".lv-tr");
+      if (tr) tr.textContent = traders;
+      const c = row.querySelector(".lv-chg");
+      if (c && chg != null) { c.textContent = pct(chg); c.className = `num lv-chg ${cls(chg)}`; }
+      if (!row.closest("#pcol-migrated")) {
+        row.style.setProperty("--ring", Math.round(prog * 100));
+        const p = row.querySelector(".lv-pct");
+        if (p) p.textContent = `${Math.round(prog * 100)}%`;
+      }
+      row.classList.add("is-live");
+      row.classList.remove("faded");
+      row.classList.toggle("buying", side === "b");
+      row.classList.toggle("selling", side === "s");
+    }
+  }
+}
+
+// A brand-new coin: show it the instant it's created.
+function applyLaunch(l) {
+  const colEl = $("#pcol-new");
+  if (!colEl || pulseState.q || pulseState.min !== "all") return;
+  if (colEl.querySelector(`[data-mint="${CSS.escape(l.mint)}"]`)) return;
+  colEl.querySelector(".empty")?.remove();
+  pulseState.sol = l.solUsd || pulseState.sol;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = pulseRow({ ...l, age: 0, state: "watching", startMcapSol: l.mcapSol }, "new");
+  const node = wrap.firstElementChild;
+  node.classList.add("enter");
+  colEl.prepend(node);
+  while (colEl.children.length > 70) colEl.lastElementChild.remove();
+  const n = $("#pcount-new"); if (n) n.textContent = colEl.children.length;
+}
+
+// Ages tick every second.
+setInterval(() => {
+  if (route() !== "") return;
+  for (const el of document.querySelectorAll(".pr[data-born]")) {
+    const a = el.querySelector(".pr-age");
+    if (a) a.textContent = ageStr(Date.now() - Number(el.dataset.born));
+  }
+}, 1000);
 
 async function viewPulse(main) {
   pulseState.rows.clear(); pulseState.first = true;
@@ -710,7 +781,7 @@ async function viewPulse(main) {
     </div>
     <div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div>`;
   clearInterval(pulseState.timer);
-  pulseState.timer = setInterval(pulseTick, 2000);
+  pulseState.timer = setInterval(pulseTick, 2500);
   setTimeout(pulseTick, 0);
 }
 
@@ -1090,6 +1161,8 @@ function connect() {
     if (feed.querySelector(".empty")) feed.innerHTML = "";
     feed.insertAdjacentHTML("afterbegin", tradeRow({ ...trade, wallet: w.address, label: w.label, source: w.source }).replace('class="sig"', 'class="sig new"'));
   });
+  es.addEventListener("live", (ev) => { if (route() === "" && !document.hidden) applyLive(JSON.parse(ev.data).u); });
+  es.addEventListener("launch", (ev) => { if (route() === "" && !document.hidden) applyLaunch(JSON.parse(ev.data)); });
   es.addEventListener("brief", (ev) => { const b = JSON.parse(ev.data); const c = $("#briefCard"); if (c) c.innerHTML = briefCard(b); toast("New AI brief"); });
   es.onerror = () => { live.classList.remove("on"); live.querySelector("span").textContent = "reconnecting"; };
 }

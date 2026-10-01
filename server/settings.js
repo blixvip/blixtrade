@@ -24,6 +24,7 @@ export const DEFAULTS = {
   aiBriefs: true,
   // wallets
   rpcUrl: "",               // blank = free public Solana RPC (slow). A free Helius URL is ~10x faster.
+  rpcWsUrl: "",             // websocket for the live pump.fun trade feed; blank = derived from rpcUrl, else the public one
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
