@@ -37,17 +37,18 @@ export const DEFAULTS = {
   triageOn: true,           // rank every new launch: instant rules + a fast LLM (Groq if keyed, else Grok fast)
   triageProvider: "auto",    // auto | groq | grok
   triageModel: "openai/gpt-oss-20b",
+  triageGrokModel: "grok-4-fast-non-reasoning",   // Grok's fastest + cheapest (no reasoning step); ~2s per batch
   triageEscalate: 55,        // triage score that sends a coin to Grok for real research
   groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
   fastModel: "openai/gpt-oss-120b",
-  fastPerHour: 240,          // cap on fast (Groq) grades per hour
+  fastPerHour: 60,           // cap on fast first reads per hour (each Grok read with X search uses subscription credits)
   deepMinScore: 45,          // fast grades at or above this get a deep read (~top 10%; the self-review can tune this)
   deepProvider: "grok",      // "grok" (grok-4.7 with deep X/web search, makes buy calls) or "claude"
   deepModel: "grok-4.7",
-  deepSearches: 10,          // max X/web searches per deep read
-  deepPerHour: 60,
+  deepSearches: 6,           // max X/web searches per deep read
+  deepPerHour: 12,
   buyConviction: 75,         // minimum conviction for a buy call (the self-review can tune this)
-  scoutEveryMin: 45,         // Grok narrative scout: searches X/web for narratives starting to run
+  scoutEveryMin: 120,        // Grok narrative scout: searches X/web for narratives starting to run
   scoutSearches: 12,
   reviewMinNew: 25,          // self-review once this many new graded coins have played out (6h+)
   buyMigrated: false,

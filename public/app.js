@@ -710,6 +710,8 @@ async function pulseTick() {
   const L = d.live;
   pulseState.sol = L.solUsd;
   const T = L.triage || {};
+  const warn = $("#pulseWarn");
+  if (warn) warn.innerHTML = L.grokBlocked ? `<div class="card lane-note" style="margin-bottom:12px;border-color:rgba(255,84,112,.4)"><b>Grok is out of subscription credits for now.</b> Triage is running on the instant rules and research falls back to Claude. The radar re-checks Grok every 30 minutes. Add a free Groq key in Settings to keep fast AI triage running.</div>` : "";
   $("#pulseLive").innerHTML = `<span class="${L.feed ? "feed-on" : ""}"><i class="dot"></i><b class="num">${L.tradesPerSec}</b> trades/s</span><span><b class="num">${L.launchesPerMin}</b> launches/min</span><span title="${esc(T.lastError || "")}"><b class="num">${T.coins || 0}</b> ranked by ${T.provider === "groq" ? "Groq" : T.provider === "grok" ? "Grok fast" : "rules"}${T.lastMs ? ` · ${(T.lastMs / 1000).toFixed(1)}s/batch` : ""} · <b class="num">${T.escalated || 0}</b> sent to Grok</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
 }
 
@@ -791,6 +793,7 @@ async function viewPulse(main) {
       <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA" value="${esc(pulseState.q)}">
         <div class="chips">${[["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
     </div>
+    <div id="pulseWarn"></div>
     <div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div>`;
   clearInterval(pulseState.timer);
   pulseState.timer = setInterval(pulseTick, 2500);

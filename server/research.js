@@ -5,15 +5,15 @@ import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { ask } from "./ai.js";
 import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
-import { askGrok, grokInstalled, grokStatus } from "./grok.js";
+import { askGrok, grokInstalled, grokStatus, grokBlocked } from "./grok.js";
 import { trackGrade, considerCall, playbookPrompt, playbook } from "./brain.js";
 import { liveStats } from "./livetrades.js";
 import { triageFor } from "./triage.js";
-const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled();
+const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled() && !grokBlocked();
 const deepMin = () => playbook().tuning.deepMinScore ?? settings.deepMinScore;
 
 // Fast lane: Grok on this PC's SuperGrok login (searches X live), Groq as the fallback when a key is set.
-const grokOn = () => settings.fastProvider !== "groq" && grokInstalled();
+const grokOn = () => settings.fastProvider !== "groq" && grokInstalled() && !grokBlocked();
 const fastReady = () => grokOn() || groqReady();
 const fastStatus = () => {
   const g = grokStatus(), q2 = groqStatus();

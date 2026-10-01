@@ -5,6 +5,7 @@ import { recentLaunches, devLaunches } from "./engine.js";
 import { candidates, ipfs, bondingProgress } from "./research.js";
 import { liveStats, feed } from "./livetrades.js";
 import { triageFor, triageStats } from "./triage.js";
+import { grokStatus } from "./grok.js";
 export const getMeta = (mint) => meta.get(mint);
 
 // Mints currently on the Pulse page; the live trade feed only pushes updates for these.
@@ -98,7 +99,7 @@ export function pulseData() {
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
   watched.clear();
   for (const r of [...newPairs, ...stretch, ...migrated]) watched.add(r.mint);
-  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd, triage: triageStats }, ts: now() } };
+  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd, triage: triageStats, grokBlocked: grokStatus().blocked }, ts: now() } };
   return cache.v;
 }
 

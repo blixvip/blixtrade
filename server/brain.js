@@ -8,7 +8,8 @@
 // Alert-only: it never trades. Calls are paper trades.
 import { db, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
-import { askGrok, grokInstalled } from "./grok.js";
+import { askGrok, grokInstalled as grokPresent, grokBlocked } from "./grok.js";
+const grokInstalled = () => grokPresent() && !grokBlocked();
 import { dexTokens } from "./sources.js";
 import { computeNarratives } from "./narratives.js";
 

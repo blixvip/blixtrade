@@ -14,10 +14,14 @@ export const GROK_MODELS = ["grok-4.7-build-fast", "grok-4.7", "grok-4.6"];
 
 let version = "1.0.41";
 let refreshing = null, cooling = 0;
+// Out of subscription credits ("spending-limit"): stop calling Grok entirely and re-check every 30 minutes.
+let blockedUntil = 0, blockedReason = null;
+export const grokBlocked = () => blockedUntil > Date.now();
 const usage = { calls: 0, errors: 0, tokens: 0, searches: 0, lastMs: null, avgMs: null, lastModel: null, lastError: null, limits: null, tier: null };
 
 export const grokInstalled = () => fs.existsSync(path.join(DIR, "auth.json"));
-export const grokStatus = () => ({ installed: grokInstalled(), ...usage, coolingSecs: cooling > Date.now() ? Math.ceil((cooling - Date.now()) / 1000) : 0 });
+export const grokStatus = () => ({ installed: grokInstalled(), ...usage, coolingSecs: cooling > Date.now() ? Math.ceil((cooling - Date.now()) / 1000) : 0,
+  blocked: grokBlocked() ? blockedReason : null, blockedUntil: grokBlocked() ? blockedUntil : null });
 
 function run(args, ms) {
   return new Promise((resolve) => {
@@ -86,6 +90,11 @@ async function post(model, body, retried = false, timeout = 90_000) {
   const txt = await r.text();
   if (r.status === 401 && !retried) { await token(true); return post(model, body, true, timeout); }
   if (r.status === 426 && !retried) { await detectVersion(); return post(model, body, true, timeout); }
+  if (r.status === 403 && /spending-limit|run out of credits/i.test(txt)) {
+    blockedUntil = Date.now() + 30 * 60_000;
+    blockedReason = "Grok subscription credits used up for now";
+    throw Object.assign(new Error(blockedReason), { busy: true, blocked: true });
+  }
   if (r.status === 429) {
     const wait = Number(r.headers.get("retry-after")) || 60;
     cooling = Date.now() + wait * 1000;
@@ -103,6 +112,7 @@ async function post(model, body, retried = false, timeout = 90_000) {
 let plainSearch = false;
 export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", chatEffort = null, timeout = 90_000 } = {}) {
   if (cooling > Date.now()) throw Object.assign(new Error("Grok is cooling down after a rate limit"), { busy: true });
+  if (grokBlocked()) throw Object.assign(new Error(blockedReason), { busy: true, blocked: true });
   try {
     const speed = plainSearch ? {} : { max_tool_calls: maxSearches, reasoning: { effort } };
     if (search && !plainSearch) {

@@ -12,7 +12,7 @@ import { recentLaunches, devLaunches, launchLog, adoptLaunch } from "./engine.js
 import { getMeta } from "./pulse.js";
 import { liveStats } from "./livetrades.js";
 import { askFast, fastReady as groqReady } from "./fast.js";
-import { askGrok, grokInstalled } from "./grok.js";
+import { askGrok, grokInstalled, grokBlocked } from "./grok.js";
 
 db.exec(`CREATE TABLE IF NOT EXISTS triage (
   mint TEXT PRIMARY KEY, t INTEGER, symbol TEXT, name TEXT, rules INTEGER, score INTEGER, label TEXT, why TEXT, model TEXT, ms INTEGER,
@@ -64,7 +64,7 @@ let inflight = 0;
 async function batch() {
   if (inflight >= 2 || !settings.triageOn) return;
   const useGroq = groqReady() && settings.triageProvider !== "grok";
-  const useGrok = !useGroq && grokInstalled() && settings.triageProvider !== "groq";
+  const useGrok = !useGroq && grokInstalled() && !grokBlocked() && settings.triageProvider !== "groq";
   if (!useGroq && !useGrok) return;
   // Wait ~6s after creation so metadata (description, socials) has loaded.
   const size = useGroq ? 25 : 8;
@@ -82,7 +82,7 @@ async function batch() {
   try {
     const r = useGroq
       ? await askFast(SYSTEM, prompt, 1600, { models: [settings.triageModel, "openai/gpt-oss-20b", "llama-3.1-8b-instant"] })
-      : await askGrok(SYSTEM, prompt, { model: "grok-4.7-build-fast", search: false, maxTokens: 900, chatEffort: "minimal", timeout: 30_000 });
+      : await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000 });
     const out = JSON.parse(r.text.match(/\{[\s\S]*\}/)?.[0] || "{}");
     const ms = now() - t0;
     for (const x of out.r || []) {
@@ -100,6 +100,7 @@ async function batch() {
     triageStats.batches++; triageStats.coins += (out.r || []).length; triageStats.lastMs = ms; triageStats.provider = useGroq ? "groq" : "grok"; triageStats.lastError = null;
   } catch (e) {
     triageStats.lastError = e.message;
+    if (e.blocked) triageStats.provider = "rules";
     // Don't retry the same coins forever: mark them so the next batch moves on.
     for (const l of pending) if (now() - l.seen > 3 * MIN) mem.set(l.mint, { ...(mem.get(l.mint) || {}), model: "failed" });
   } finally {
