@@ -19,7 +19,7 @@ export const DEFAULTS = {
   discordWebhook: "",
   telegramToken: "",
   telegramChat: "",
-  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief", "wallet", "smart", "dev-sold", "rugged", "research", "fomo"],
+  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief", "wallet", "smart", "dev-sold", "rugged", "research", "fomo", "buy"],
   briefEveryMin: 60,
   aiBriefs: true,
   // wallets
@@ -36,7 +36,16 @@ export const DEFAULTS = {
   groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
   fastModel: "openai/gpt-oss-120b",
   fastPerHour: 240,          // cap on fast (Groq) grades per hour
-  deepMinScore: 70,          // fast grades at or above this get a second, deeper read from Claude
+  deepMinScore: 45,          // fast grades at or above this get a deep read (~top 10%; the self-review can tune this)
+  deepProvider: "grok",      // "grok" (grok-4.7 with deep X/web search, makes buy calls) or "claude"
+  deepModel: "grok-4.7",
+  deepSearches: 10,          // max X/web searches per deep read
+  deepPerHour: 60,
+  buyConviction: 75,         // minimum conviction for a buy call (the self-review can tune this)
+  scoutEveryMin: 45,         // Grok narrative scout: searches X/web for narratives starting to run
+  scoutSearches: 12,
+  reviewMinNew: 25,          // self-review once this many new graded coins have played out (6h+)
+  buyMigrated: false,
   // fomo (free, on-chain)
   fomoAutoFollow: true,      // follow the best Fomo traders the radar sees on-chain
   fomoFollowTop: 15,

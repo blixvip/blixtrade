@@ -12,6 +12,7 @@ import { notifySignal, notifyBrief, testNotify } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
 import * as research from "./research.js";
+import * as brain from "./brain.js";
 import { testFast } from "./fast.js";
 import { testGrok, detectVersion, grokTier } from "./grok.js";
 import { raise, adoptMint } from "./engine.js";
@@ -214,6 +215,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
     if (p === "/api/research") return send(res, 200, research.desk());
+    if (p === "/api/picks") return send(res, 200, brain.picksData());
+    if (p === "/api/picks/review" && req.method === "POST") { brain.review(true); return send(res, 200, { started: true }); }
+    if (p === "/api/picks/scout" && req.method === "POST") { brain.scout(); return send(res, 200, { started: true }); }
     const rm = p.match(/^\/api\/research\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (rm) {
       if (req.method === "POST") {
@@ -268,6 +272,8 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();
   research.startResearch(raise);
+  brain.startBrain(raise, research.enqueue);
+  if (!settings.buyMigrated) saveSettings({ notifyKinds: [...new Set([...settings.notifyKinds, "buy"])], buyMigrated: true });
   detectVersion().then(grokTier).catch(() => {});
   const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});
   syncSol(); setInterval(syncSol, 5 * MIN);

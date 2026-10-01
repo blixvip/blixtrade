@@ -69,11 +69,11 @@ function textOf(j) {
   return (msg || j.choices?.[0]?.message?.content || j.output_text || "").trim();
 }
 
-async function post(model, body, retried = false) {
+async function post(model, body, retried = false, timeout = 90_000) {
   const t0 = Date.now();
   const endpoint = body.input ? "responses" : "chat/completions";
   const r = await fetch(`${BASE}/${endpoint}`, {
-    method: "POST", signal: AbortSignal.timeout(90_000),
+    method: "POST", signal: AbortSignal.timeout(timeout),
     headers: {
       "content-type": "application/json", authorization: `Bearer ${await token()}`,
       "x-xai-token-auth": "xai-grok-cli", "x-grok-model-override": model, "x-grok-client-version": version,
@@ -84,8 +84,8 @@ async function post(model, body, retried = false) {
   const lim = r.headers.get("x-ratelimit-remaining-requests");
   if (lim != null) usage.limits = { requestsLeft: +lim, requestsLimit: +r.headers.get("x-ratelimit-limit-requests"), tokensLeft: +r.headers.get("x-ratelimit-remaining-tokens") };
   const txt = await r.text();
-  if (r.status === 401 && !retried) { await token(true); return post(model, body, true); }
-  if (r.status === 426 && !retried) { await detectVersion(); return post(model, body, true); }
+  if (r.status === 401 && !retried) { await token(true); return post(model, body, true, timeout); }
+  if (r.status === 426 && !retried) { await detectVersion(); return post(model, body, true, timeout); }
   if (r.status === 429) {
     const wait = Number(r.headers.get("retry-after")) || 60;
     cooling = Date.now() + wait * 1000;
@@ -101,27 +101,27 @@ async function post(model, body, retried = false) {
 // search: let Grok search X (and the web) itself before answering.
 // maxSearches + low reasoning keep a searched read around 7-10s instead of 30s (it otherwise runs ~12 searches).
 let plainSearch = false;
-export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3 } = {}) {
+export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", timeout = 90_000 } = {}) {
   if (cooling > Date.now()) throw Object.assign(new Error("Grok is cooling down after a rate limit"), { busy: true });
   try {
-    const speed = plainSearch ? {} : { max_tool_calls: maxSearches, reasoning: { effort: "low" } };
+    const speed = plainSearch ? {} : { max_tool_calls: maxSearches, reasoning: { effort } };
     if (search && !plainSearch) {
       try {
-        return await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens, ...speed });
+        return await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens, ...speed }, false, timeout);
       } catch (e) {
         if (e.status !== 400 || /model/i.test(e.message)) throw e;
         plainSearch = true;   // proxy rejected the speed options; search without them from now on
       }
     }
     return search
-      ? await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens })
-      : await post(model, { messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens, response_format: { type: "json_object" } });
+      ? await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens }, false, timeout)
+      : await post(model, { messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens, response_format: { type: "json_object" } }, false, timeout);
   } catch (e) {
     usage.errors++; usage.lastError = e.message;
     // A model the subscription doesn't have: try the next one.
     if ((e.status === 400 || e.status === 403 || e.status === 404) && /model/i.test(e.message)) {
       const next = GROK_MODELS[GROK_MODELS.indexOf(model) + 1];
-      if (next) return askGrok(system, prompt, { model: next, search, maxTokens });
+      if (next) return askGrok(system, prompt, { model: next, search, maxTokens, maxSearches, effort, timeout });
     }
     throw e;
   }

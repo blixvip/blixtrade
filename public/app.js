@@ -26,7 +26,7 @@ function price(p) {
 const KIND = {
   launch: ["New launch", "var(--up)"], graduated: ["Graduated", "var(--violet)"], momentum: ["Momentum", "var(--warn)"],
   volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "#7ee0c3"],
-  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], research: ["AI research", "#5cc8ff"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
+  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], research: ["AI research", "#5cc8ff"], buy: ["Buy call", "#39ff88"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
 };
 const kindOf = (k) => KIND[k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k] || [k, "var(--muted)"];
 const shortAddr = (a) => a ? `${a.slice(0, 4)}…${a.slice(-4)}` : "";
@@ -425,9 +425,9 @@ async function viewResearch(main) {
   const d = await api("research");
   const count = (s) => d.stats.find((x) => x.status === s)?.n || 0;
   main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
-      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.provider === "grok" ? `Grok (your SuperGrok login) reads every coin${d.fast.search ? " and searches X live for who is posting it" : ""} (⚡ about ${d.fast.avgMs ? Math.round(d.fast.avgMs / 1000) : 8}s); the strong ones get a deeper second read from Claude (◆).` : d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
+      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.provider === "grok" ? `Grok (your SuperGrok login) reads every coin${d.fast.search ? " and searches X live for who is posting it" : ""} (⚡ about ${d.fast.avgMs ? Math.round(d.fast.avgMs / 1000) : 8}s); the strong ones get a deep read from ${d.deepProvider === "grok" ? "grok-4.7 with buy/exit calls (see Picks)" : "Claude"} (◆).` : d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
       <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done") + count("deep")} graded</span>
-        ${d.fast.ready ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour</span></div></div>
+        ${d.fast.ready ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour · at score ${d.deepMin}+</span></div></div>
     ${d.fast.ready ? (d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>${d.fast.provider === "grok" ? "Grok" : "Groq"} limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : "")
       : `<div class="card lane-note" style="margin-bottom:16px"><b>⚡ Turn on the fast lane.</b> Run <code>grok login</code> once (uses your SuperGrok subscription), or paste a free Groq key in <a class="linkish" href="#/settings">Settings</a>, and every candidate gets graded instead of ${d.perHour} an hour.</div>`}
     ${d.narratives.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Narratives the AI rates</h2><small>average score of the coins carrying them, last 12h</small></div>
@@ -461,6 +461,9 @@ function researchSection(r, mint) {
   return `<div class="p-sec research">
     <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${esc(x.confidence || "")} confidence · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p>
       <p class="dim small" style="margin:6px 0 0">${tierMark(r)} ${r.tier === "fast" ? "Fast read" : "Deep read"} by ${esc(modelName(r.model || x.model))}${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}${r.status === "deep" ? " · Claude is double-checking it now" : ""}${x.fast ? ` · fast read said ${esc(x.fast.grade)} (${esc(modelName(x.fast.model))})` : ""}</p></div></div>
+    ${x.trade ? `<div class="r-trade act-bg-${esc(x.trade.action)}"><div>${actionBadge(x.trade.action)} <b>Conviction ${x.trade.conviction}</b>${x.trade.entry ? ` · <span class="dim">Entry: ${esc(x.trade.entry)}</span>` : ""}</div>
+      <p>${esc(x.trade.why || "")}</p>
+      ${x.trade.action === "buy" ? `<div class="ladder">${(x.trade.takeProfits || []).map((tp) => `<span>${tp.sellPct}% @ ${tp.atMultiple}x</span>`).join("")}${x.trade.stopLossPct ? `<span class="stop">stop -${x.trade.stopLossPct}%</span>` : ""}${x.trade.trailingStopPct ? `<span>trail ${x.trade.trailingStopPct}%</span>` : ""}${x.trade.timeStopHours ? `<span>${x.trade.timeStopHours}h max</span>` : ""}</div>` : ""}</div>` : ""}
     <div class="r-grid">
       <div class="r-card"><h4>The narrative</h4><p>${esc(x.narrative?.summary || "")}</p>
         ${bar10("Strength", x.narrative?.strength)}${bar10("Timeliness", x.narrative?.timeliness)}${bar10("Originality", x.narrative?.originality)}${bar10("Reach", x.narrative?.reach)}</div>
@@ -483,6 +486,81 @@ function researchSection(r, mint) {
     </div>
     <button class="btn" data-research="${esc(mint)}" style="margin-top:12px">Research again</button>
   </div>`;
+}
+
+// ---------- picks (Grok's buy calls, running narratives, track record, playbook) ----------
+const rate = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+const actionBadge = (a) => a ? `<span class="act act-${esc(a)}">${esc(a)}</span>` : "";
+const stageBadge = (s) => `<span class="stage st-${esc(s || "?")}">${esc(s || "?")}</span>`;
+
+function callCard(c) {
+  const p = c.plan || {}, s = c.sim || {};
+  const live = c.status === "open";
+  const result = live ? `<span class="num ${cls(c.now_mult - 1)}">${mult(c.now_mult)}</span><small>now</small>` : `<span class="num ${cls(c.exit_mult - 1)}">${mult(c.exit_mult)}</span><small>${esc(c.exit_reason || "closed")}</small>`;
+  return `<div class="call ${live ? "live" : c.exit_mult > 1 ? "won" : "lost"}" data-mint="${esc(c.mint)}">
+    <div class="call-top">${av(c, "lg")}<div class="grow"><b>$${esc(c.symbol)}</b> ${gradeBadge(c.grade)}<div class="dim small">${esc(c.tag || c.name || "")}</div></div>
+      <div class="call-res">${result}</div></div>
+    <p>${esc(c.thesis || "")}</p>
+    <div class="call-nums"><span><b>Called</b>${money(c.entry_mcap)} · ${ago(c.t)} ago</span><span><b>Conviction</b>${c.conviction}</span><span><b>Peak</b>${mult(c.peak_mult)}</span></div>
+    <div class="ladder">${(p.takeProfits || []).map((tp, i) => `<span class="${(s.tp || 0) > i ? "hit" : ""}">${tp.sellPct}% @ ${tp.atMultiple}x</span>`).join("")}<span class="stop">stop -${p.stopLossPct}%</span>${p.trailingStopPct ? `<span>trail ${p.trailingStopPct}%</span>` : ""}<span>${p.timeStopHours}h max</span></div>
+  </div>`;
+}
+
+function calTable(rows, label) {
+  if (!rows?.length) return "";
+  return `<div class="table-wrap"><table><thead><tr><th>${label}</th><th>Coins</th><th>Median peak</th><th>Hit 2x</th><th>Hit 5x</th><th>Dumped 50%</th><th>Median 24h</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr><td><b>${esc(r.key)}</b></td><td>${r.n}</td><td>${mult(r.medianPeak)}</td><td class="up">${rate(r.hit2x)}</td><td class="up">${rate(r.hit5x)}</td><td class="down">${rate(r.dumped)}</td><td>${mult(r.median24h)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function narCard(n) {
+  const cat = n.catalysts || {};
+  const ran = n.best_mult || n.best_peak;
+  return `<div class="card scout">
+    <div class="scout-top"><h3>${esc(n.name)}</h3>${stageBadge(n.stage)}<span class="num conf" title="confidence">${n.confidence}</span></div>
+    <p>${esc(n.thesis || "")}</p>
+    ${(cat.catalysts || []).length ? `<ul class="cats">${cat.catalysts.slice(0, 3).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+    <div class="kw">${(n.keywords || []).map((k) => `<span>${esc(k)}</span>`).join("")}</div>
+    ${n.matches?.length ? `<div class="scout-coins">${n.matches.slice(0, 8).map((m) => `<span class="leader" data-mint="${esc(m.mint)}">${av(m, "sm")}<b>$${esc(m.symbol)}</b><span class="dim">${money(m.mcap)}</span></span>`).join("")}</div>` : `<div class="dim small">No radar coins on it yet${n.stage === "early" ? " (early: watch for launches)" : ""}</div>`}
+    <div class="scout-foot"><span class="dim small">${ago(n.t)} ago${cat.risk ? ` · risk: ${esc(cat.risk)}` : ""}</span>${ran ? `<span class="pill ${n.best_mult >= 3 || n.best_peak >= 1e6 ? "ran" : ""}">${n.status === "scored" ? "Result" : "So far"}: ${n.best_mult ? `best ${mult(n.best_mult)}` : ""}${n.best_peak ? ` · peak ${money(n.best_peak)}` : ""}${n.launches_after ? ` · ${n.launches_after} new coins` : ""}</span>` : ""}</div>
+  </div>`;
+}
+
+async function viewPicks(main) {
+  const d = await api("picks");
+  const sc = d.scorecard, c = sc.calls, pb = d.playbook;
+  const lastScout = d.narratives[0]?.t;
+  const latest = d.narratives.filter((n) => lastScout - n.t < 3 * 60_000);
+  const earlier = d.narratives.filter((n) => lastScout - n.t >= 3 * 60_000 && (n.best_mult || n.best_peak)).slice(0, 9);
+  main.innerHTML = `<div class="page-head"><div><h1>Grok's picks</h1>
+      <p>Grok (your SuperGrok login, grok-4.7) does a deep read on every coin that passes the first screen: it searches X and the web, checks who's really posting, and decides <b>buy</b>, <b>watch</b> or <b>avoid</b> with an entry and an exit plan. Buy calls need conviction ${d.settings.buyConviction}+. Every call and every graded coin is tracked for 24 hours and each exit plan is paper-traded, so you can see what following Grok would have made. Grok reviews its own results and rewrites its playbook as they come in. Alerts only: it never trades.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pkScout" ${d.busy.scouting ? "disabled" : ""}>${d.busy.scouting ? "Scouting…" : "Scout narratives now"}</button><button class="btn primary" id="pkReview" ${d.busy.reviewing ? "disabled" : ""}>${d.busy.reviewing ? "Reviewing…" : "Self-review now"}</button></div></div>
+    <div class="kpis">
+      <div class="card kpi"><b>Buy calls (7d)</b><span>${c.n}</span><small>${c.open} open · ${c.closed} closed</small></div>
+      <div class="card kpi"><b>Win rate</b><span class="${c.winRate >= 0.5 ? "up" : c.winRate != null ? "down" : ""}">${rate(c.winRate)}</span><small>closed calls above entry</small></div>
+      <div class="card kpi"><b>Avg paper exit</b><span class="${c.avgExit > 1 ? "up" : c.avgExit != null ? "down" : ""}">${mult(c.avgExit)}</span><small>following each exit plan</small></div>
+      <div class="card kpi"><b>Playbook</b><span>v${pb.version}</span><small>${pb.version ? `${ago(pb.t)} ago · ${pb.rules.length} rules` : "first review after ~25 results"}</small></div>
+    </div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Today's buy calls</h2><small>${d.today.length} today</small></div>
+      ${d.today.length ? `<div class="calls">${d.today.map(callCard).join("")}</div>` : empty("No buy calls yet today", `Grok only calls a coin when its deep read says buy with conviction ${d.settings.buyConviction}+. Most coins don't make it, which is the point.`)}</div>
+    <div class="radar-grid even">
+      <div class="card"><div class="card-head"><h2>Deep reads today</h2><small>best first</small></div>
+        <div class="feed">${d.watch.length ? d.watch.map((w) => `<div class="desk-row" data-mint="${esc(w.mint)}">${av(w)}<div class="desk-main"><div class="desk-title"><b>$${esc(w.symbol)}</b>${actionBadge(w.trade?.action)}${w.trade ? `<span class="dim small">conviction ${w.trade.conviction}</span>` : ""}</div>
+          <p class="verdict">${esc(w.trade?.why || w.verdict || "")}</p>${w.trade?.entry ? `<div class="dim small">Entry: ${esc(w.trade.entry)}</div>` : ""}</div><div class="desk-side">${gradeBadge(w.grade)}<span class="num">${money(w.mcap)}</span></div></div>`).join("") : empty("No deep reads yet today", "Coins that score well on the fast read get a deep read here.")}</div></div>
+      <div class="card"><div class="card-head"><h2>Playbook v${pb.version}</h2><small>Grok's own rules, from its results</small></div>
+        ${pb.version ? `<p class="note" style="margin-top:0">${esc(pb.notes || "")}</p><ol class="rules">${pb.rules.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>
+          ${pb.changes.length ? `<h4 class="sub">Last changes</h4><ul class="rules dim">${pb.changes.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+          <div class="dim small">Tuned: buy calls at conviction ${pb.tuning.buyConviction ?? "—"}+, deep reads at score ${pb.tuning.deepMinScore ?? "—"}+</div>`
+        : empty("No playbook yet", "Once about 25 graded coins have had 6+ hours to play out, Grok reviews what predicted runners and dumps and writes its first rules. Press Self-review to run it now.")}</div>
+    </div>
+    <div class="card" style="margin:16px 0"><div class="card-head"><h2>Running narratives</h2><small>${lastScout ? `Grok scouted X and the web ${ago(lastScout)} ago` : "first scout runs a few minutes after start"}</small></div>
+      ${latest.length ? `<div class="scouts">${latest.map(narCard).join("")}</div>` : empty("No narratives scouted yet", "Grok searches X for narratives starting to run every 45 minutes.")}
+      ${earlier.length ? `<h4 class="sub">How earlier calls did</h4><div class="scouts">${earlier.map(narCard).join("")}</div>` : ""}</div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Track record</h2><small>${sc.graded} graded coins that have had 6h+ to play out, last 7 days</small></div>
+      ${sc.graded ? `${calTable(sc.byGrade, "Grade")}${calTable(sc.byAction, "Deep read said")}${calTable(sc.byTier, "Read")}${calTable(sc.byOrganic, "X buzz")}${calTable(sc.byStage, "Stage")}${calTable(sc.byTheme, "Narrative")}`
+        : empty("Results build up", "Each graded coin needs 6 hours before it counts. This fills in on its own.")}</div>
+    ${d.calls.length > d.today.length ? `<div class="card"><div class="card-head"><h2>Earlier calls</h2><small>last 7 days</small></div><div class="calls">${d.calls.filter((x) => !d.today.includes(x)).map(callCard).join("")}</div></div>` : ""}`;
+  $("#pkScout").onclick = async () => { await post("picks/scout"); toast("Grok is scouting X for narratives (about a minute)"); setTimeout(() => route() === "picks" && viewPicks(main), 1500); };
+  $("#pkReview").onclick = async () => { await post("picks/review"); toast("Grok is reviewing its track record"); setTimeout(() => route() === "picks" && viewPicks(main), 1500); };
 }
 
 async function viewNarratives(main) {
@@ -526,7 +604,7 @@ async function viewRecord(main) {
     </div>`;
 }
 
-const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["fomo", "Fomo crowd buys"], ["research", "A-grade research"], ["brief", "AI briefs"]];
+const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["fomo", "Fomo crowd buys"], ["buy", "Grok buy calls"], ["research", "A-grade research"], ["brief", "AI briefs"]];
 async function viewSettings(main) {
   const { settings: s } = await api("settings");
   const num = (k, label, help) => `<div class="field"><label for="s-${k}">${label}</label><input class="input num" id="s-${k}" name="${k}" type="number" value="${s[k]}"><small>${help}</small></div>`;
@@ -551,6 +629,13 @@ async function viewSettings(main) {
         <div class="field"><label for="s-fastModel">Fast model</label><select class="input" id="s-fastModel" name="fastModel">${["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"].map((m) => `<option ${s.fastModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>Tried first. The rest are fallbacks.</small></div>
         ${num("fastPerHour", "Max fast reads per hour", "Groq's free tier has daily limits per model; this keeps a steady pace.")}
         ${num("deepMinScore", "Claude double-checks at score", "Fast reads scoring this or higher get a deeper read from Claude.")}
+        <div class="field"><label for="s-deepProvider">◆ Deep reads</label><select class="input" id="s-deepProvider" name="deepProvider"><option value="grok" ${s.deepProvider !== "claude" ? "selected" : ""}>Grok (grok-4.7, searches X, makes buy calls)</option><option value="claude" ${s.deepProvider === "claude" ? "selected" : ""}>Claude</option></select><small>The deep read decides buy / watch / avoid with an exit plan.</small></div>
+        <div class="field"><label for="s-deepModel">Deep Grok model</label><select class="input" id="s-deepModel" name="deepModel">${["grok-4.7", "grok-4.6", "grok-4.7-build-fast"].map((m) => `<option ${s.deepModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>grok-4.7 is the smartest; about 30-60s a read.</small></div>
+        ${num("deepPerHour", "Max Grok deep reads per hour", "Runs 2 at a time.")}
+        ${num("deepSearches", "Searches per deep read", "How many X/web searches Grok may run on one coin.")}
+        ${num("buyConviction", "Buy call at conviction", "Starting point; Grok's self-review tunes it from results (55-90).")}
+        ${num("scoutEveryMin", "Scout narratives every (minutes)", "Grok searches X and the web for narratives starting to run. 0 = off.")}
+        ${num("reviewMinNew", "Self-review after N new results", "Grok re-writes its playbook once this many graded coins have played out 6h+.")}
         ${num("researchPerHour", "Max Claude reads per hour", "Each uses your Claude subscription (about one normal Claude message). Lower this if you hit your Claude limits.")}
       </div></div>
     <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
@@ -721,7 +806,7 @@ function pollResearch(mint, tries = 0) {
 function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; }
 
 // ---------- routing ----------
-const VIEWS = { "": viewRadar, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
+const VIEWS = { "": viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 async function render() {
   const r = route();

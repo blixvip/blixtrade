@@ -6,6 +6,9 @@ import { settings } from "./settings.js";
 import { ask } from "./ai.js";
 import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
 import { askGrok, grokInstalled, grokStatus } from "./grok.js";
+import { trackGrade, considerCall, playbookPrompt, playbook } from "./brain.js";
+const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled();
+const deepMin = () => playbook().tuning.deepMinScore ?? settings.deepMinScore;
 
 // Fast lane: Grok on this PC's SuperGrok login (searches X live), Groq as the fallback when a key is set.
 const grokOn = () => settings.fastProvider !== "groq" && grokInstalled();
@@ -195,6 +198,15 @@ const SYSTEM_GROK = SYSTEM_FULL.replace("Reply with ONLY a JSON object", `Before
 Add to the JSON: "xBuzz":{"summary":"what X is saying, 1-2 sentences","sentiment":"bullish|mixed|bearish|none","organic":"organic|mixed|botted|none","notable":["@handle (followers) - what they said"],"posts":[{"handle":"","text":"short quote","url":"https://x.com/..."}]} with up to 4 real posts you actually found (never invent posts or URLs; empty list if none).
 
 Reply with ONLY a JSON object`);
+// The deep read: Grok's smartest model, more searching, and a trade decision with an exit plan.
+const DEEP_EXTRA = `This is the DEEP read on a coin that passed the first screen. Dig further than a quick read: check the coin's own X account history and whether it is real, whether accounts with real followings (not bots, raid groups or paid "signal" accounts) are posting it, whether the story behind it is spreading beyond crypto, what the first-pass read may have missed, and how earlier coins on the same narrative did.
+Then decide whether to buy RIGHT NOW at the current market cap. Only say "buy" when the narrative is genuinely strong and early enough that a 2x+ is realistic from here; otherwise "watch" (good but wrong entry/timing) or "avoid".
+Add to the JSON: "trade":{"action":"buy|watch|avoid","conviction":0-100,"entry":"when/where to enter, e.g. 'now, under $90k' or 'wait for a dip to $60k'","maxEntryMcap":number_in_usd,
+"takeProfits":[{"atMultiple":2,"sellPct":40},{"atMultiple":5,"sellPct":40}],"trailingStopPct":number_or_null,"stopLossPct":number,"timeStopHours":number,"why":"the case for this trade in 1-2 sentences"}
+
+Reply with ONLY a JSON object`;
+const SYSTEM_DEEP_GROK = () => SYSTEM_GROK.replace("Reply with ONLY a JSON object", DEEP_EXTRA) + playbookPrompt();
+const SYSTEM_DEEP_CLAUDE = () => SYSTEM_FULL.replace("Reply with ONLY a JSON object", DEEP_EXTRA) + playbookPrompt();
 const GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
 function parse(text) {
@@ -216,7 +228,7 @@ export async function gradeFast(data) {
   if (grokOn()) {
     try {
       const search = settings.grokSearch;
-      const { text, model, ms, searches } = await askGrok(search ? SYSTEM_GROK : SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(slim(data))}`,
+      const { text, model, ms, searches } = await askGrok((search ? SYSTEM_GROK : SYSTEM_FULL) + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`,
         { model: settings.grokModel, search, maxTokens: search ? 2500 : 1200 });
       return { ...parse(text), model, ms, searches, tier: "fast" };
     } catch (e) {
@@ -229,8 +241,18 @@ export async function gradeFast(data) {
 // Claude: the slower, deeper second opinion for coins the fast read liked (or everything, without a Groq key).
 async function gradeDeep(data, fast) {
   const extra = fast ? `\n\nA fast first-pass model graded it ${fast.grade} (${fast.score}): "${fast.verdict}". Check that read against the data; disagree if it is wrong.${fast.xBuzz ? `\nIt also searched X live and found (JSON): ${JSON.stringify(fast.xBuzz)}` : ""}` : "";
+  const prompt = `Research (JSON):\n${JSON.stringify(data)}${extra}`;
+  if (grokDeep()) {
+    try {
+      const { text, model, ms, searches } = await askGrok(SYSTEM_DEEP_GROK(), prompt,
+        { model: settings.deepModel, search: true, maxSearches: settings.deepSearches, effort: "high", maxTokens: 5000, timeout: 300_000 });
+      return { ...parse(text), model, ms, searches, tier: "deep" };
+    } catch (e) {
+      if (settings.deepProvider === "grok") throw e;
+    }
+  }
   const t0 = Date.now();
-  const { text, model } = await ask(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(data)}${extra}`, 1200);
+  const { text, model } = await ask(SYSTEM_DEEP_CLAUDE(), prompt, 1600);
   return { ...parse(text), model, ms: Date.now() - t0, tier: "deep" };
 }
 
@@ -286,8 +308,9 @@ async function runFast(job) {
   try {
     const data = await gather(t, job.stage);
     const r = await gradeFast(data);
-    const wantsDeep = r.score >= settings.deepMinScore;
+    const wantsDeep = r.score >= deepMin();
     save(job.mint, t, r, data, wantsDeep ? "deep" : "done");
+    trackGrade(t, r, job.stage);
     if (wantsDeep) db.prepare("UPDATE research SET fast = ?, queued = ? WHERE mint = ?").run(JSON.stringify(r), now() - r.score * 1000, job.mint);
     logEvent("research", `$${t.symbol} fast ${r.grade} in ${r.ms}ms (${r.model.split("/").pop()}): ${r.verdict}`);
     alertIfStrong(t, job.stage, r);
@@ -306,6 +329,8 @@ async function runDeep(job) {
     const r = await gradeDeep(data, fast);
     if (fast) { r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms }; r.xBuzz ||= fast.xBuzz; }
     save(job.mint, t, r, data);
+    trackGrade(t, r, job.stage);
+    considerCall(t, r, job.stage);
     logEvent("research", `$${t.symbol} ${fast ? `deep ${r.grade} (fast said ${fast.grade})` : `graded ${r.grade}`}: ${r.verdict}`);
     if (!fast || !["A+", "A", "A-"].includes(fast.grade)) alertIfStrong(t, job.stage, r);
   } catch (e) {
@@ -328,13 +353,15 @@ function pump() {
       runFast(job).finally(() => running.delete(job.mint));
     }
   }
-  // Deep lane: one Claude read at a time, capped per hour.
-  if (!running.has("__deep") && inHour(deepHour) < settings.researchPerHour) {
+  // Deep lane: Grok (2 at a time) or Claude (1 at a time), capped per hour.
+  const slots = grokDeep() ? 2 : 1, cap = grokDeep() ? settings.deepPerHour : settings.researchPerHour;
+  for (let i = 0; i < slots; i++) {
+    const slot = `__deep${i}`;
+    if (running.has(slot) || inHour(deepHour) >= cap) continue;
     const job = nextJob("deep") || (!fastReady() ? nextJob("queued") : null);
-    if (job) {
-      running.add("__deep"); running.add(job.mint);
-      runDeep(job).finally(() => { running.delete("__deep"); running.delete(job.mint); });
-    }
+    if (!job) break;
+    running.add(slot); running.add(job.mint);
+    runDeep(job).finally(() => { running.delete(slot); running.delete(job.mint); });
   }
 }
 
@@ -388,7 +415,7 @@ export function desk() {
   const stats = db.prepare("SELECT status, COUNT(*) n FROM research GROUP BY status").all();
   const hour = { fast: inHour(fastHour), deep: inHour(deepHour) };
   return { near: near.slice(0, 30).map(attach), bonded: bonded.slice(0, 30).map(attach), top, narratives, stats, hour,
-    perHour: settings.researchPerHour, fastPerHour: settings.fastPerHour, auto: settings.researchAuto, fast: fastStatus() };
+    perHour: grokDeep() ? settings.deepPerHour : settings.researchPerHour, deepProvider: grokDeep() ? "grok" : "claude", deepMin: deepMin(), fastPerHour: settings.fastPerHour, auto: settings.researchAuto, fast: fastStatus() };
 }
 
 export function startResearch(raise) {
