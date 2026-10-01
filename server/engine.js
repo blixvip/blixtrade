@@ -17,6 +17,8 @@ const MIN = 60_000;
 const nursery = new Map(); // mint -> { seen, symbol, name, source }
 // Every launch name in the last 6h, for narrative trends (~30k short strings at most).
 export const launchLog = [];
+// The newest launches with full detail, for the Pulse view's "New pairs" column.
+export const recentLaunches = [];
 // How many coins each dev wallet launched in the last 6h (serial launchers are mostly rugs).
 export const devLaunches = new Map();
 
@@ -62,6 +64,8 @@ function startPump() {
       unsaved.push(entry);
       if (t.creator) devLaunches.set(t.creator, (devLaunches.get(t.creator) || 0) + 1);
       if (nursery.size < 20000) nursery.set(t.mint, { ...t, seen: now() });
+      recentLaunches.push({ ...t, seen: now(), devCount: t.creator ? devLaunches.get(t.creator) : 1 });
+      if (recentLaunches.length > 200) recentLaunches.splice(0, recentLaunches.length - 200);
     },
     onMigration: ({ mint }) => {
       stats.graduated++;

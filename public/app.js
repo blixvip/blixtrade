@@ -57,13 +57,25 @@ ${text ? `<text x="32" y="38" text-anchor="middle" font-family="Space Grotesk,Se
 }
 // First few characters of a ticker, counted by whole characters so emoji tickers don't get split in half.
 const initials = (s, n = 3) => Array.from(String(s || "?").replace(/^\$/, "")).slice(0, n).join("").toUpperCase();
-window.avFail = (img) => { const fb = img.dataset.fb; if (fb && img.src !== fb) { img.dataset.fb = ""; img.src = fb; img.classList.add("gen"); } };
+// Try each source in turn (data-alt is a "|"-separated list), then the generated avatar.
+window.avFail = (img) => {
+  const alts = (img.dataset.alt || "").split("|").filter(Boolean);
+  if (alts.length) { img.dataset.alt = alts.slice(1).join("|"); img.src = alts[0]; return; }
+  const fb = img.dataset.fb; if (fb && img.src !== fb) { img.dataset.fb = ""; img.src = fb; img.classList.add("gen"); }
+};
 
-// Coin logo: its own image, else DexScreener's copy, else a generated one with the ticker.
+
+// Coin logo: pump.fun's image CDN for pump coins (fast, small, never blocked), then the coin's own image,
+// then DexScreener's copy, then a generated one with the ticker.
 function av(t, size = "") {
   const fb = genAvatar(t.mint || t.symbol || "?", initials(t.symbol));
-  const src = t.image || (t.mint ? `https://dd.dexscreener.com/ds-data/tokens/solana/${t.mint}.png` : fb);
-  return `<img class="av ${size}" src="${esc(src)}" data-fb="${fb}" alt="" loading="lazy" onerror="avFail(this)">`;
+  const list = [];
+  if (t.mint && /pump$/.test(t.mint)) list.push(`https://images.pump.fun/coin-image/${t.mint}?variant=${size === "xl" || size === "lg" ? "200x200" : "86x86"}`);
+  if (t.image && !/mypinata\.cloud/.test(t.image)) list.push(t.image);
+  else if (t.image) list.push(t.image.replace("pump.mypinata.cloud", "gateway.pinata.cloud"));
+  if (t.mint) list.push(`https://dd.dexscreener.com/ds-data/tokens/solana/${t.mint}.png`);
+  const [src, ...alts] = list.length ? list : [fb];
+  return `<img class="av ${size}" src="${esc(src)}" data-alt="${esc(alts.join("|"))}" data-fb="${fb}" alt="" loading="lazy" onerror="avFail(this)">`;
 }
 
 // Wallet avatar: the trader's Fomo profile picture when we know their handle, else a generated one.
@@ -563,6 +575,145 @@ async function viewPicks(main) {
   $("#pkReview").onclick = async () => { await post("picks/review"); toast("Grok is reviewing its track record"); setTimeout(() => route() === "picks" && render(), 1500); };
 }
 
+// ---------- pulse (live three-column view, AI rating every coin as it streams) ----------
+const pulseState = { q: "", min: "all", timer: null, rows: new Map(), first: true };
+const GRADE_RANK = { "A+": 11, A: 10, "A-": 9, "B+": 8, B: 7, "B-": 6, "C+": 5, C: 4, "C-": 3, D: 2, F: 1 };
+const ageStr = (ms) => { const s = ms / 1000; return s < 60 ? `${Math.max(0, Math.floor(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
+const compact = (n) => n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}K` : `$${Math.round(n)}`;
+const ICON = {
+  x: `<svg viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20"/></svg>`,
+  web: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>`,
+  tg: `<svg viewBox="0 0 24 24"><path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/></svg>`,
+  users: `<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3.5 3.5 0 0 1 0 7M21 20c0-2.6-1.6-4.8-4-5.6"/></svg>`,
+  crown: `<svg viewBox="0 0 24 24"><path d="M3 8l4 4 5-7 5 7 4-4-2 11H5z"/></svg>`,
+  chef: `<svg viewBox="0 0 24 24"><path d="M7 18h10v3H7zM6 14a4 4 0 1 1 2-7.5 4 4 0 0 1 8 0A4 4 0 1 1 18 14v4H6z"/></svg>`,
+};
+
+function aiChip(t) {
+  const a = t.ai;
+  if (!a) return t.state === "faded" ? `<span class="ai none">faded</span>` : t.state === "watching" ? `<span class="ai none">watching</span>` : `<span class="ai none">—</span>`;
+  if (a.status === "queued") return `<span class="ai queued">queued</span>`;
+  if (a.status === "running") return `<span class="ai reading"><i></i>${a.grade ? "deep read" : "Grok reading"}</span>`;
+  if (a.status === "error") return `<span class="ai none">no read</span>`;
+  const buy = a.action === "buy";
+  return `<span class="ai done ${gradeClass(a.grade)} ${buy ? "buy" : ""}" title="${esc(a.verdict || "")}">${buy ? `<b class="buy-tag">BUY</b>` : ""}${a.tier === "deep" ? "◆" : "⚡"}<b>${esc(a.grade)}</b><em>${a.score}</em>${a.status === "deep" ? `<i class="spin"></i>` : ""}</span>`;
+}
+
+function pulseRow(t, col) {
+  const prog = t.progress != null ? Math.round(t.progress * 100) : null;
+  const ring = col === "migrated" ? 100 : prog ?? 0;
+  const tx = (t.buys || 0) + (t.sells || 0);
+  const buyShare = tx ? (t.buys || 0) / tx : null;
+  const a = t.ai;
+  const verdict = a && a.verdict && ["done", "deep"].includes(a.status) ? `<div class="pr-verdict">${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}</div>` : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
+  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""}" data-mint="${esc(t.mint)}" style="--ring:${ring}">
+    <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct">${prog}%</span>` : ""}</div>
+    <div class="pr-main">
+      <div class="pr-l1"><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span>
+        <span class="pr-links">${t.x ? `<a href="${esc(t.x)}" target="_blank" rel="noreferrer" title="X">${ICON.x}</a>` : ""}${t.web ? `<a href="${esc(t.web)}" target="_blank" rel="noreferrer" title="Website">${ICON.web}</a>` : ""}${t.tg ? `<a href="${esc(t.tg)}" target="_blank" rel="noreferrer" title="Telegram">${ICON.tg}</a>` : ""}</span></div>
+      <div class="pr-l2"><span class="pr-age">${ageStr(t.age)}</span>
+        ${t.holders != null ? `<span title="Holders">${ICON.users}${t.holders}</span>` : ""}
+        ${t.top10 != null ? `<span class="${t.top10 > 45 ? "down" : ""}" title="Top 10 holders">${ICON.crown}${Math.round(t.top10)}%</span>` : ""}
+        ${t.dev != null ? `<span class="${t.dev > 8 ? "down" : ""}" title="Dev holds">${ICON.chef}${t.dev.toFixed(1)}%</span>` : t.devSol != null ? `<span title="Dev bought at launch">${ICON.chef}${(+t.devSol).toFixed(2)} SOL</span>` : ""}
+        ${t.devCount >= 4 ? `<span class="${t.devCount >= 10 ? "down" : "dim"}" title="Coins this dev wallet launched in the last 6h">dev ×${t.devCount}</span>` : ""}
+        ${tx ? `<span title="Buys / sells (1h)">TX ${tx}<i class="bs"><i style="width:${Math.round(buyShare * 100)}%"></i></i></span>` : ""}
+      </div>
+      ${verdict}
+    </div>
+    <div class="pr-side">
+      <div class="pr-mc"><small>MC</small><b class="num">${t.mcap ? compact(t.mcap) : t.startMcapSol ? `${Math.round(t.startMcapSol)} SOL` : "—"}</b></div>
+      <div class="pr-v"><small>V</small><span class="num">${compact(t.vol)}</span>${t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : ""}</div>
+      <div class="pr-act">${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a></div>
+    </div>
+  </div>`;
+}
+
+function pulseFilter(list) {
+  const q = pulseState.q.toLowerCase();
+  return list.filter((t) => {
+    if (q && !`${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q)) return false;
+    const g = GRADE_RANK[t.ai?.grade] || 0, done = ["done", "deep"].includes(t.ai?.status);
+    if (pulseState.min === "rated") return Boolean(t.ai);
+    if (pulseState.min === "c") return done && g >= GRADE_RANK["C+"];
+    if (pulseState.min === "b") return done && g >= GRADE_RANK.B;
+    if (pulseState.min === "buy") return t.ai?.action === "buy";
+    return true;
+  });
+}
+
+// Patch a column in place: new rows slide in, changed rows flash, order follows the data.
+function patchColumn(el, list, col) {
+  const seen = new Set();
+  let prev = null;
+  for (const t of list) {
+    seen.add(t.mint);
+    const html = pulseRow(t, col);
+    const key = `${col}:${t.mint}`;
+    let node = el.querySelector(`[data-mint="${CSS.escape(t.mint)}"]`);
+    const old = pulseState.rows.get(key);
+    if (!node) {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      node = wrap.firstElementChild;
+      if (!pulseState.first) node.classList.add("enter");
+    } else if (old && old.html !== html) {
+      const up = (t.mcap || 0) > (old.mcap || 0), down = (t.mcap || 0) < (old.mcap || 0);
+      const graded = old.status !== t.ai?.status && ["done", "deep"].includes(t.ai?.status);
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      const fresh = wrap.firstElementChild;
+      // Keep the already-loaded picture instead of reloading it on every update.
+      const oldAv = node.querySelector(".pr-av img"), newAv = fresh.querySelector(".pr-av img");
+      if (oldAv && newAv) newAv.replaceWith(oldAv);
+      if (graded) fresh.classList.add("graded");
+      else if (up) fresh.classList.add("tick-up"); else if (down) fresh.classList.add("tick-down");
+      node.replaceWith(fresh);
+      node = fresh;
+    }
+    pulseState.rows.set(key, { html, mcap: t.mcap, status: t.ai?.status });
+    if (prev ? prev.nextElementSibling !== node : el.firstElementChild !== node) {
+      if (prev) prev.after(node); else el.prepend(node);
+    }
+    prev = node;
+  }
+  for (const n of [...el.children]) if (!seen.has(n.dataset.mint)) { n.remove(); pulseState.rows.delete(`${col}:${n.dataset.mint}`); }
+  if (!list.length && !el.querySelector(".empty")) el.innerHTML = empty("Nothing here", col === "new" ? "Launches stream in every second." : "Updates live.");
+}
+
+async function pulseTick() {
+  if (route() !== "" ) { clearInterval(pulseState.timer); pulseState.timer = null; return; }
+  if (document.hidden) return;
+  const d = await api("pulse").catch(() => null);
+  if (!d || !$("#pcol-new")) return;
+  const cols = { new: d.newPairs, stretch: d.stretch, migrated: d.migrated };
+  for (const [k, list] of Object.entries(cols)) {
+    const f = pulseFilter(list);
+    const colEl = $(`#pcol-${k}`);
+    if (colEl.querySelector(".empty") && f.length) colEl.innerHTML = "";
+    patchColumn(colEl, f, k);
+    $(`#pcount-${k}`).textContent = f.length;
+    $(`#prating-${k}`).innerHTML = list.filter((t) => t.ai?.status === "running").length ? `<i></i>${list.filter((t) => t.ai?.status === "running").length} rating` : "";
+  }
+  pulseState.first = false;
+  const L = d.live;
+  $("#pulseLive").innerHTML = `<span><b class="num">${L.launchesPerMin}</b> launches/min</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
+}
+
+async function viewPulse(main) {
+  pulseState.rows.clear(); pulseState.first = true;
+  const col = (k, title, sub) => `<section class="pcol"><header><h2>${title}</h2><span class="pcount num" id="pcount-${k}">…</span><span class="prating" id="prating-${k}"></span><small>${sub}</small></header><div class="pcol-body" id="pcol-${k}"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div></section>`;
+  main.innerHTML = `<div class="pulse-head">
+      <div class="pulse-title"><h1>Pulse</h1><svg class="beat" viewBox="0 0 120 24"><path d="M0 12h30l6-9 8 18 7-14 5 5h64"/></svg></div>
+      <div class="pulse-live" id="pulseLive"></div>
+      <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA" value="${esc(pulseState.q)}">
+        <div class="chips">${[["all", "All"], ["rated", "AI rated"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
+    </div>
+    <div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div>`;
+  clearInterval(pulseState.timer);
+  pulseState.timer = setInterval(pulseTick, 2000);
+  setTimeout(pulseTick, 0);
+}
+
 async function viewNarratives(main) {
   const nar = await api("narratives");
   main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>What coins are being launched around, and where the money is going. Heat mixes trading volume, coins that survive, and share of all new launches. Lift compares the last hour with the hours before.</p></div></div>
@@ -806,7 +957,7 @@ function pollResearch(mint, tries = 0) {
 function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; }
 
 // ---------- routing ----------
-const VIEWS = { "": viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
+const VIEWS = { "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 // Each view renders into an off-screen node; only the latest navigation is shown, and a skeleton
 // appears right away if the data takes more than a moment.
@@ -814,6 +965,7 @@ let renderSeq = 0;
 const SKELETON = `<div class="boot"><div class="skel big"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>`;
 async function render() {
   const r = route(), seq = ++renderSeq;
+  document.body.classList.toggle("pulse-mode", r === "");
   document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.r === r));
   const main = $("#main");
   const slow = setTimeout(() => { if (seq === renderSeq) main.innerHTML = SKELETON; }, 120);
@@ -893,10 +1045,13 @@ document.addEventListener("click", async (e) => {
   if (ct) { coinState.theme = ct.dataset.ctheme; document.querySelectorAll("[data-ctheme]").forEach((b) => b.classList.toggle("on", b === ct)); return loadCoins(); }
   const th = el.closest("th[data-sort]");
   if (th && route() === "coins") { coinState.sort = th.dataset.sort === "liq" ? "mcap" : th.dataset.sort; return loadCoins(); }
+  const pm = el.closest("[data-pmin]");
+  if (pm) { pulseState.min = pm.dataset.pmin; document.querySelectorAll("[data-pmin]").forEach((b) => b.classList.toggle("on", b === pm)); pulseState.first = true; return pulseTick(); }
   const m = el.closest("[data-mint]");
   if (m && !el.closest("a")) openCoin(m.dataset.mint);
 });
 document.addEventListener("input", (e) => {
+  if (e.target.id === "pq") { pulseState.q = e.target.value.trim(); pulseState.first = true; pulseTick(); }
   if (e.target.id === "cq") { coinState.q = e.target.value.trim(); clearTimeout(window._cq); window._cq = setTimeout(loadCoins, 250); }
 });
 document.addEventListener("change", (e) => {
@@ -943,4 +1098,4 @@ if ("Notification" in window && Notification.permission === "default") setTimeou
 api("overview").then(renderStrip).catch(() => {});
 render();
 connect();
-setInterval(() => { if (route() === "" && !document.hidden) viewRadar($("#main")).catch(() => {}); }, 60_000);
+setInterval(() => { if (route() === "signals" && !document.hidden) viewRadar($("#main")).catch(() => {}); }, 60_000);

@@ -62,7 +62,7 @@ export function bondingProgress(t) {
 
 export function candidates() {
   const near = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND pair IS NOT NULL ORDER BY mcap DESC LIMIT 200`).all()
-    .map((t) => ({ ...t, progress: bondingProgress(t) })).filter((t) => t.progress >= 0.6).sort((a, b) => b.progress - a.progress);
+    .map((t) => ({ ...t, progress: bondingProgress(t) })).filter((t) => t.progress >= 0.6 && t.progress < 0.995).sort((a, b) => b.progress - a.progress);
   const bonded = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL
     AND COALESCE(pair_created, first_seen) > ? ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(now() - 3 * 60 * MIN);
   return { near, bonded };
@@ -167,7 +167,7 @@ export async function gather(t, stage) {
       mcap: Math.round(t.mcap || 0), peakMcap: Math.round(t.peak_mcap || 0), liquidity: Math.round(t.liquidity || 0),
       vol5m: Math.round(t.vol_m5 || 0), vol1h: Math.round(t.vol_h1 || 0), chg5m: t.chg_m5, chg1h: t.chg_h1,
       buys1h: t.buys_h1, sells1h: t.sells_h1, ageMinutes: Math.round((now() - (t.pair_created || t.first_seen)) / MIN),
-      bondingProgressPct: stage === "near" ? Math.round((bondingProgress(t) || 0) * 100) : 100,
+      bondingProgressPct: stage === "bonded" ? 100 : Math.round((bondingProgress(t) || 0) * 100),
     },
     holders: { total: s.totalHolders ?? null, top10Pct: s.top10 ?? null, insiderPct: s.insiderPct ?? null, devPct: s.devPct ?? null, devOtherLaunches: s.devLaunches ?? null, safetyScore: t.safety_score, dangerRisks: (s.risks || []).filter((r) => r.level === "danger").map((r) => r.name) },
     socials: { x: profile, website: siteInfo, linkedTweet: tweet, telegram: meta?.telegram || links.find((l) => l.type === "telegram")?.url || null },
@@ -290,7 +290,7 @@ function alertIfStrong(t, stage, r) {
   const last = q.lastSignal.get(t.mint, "research");
   if (last && now() - last.t < 6 * 60 * MIN) return;
   const who = r.tier === "fast" ? "Fast read" : "Deep read";
-  raiseFn(t, "research", `${who}: $${t.symbol} ${r.grade}${stage === "near" ? " before bonding" : " after bonding"}`,
+  raiseFn(t, "research", `${who}: $${t.symbol} ${r.grade}${stage === "near" ? " before bonding" : stage === "new" ? " on a fresh launch" : " after bonding"}`,
     `${r.verdict} Ceiling ${r.ceiling?.tier || "?"}. ${r.narrative?.summary || ""}`.slice(0, 400));
 }
 
@@ -304,7 +304,7 @@ function fail(job, t, e) {
   logEvent("error", `research $${t?.symbol}: ${e.message}`);
 }
 
-const nextJob = (status) => db.prepare(`SELECT * FROM research WHERE status = ? AND queued <= ? ${running.size ? `AND mint NOT IN (${[...running].map(() => "?").join(",")})` : ""}
+const nextJob = (status) => db.prepare(`SELECT * FROM research WHERE status = ? AND queued <= ? ${quotaLow() ? "AND stage != 'new'" : ""} ${running.size ? `AND mint NOT IN (${[...running].map(() => "?").join(",")})` : ""}
   ORDER BY queued ASC LIMIT 1`).get(status, now(), ...running);
 
 async function runFast(job) {
@@ -386,6 +386,22 @@ function scout() {
     if ((t.mcap || 0) < (fast ? 25000 : 35000) || (t.vol_h1 || 0) < (fast ? 5000 : 15000) || json(t.safety)?.danger > 0) continue;
     enqueue(t.mint, "bonded", Math.round((t.vol_h1 || 0) / 1000));
   }
+  // Fast lane only: young coins that survived their first minutes with real trading get a first read too.
+  if (fast && !quotaLow()) {
+    const young = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND graduated = 0 AND first_seen > ? AND mcap >= 15000 AND vol_h1 >= 4000
+      ORDER BY vol_h1 DESC LIMIT 25`).all(now() - 30 * MIN);
+    for (const t of young) {
+      if (json(t.safety)?.danger > 0 || (bondingProgress(t) || 0) >= 0.6) continue;
+      if (db.prepare("SELECT 1 FROM research WHERE mint = ?").get(t.mint)) continue;
+      enqueue(t.mint, "new", Math.round((t.vol_h1 || 0) / 2000));
+    }
+  }
+}
+
+// Grok's rate-limit headers: when under 15% of requests are left, skip reads on brand-new coins.
+function quotaLow() {
+  const l = grokStatus().limits;
+  return Boolean(l?.requestsLimit && l.requestsLeft < l.requestsLimit * 0.15);
 }
 
 export function researchFor(mint) {
@@ -429,7 +445,7 @@ export function startResearch(raise) {
   raiseFn = raise;
   // Jobs that were mid-read when the radar stopped go back in the queue.
   db.prepare("UPDATE research SET status = CASE WHEN fast IS NOT NULL THEN 'deep' ELSE 'queued' END WHERE status = 'running'").run();
-  const timers = [setInterval(scout, 60_000), setInterval(pump, 2_000)];
+  const timers = [setInterval(scout, 20_000), setInterval(pump, 2_000)];
   setTimeout(scout, 15_000);
   return () => timers.forEach(clearInterval);
 }
