@@ -586,3 +586,16 @@ body.pulse-mode main { max-width: none; padding: 16px 18px 24px; }
 .pulse-live .feed-on { color: var(--up); border-color: rgba(62,240,143,.3); }
 .pulse-live .feed-on .dot { background: var(--up); animation: ping 1.4s infinite; }
 .pulse-live .feed-on b { color: var(--up); }
+
+/* triage chips */
+.tri { display: inline-flex; align-items: center; gap: 4px; font: 800 10px var(--font); letter-spacing: .04em; padding: 3px 7px; border-radius: 99px; white-space: nowrap; }
+.tri em { font-style: normal; font-weight: 600; opacity: .75; letter-spacing: 0; }
+.tri.is-rules { border: 1px dashed currentColor; padding: 2px 6px; opacity: .8; }
+.tri-wait { color: var(--muted); background: rgba(255,255,255,.04); animation: pulse 1.2s infinite; }
+.tri-slop { color: #8a8f9c; background: rgba(255,255,255,.05); }
+.tri-meh { color: #c9b98a; background: rgba(255,200,87,.07); }
+.tri-maybe { color: var(--info); background: rgba(90,184,255,.13); }
+.tri-promising { color: var(--up); background: rgba(62,240,143,.14); box-shadow: 0 0 12px -3px rgba(62,240,143,.6); }
+.pr.slop { opacity: .5; }
+.pr.slop:hover { opacity: .85; }
+.pr-verdict.tri-why.tri-maybe, .pr-verdict.tri-why.tri-promising { color: var(--ink); }

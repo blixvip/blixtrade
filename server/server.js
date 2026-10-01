@@ -15,6 +15,7 @@ import * as research from "./research.js";
 import * as brain from "./brain.js";
 import { pulseData, startPulse, watched } from "./pulse.js";
 import { startLiveTrades, drainUpdates, feed as liveFeed } from "./livetrades.js";
+import { startTriage, triageRecord } from "./triage.js";
 import { testFast } from "./fast.js";
 import { testGrok, detectVersion, grokTier } from "./grok.js";
 import { raise, adoptMint } from "./engine.js";
@@ -241,6 +242,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
     if (p === "/api/research") return send(res, 200, cached("research", 6000, research.desk));
     if (p === "/api/pulse") return send(res, 200, pulseData());
+    if (p === "/api/triage") return send(res, 200, cached("triage", 30000, triageRecord));
     if (p === "/api/picks") return send(res, 200, cached("picks", 8000, brain.picksData));
     if (p === "/api/picks/review" && req.method === "POST") { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && req.method === "POST") { brain.scout(); return send(res, 200, { started: true }); }
@@ -312,6 +314,7 @@ server.listen(PORT, "127.0.0.1", () => {
   brain.startBrain(raise, research.enqueue);
   startPulse();
   startLiveTrades();
+  startTriage(research.enqueue);
   if (!settings.buyMigrated) saveSettings({ notifyKinds: [...new Set([...settings.notifyKinds, "buy"])], buyMigrated: true });
   detectVersion().then(grokTier).catch(() => {});
   const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});

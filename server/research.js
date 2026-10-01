@@ -7,6 +7,8 @@ import { ask } from "./ai.js";
 import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
 import { askGrok, grokInstalled, grokStatus } from "./grok.js";
 import { trackGrade, considerCall, playbookPrompt, playbook } from "./brain.js";
+import { liveStats } from "./livetrades.js";
+import { triageFor } from "./triage.js";
 const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled();
 const deepMin = () => playbook().tuning.deepMinScore ?? settings.deepMinScore;
 
@@ -162,9 +164,11 @@ export async function gather(t, stage) {
   const smart = db.prepare(`SELECT COUNT(DISTINCT wt.wallet) n FROM wallet_trades wt JOIN wallets w ON w.address = wt.wallet WHERE wt.mint = ? AND wt.side = 'buy' AND w.watching = 1`).get(t.mint).n;
   return {
     stage, ticker: t.symbol, name: t.name, mint: t.mint,
+    liveTrading: (() => { const x = liveStats(t.mint); return x ? { mcapUsd: Math.round(x.mc), athUsd: Math.round(x.ath), buys: x.buys, sells: x.sells, uniqueTraders: x.traders, volumeUsd: Math.round(x.vol), change1mPct: x.chg1m && +x.chg1m.toFixed(1) } : null; })(),
+    firstTriage: (() => { const x = triageFor(t.mint); return x?.model ? { label: x.label, score: x.score, why: x.why } : null; })(),
     description: meta?.description || t.description || null,
     market: {
-      mcap: Math.round(t.mcap || 0), peakMcap: Math.round(t.peak_mcap || 0), liquidity: Math.round(t.liquidity || 0),
+      mcap: Math.round(t.mcap || liveStats(t.mint)?.mc || 0), peakMcap: Math.round(t.peak_mcap || 0), liquidity: Math.round(t.liquidity || 0),
       vol5m: Math.round(t.vol_m5 || 0), vol1h: Math.round(t.vol_h1 || 0), chg5m: t.chg_m5, chg1h: t.chg_h1,
       buys1h: t.buys_h1, sells1h: t.sells_h1, ageMinutes: Math.round((now() - (t.pair_created || t.first_seen)) / MIN),
       bondingProgressPct: stage === "bonded" ? 100 : Math.round((bondingProgress(t) || 0) * 100),
@@ -393,6 +397,7 @@ function scout() {
     for (const t of young) {
       if (json(t.safety)?.danger > 0 || (bondingProgress(t) || 0) >= 0.6) continue;
       if (db.prepare("SELECT 1 FROM research WHERE mint = ?").get(t.mint)) continue;
+      if (triageFor(t.mint)?.label === "slop") continue;   // the triage already ruled it out
       enqueue(t.mint, "new", Math.round((t.vol_h1 || 0) / 2000));
     }
   }

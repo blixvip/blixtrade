@@ -34,6 +34,10 @@ export const DEFAULTS = {
   fastProvider: "grok",      // "grok" = this PC's Grok CLI login (SuperGrok, searches X live); "groq" = free Groq key
   grokModel: "grok-4.7-build-fast",
   grokSearch: true,          // let Grok search X and the web for every coin it reads
+  triageOn: true,           // rank every new launch: instant rules + a fast LLM (Groq if keyed, else Grok fast)
+  triageProvider: "auto",    // auto | groq | grok
+  triageModel: "openai/gpt-oss-20b",
+  triageEscalate: 55,        // triage score that sends a coin to Grok for real research
   groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
   fastModel: "openai/gpt-oss-120b",
   fastPerHour: 240,          // cap on fast (Groq) grades per hour

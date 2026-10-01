@@ -4,6 +4,8 @@ import { db, json } from "./db.js";
 import { recentLaunches, devLaunches } from "./engine.js";
 import { candidates, ipfs, bondingProgress } from "./research.js";
 import { liveStats, feed } from "./livetrades.js";
+import { triageFor, triageStats } from "./triage.js";
+export const getMeta = (mint) => meta.get(mint);
 
 // Mints currently on the Pulse page; the live trade feed only pushes updates for these.
 export const watched = new Set();
@@ -83,7 +85,7 @@ export function pulseData() {
     };
     const age = now() - l.seen;
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
-      desc: m.description || null, devSol: l.devSol, startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
+      desc: m.description || null, devSol: l.devSol, tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
   }).map(withLive);
   // A coin that's still trading isn't faded, whatever the 4-minute check said.
@@ -96,7 +98,7 @@ export function pulseData() {
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
   watched.clear();
   for (const r of [...newPairs, ...stretch, ...migrated]) watched.add(r.mint);
-  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd }, ts: now() } };
+  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd, triage: triageStats }, ts: now() } };
   return cache.v;
 }
 

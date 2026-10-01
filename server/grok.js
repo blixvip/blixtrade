@@ -101,7 +101,7 @@ async function post(model, body, retried = false, timeout = 90_000) {
 // search: let Grok search X (and the web) itself before answering.
 // maxSearches + low reasoning keep a searched read around 7-10s instead of 30s (it otherwise runs ~12 searches).
 let plainSearch = false;
-export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", timeout = 90_000 } = {}) {
+export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", chatEffort = null, timeout = 90_000 } = {}) {
   if (cooling > Date.now()) throw Object.assign(new Error("Grok is cooling down after a rate limit"), { busy: true });
   try {
     const speed = plainSearch ? {} : { max_tool_calls: maxSearches, reasoning: { effort } };
@@ -115,13 +115,13 @@ export async function askGrok(system, prompt, { model = GROK_MODELS[0], search =
     }
     return search
       ? await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens }, false, timeout)
-      : await post(model, { messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens, response_format: { type: "json_object" } }, false, timeout);
+      : await post(model, { messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens, response_format: { type: "json_object" }, ...(chatEffort ? { reasoning_effort: chatEffort } : {}) }, false, timeout);
   } catch (e) {
     usage.errors++; usage.lastError = e.message;
     // A model the subscription doesn't have: try the next one.
     if ((e.status === 400 || e.status === 403 || e.status === 404) && /model/i.test(e.message)) {
       const next = GROK_MODELS[GROK_MODELS.indexOf(model) + 1];
-      if (next) return askGrok(system, prompt, { model: next, search, maxTokens, maxSearches, effort, timeout });
+      if (next) return askGrok(system, prompt, { model: next, search, maxTokens, maxSearches, effort, chatEffort, timeout });
     }
     throw e;
   }

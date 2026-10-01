@@ -70,10 +70,11 @@ async function call(model, system, prompt, maxTokens) {
   return { text, model, ms };
 }
 
-export async function askFast(system, prompt, maxTokens = 900) {
+export async function askFast(system, prompt, maxTokens = 900, { models } = {}) {
   if (!fastReady()) throw new Error("No Groq key");
   let last;
-  for (const model of order()) {
+  const list = models ? [...new Set([...models, ...order()])].filter((m) => !(cooldown.get(m) > Date.now())) : order();
+  for (const model of list) {
     try { return await call(model, system, prompt, maxTokens); }
     catch (e) { last = e; usage.errors++; usage.lastError = e.message; if (!e.next) throw e; }
   }

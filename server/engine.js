@@ -353,6 +353,11 @@ export async function enrichNow(mint) {
   if (p) { applyPair(mint, p); safetyQueue.add(mint); }
 }
 
+// A brand-new launch the triage escalated: track it now instead of waiting for the 4-minute check.
+export function adoptLaunch(l) {
+  adopt({ mint: l.mint, symbol: l.symbol, name: l.name, uri: l.uri, creator: l.creator, devSol: l.devSol, source: "pump-triage" });
+  return enrichNow(l.mint).catch(() => {});
+}
 export function adoptMint(mint) {
   if (q.getToken.get(mint)) return;
   adopt({ mint, source: "wallet" });

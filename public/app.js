@@ -589,6 +589,14 @@ const ICON = {
   chef: `<svg viewBox="0 0 24 24"><path d="M7 18h10v3H7zM6 14a4 4 0 1 1 2-7.5 4 4 0 0 1 8 0A4 4 0 1 1 18 14v4H6z"/></svg>`,
 };
 
+// First-pass triage (instant rules, then the fast LLM): slop / meh / maybe / promising.
+const TRI = { slop: "SLOP", meh: "MEH", maybe: "MAYBE", promising: "👀 HOT" };
+function triChip(t) {
+  const x = t.tri;
+  if (!x) return `<span class="tri tri-wait" title="Ranking…">…</span>`;
+  return `<span class="tri tri-${esc(x.label)} ${x.src === "rules" ? "is-rules" : ""}" title="${esc(`${x.src === "rules" ? "Instant rules" : `Fast AI (${String(x.model || "").split("/").pop()})`}: ${x.why || ""}`)}">${TRI[x.label] || x.label}<em>${x.score}</em></span>`;
+}
+
 function aiChip(t) {
   const a = t.ai;
   if (!a) return t.state === "faded" ? `<span class="ai none">faded</span>` : t.state === "watching" ? `<span class="ai none">watching</span>` : `<span class="ai none">—</span>`;
@@ -605,9 +613,11 @@ function pulseRow(t, col) {
   const tx = (t.buys || 0) + (t.sells || 0);
   const buyShare = tx ? (t.buys || 0) / tx : null;
   const a = t.ai;
-  const verdict = a && a.verdict && ["done", "deep"].includes(a.status) ? `<div class="pr-verdict">${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}</div>` : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
+  const verdict = a && a.verdict && ["done", "deep"].includes(a.status) ? `<div class="pr-verdict">${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}</div>`
+    : t.tri?.why && col === "new" ? `<div class="pr-verdict tri-why tri-${esc(t.tri.label)}">${esc(t.tri.why)}${t.desc ? ` · <span class="dim">${esc(t.desc)}</span>` : ""}</div>`
+    : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
   const vol = t.vol ?? t.liveVol;
-  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
+  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""} ${t.tri?.label === "slop" && !a ? "slop" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
     <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
     <div class="pr-main">
       <div class="pr-l1"><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span>
@@ -624,7 +634,7 @@ function pulseRow(t, col) {
     <div class="pr-side">
       <div class="pr-mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></div>
       <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
-      <div class="pr-act">${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a></div>
+      <div class="pr-act">${col === "new" ? triChip(t) : ""}${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a></div>
     </div>
   </div>`;
 }
@@ -634,6 +644,7 @@ function pulseFilter(list) {
   return list.filter((t) => {
     if (q && !`${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q)) return false;
     const g = GRADE_RANK[t.ai?.grade] || 0, done = ["done", "deep"].includes(t.ai?.status);
+    if (pulseState.min === "noslop") return t.tri?.label !== "slop" || Boolean(t.ai);
     if (pulseState.min === "rated") return Boolean(t.ai);
     if (pulseState.min === "c") return done && g >= GRADE_RANK["C+"];
     if (pulseState.min === "b") return done && g >= GRADE_RANK.B;
@@ -698,7 +709,8 @@ async function pulseTick() {
   pulseState.first = false;
   const L = d.live;
   pulseState.sol = L.solUsd;
-  $("#pulseLive").innerHTML = `<span class="${L.feed ? "feed-on" : ""}"><i class="dot"></i><b class="num">${L.tradesPerSec}</b> trades/s</span><span><b class="num">${L.launchesPerMin}</b> launches/min</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
+  const T = L.triage || {};
+  $("#pulseLive").innerHTML = `<span class="${L.feed ? "feed-on" : ""}"><i class="dot"></i><b class="num">${L.tradesPerSec}</b> trades/s</span><span><b class="num">${L.launchesPerMin}</b> launches/min</span><span title="${esc(T.lastError || "")}"><b class="num">${T.coins || 0}</b> ranked by ${T.provider === "groq" ? "Groq" : T.provider === "grok" ? "Grok fast" : "rules"}${T.lastMs ? ` · ${(T.lastMs / 1000).toFixed(1)}s/batch` : ""} · <b class="num">${T.escalated || 0}</b> sent to Grok</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> Grok reading now</span><span><b class="num">${L.queued}</b> queued</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
 }
 
 function flash(el, up) {
@@ -777,7 +789,7 @@ async function viewPulse(main) {
       <div class="pulse-title"><h1>Pulse</h1><svg class="beat" viewBox="0 0 120 24"><path d="M0 12h30l6-9 8 18 7-14 5 5h64"/></svg></div>
       <div class="pulse-live" id="pulseLive"></div>
       <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA" value="${esc(pulseState.q)}">
-        <div class="chips">${[["all", "All"], ["rated", "AI rated"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
+        <div class="chips">${[["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
     </div>
     <div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div>`;
   clearInterval(pulseState.timer);
@@ -847,7 +859,10 @@ async function viewSettings(main) {
         <div class="field"><label for="s-fastProvider">⚡ Fast lane</label><div style="display:flex;gap:8px"><select class="input" id="s-fastProvider" name="fastProvider" style="flex:1"><option value="grok" ${s.fastProvider !== "groq" ? "selected" : ""}>Grok (my SuperGrok login)</option><option value="groq" ${s.fastProvider === "groq" ? "selected" : ""}>Groq (free key)</option></select><button class="btn" type="button" id="testK">Test Grok</button></div><small>Grok uses this PC's Grok CLI login, no key. If Grok fails and a Groq key is set, Groq takes over.</small></div>
         <div class="field"><label for="s-grokModel">Grok model</label><select class="input" id="s-grokModel" name="grokModel">${["grok-4.7-build-fast", "grok-4.7", "grok-4.6"].map((m) => `<option ${s.grokModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>build-fast is the quick one. grok-4.7 thinks harder but takes much longer.</small></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="grokSearch" ${s.grokSearch ? "checked" : ""}> Grok searches X live</label><small>Grok looks the coin up on X by contract and ticker: who's posting, real engagement, organic or botted. About 8s per coin.</small></div>
-        <div class="field" style="grid-column:1/-1"><label for="s-groqKey">Groq API key (optional fallback, free)</label><div style="display:flex;gap:8px"><input class="input num" id="s-groqKey" name="groqKey" type="password" value="${esc(s.groqKey)}" placeholder="gsk_…" style="flex:1"><button class="btn" type="button" id="testG">Test</button></div><small>Free at console.groq.com/keys (no card). Grades a coin in about a second. When one model hits its free limit the radar switches to the next one.</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="triageOn" ${s.triageOn ? "checked" : ""}> Rank every new launch</label><small>Instant rules plus a fast AI label every new coin slop / meh / maybe / hot; only maybe+ go to Grok.</small></div>
+        <div class="field"><label for="s-triageProvider">Triage AI</label><select class="input" id="s-triageProvider" name="triageProvider">${[["auto", "Auto (Groq if keyed, else Grok fast)"], ["groq", "Groq"], ["grok", "Grok fast"]].map(([v, l]) => `<option value="${v}" ${s.triageProvider === v ? "selected" : ""}>${l}</option>`).join("")}</select><small>Groq is the fastest and free; it needs the key below.</small></div>
+        ${num("triageEscalate", "Send to Grok at triage score", "Coins the fast AI scores this high (maybe/hot) get Grok's X research. Live traction also escalates.")}
+        <div class="field" style="grid-column:1/-1"><label for="s-groqKey">Groq API key (free, fastest triage)</label><div style="display:flex;gap:8px"><input class="input num" id="s-groqKey" name="groqKey" type="password" value="${esc(s.groqKey)}" placeholder="gsk_…" style="flex:1"><button class="btn" type="button" id="testG">Test</button></div><small>Free at console.groq.com/keys (no card). Grades a coin in about a second. When one model hits its free limit the radar switches to the next one.</small></div>
         <div class="field"><label for="s-fastModel">Fast model</label><select class="input" id="s-fastModel" name="fastModel">${["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"].map((m) => `<option ${s.fastModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>Tried first. The rest are fallbacks.</small></div>
         ${num("fastPerHour", "Max fast reads per hour", "Groq's free tier has daily limits per model; this keeps a steady pace.")}
         ${num("deepMinScore", "Claude double-checks at score", "Fast reads scoring this or higher get a deeper read from Claude.")}
