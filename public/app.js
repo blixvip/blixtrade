@@ -26,7 +26,7 @@ function price(p) {
 const KIND = {
   launch: ["New launch", "var(--up)"], graduated: ["Graduated", "var(--violet)"], momentum: ["Momentum", "var(--warn)"],
   volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "#7ee0c3"],
-  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
+  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Smart money", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], research: ["AI research", "#5cc8ff"], "dev-sold": ["Dev sold", "var(--down)"], rugged: ["Rugged", "var(--down)"],
 };
 const kindOf = (k) => KIND[k.startsWith("mcap-") ? "milestone" : k.startsWith("wallet:") ? "wallet" : k] || [k, "var(--muted)"];
 const shortAddr = (a) => a ? `${a.slice(0, 4)}…${a.slice(-4)}` : "";
@@ -386,6 +386,89 @@ async function openWallet(address) {
   p.scrollTop = 0;
 }
 
+// ---------- research desk ----------
+const gradeClass = (g) => !g ? "" : g.startsWith("A") ? "ga" : g.startsWith("B") ? "gb" : g.startsWith("C") ? "gc" : g === "D" ? "gd" : "gf";
+const gradeBadge = (g, size = "") => `<span class="grade ${gradeClass(g)} ${size}">${esc(g || "?")}</span>`;
+
+function researchChip(t) {
+  const r = t.research;
+  if (!r) return `<button class="btn sm-btn" data-research="${esc(t.mint)}">Research</button>`;
+  if (r.status === "queued") return `<span class="pill">Queued</span>`;
+  if (r.status === "running") return `<span class="pill running">Researching…</span>`;
+  if (r.status === "error") return `<button class="btn sm-btn" data-research="${esc(t.mint)}" title="Last try failed">Retry</button>`;
+  return gradeBadge(r.grade);
+}
+
+function deskRow(t, kind) {
+  const r = t.research?.status === "done" ? t.research : null;
+  const pctDone = Math.round((t.progress ?? 1) * 100);
+  return `<div class="desk-row" data-mint="${esc(t.mint)}">
+    ${av(t)}
+    <div class="desk-main">
+      <div class="desk-title"><b>$${esc(t.symbol)}</b><span class="dim">${esc(t.name || "")}</span></div>
+      ${kind === "near"
+        ? `<div class="bond"><div class="bond-bar"><i style="width:${pctDone}%"></i></div><span class="num">${pctDone}%</span></div>`
+        : `<div class="dim small">bonded ${ago(t.bonded_at)} ago</div>`}
+      ${r ? `<p class="verdict">${esc(r.verdict || "")}</p>` : ""}
+    </div>
+    <div class="desk-side">
+      ${researchChip(t)}
+      <span class="num">${money(t.mcap)}</span>
+      <span class="num ${cls(t.chg_h1)}">${pct(t.chg_h1)}</span>
+    </div>
+  </div>`;
+}
+
+async function viewResearch(main) {
+  const d = await api("research");
+  const count = (s) => d.stats.find((x) => x.status === s)?.n || 0;
+  main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
+      <p>Coins about to bond on pump.fun and coins that just bonded get researched automatically: their own description, X account, the tweet they're built on, their website, live news, copycats with the same ticker, holders, dev, and who's buying. Claude then grades the narrative and how high it could realistically go.</p></div>
+      <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done")} graded</span><span class="pill">up to ${d.perHour}/hour</span></div></div>
+    ${d.top.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Best narratives right now</h2><small>graded in the last 12 hours</small></div>
+      <div class="best">${d.top.map((t) => `<div class="best-card ${gradeClass(t.grade)}" data-mint="${esc(t.mint)}">
+        <div class="best-top">${av(t, "lg")}${gradeBadge(t.grade, "lg")}</div>
+        <b>$${esc(t.symbol)}</b><small class="dim">${esc(t.name || "")}</small>
+        <p>${esc(t.verdict || "")}</p>
+        <div class="best-foot"><span class="pill">Ceiling ${esc(t.ceiling || "?")}</span><span class="num ${cls((t.mcap || 0) - (t.mcap_at || 0))}">${t.mcap_at ? mult((t.mcap || 0) / t.mcap_at) + " since" : ""}</span></div>
+      </div>`).join("")}</div></div>` : ""}
+    <div class="radar-grid even">
+      <div class="card"><div class="card-head"><h2>About to bond</h2><small>pump.fun bonding curve, 60%+</small></div>
+        <div class="feed">${d.near.length ? d.near.map((t) => deskRow(t, "near")).join("") : empty("Nothing close to bonding", "Coins show up here once they're 60% of the way.")}</div></div>
+      <div class="card"><div class="card-head"><h2>Just bonded</h2><small>last 3 hours</small></div>
+        <div class="feed">${d.bonded.length ? d.bonded.map((t) => deskRow(t, "bonded")).join("") : empty("No fresh graduations", "Bonded coins appear here as they migrate.")}</div></div>
+    </div>`;
+}
+
+const bar10 = (label, v) => `<div class="meter"><span>${label}</span><div class="meter-bar"><i style="width:${(v || 0) * 10}%"></i></div><b class="num">${v ?? "—"}</b></div>`;
+
+function researchSection(r, mint) {
+  if (!r || !r.status) return `<div class="p-sec"><h3>AI research</h3><div id="researchBox"><p class="note" style="margin:0 0 10px">Claude reads this coin's metadata, X, linked tweet, website, news and copycats, then grades the narrative and its ceiling. About 30 seconds.</p><button class="btn primary" data-research="${esc(mint)}">Research this coin</button></div></div>`;
+  if (r.status !== "done") return `<div class="p-sec"><h3>AI research</h3><div id="researchBox">${r.status === "error" ? `<p class="down">Last attempt failed: ${esc(r.error || "")}</p><button class="btn" data-research="${esc(mint)}">Try again</button>` : `<p class="note"><span class="pill running">${r.status === "running" ? "Researching…" : "Queued"}</span> This updates by itself in a moment.</p>`}</div></div>`;
+  const x = r.report, s = r.sources || {};
+  const so = s.socials || {};
+  const list = (title, items, klass = "") => items?.length ? `<div class="r-list ${klass}"><h4>${title}</h4><ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></div>` : "";
+  return `<div class="p-sec research">
+    <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${esc(x.confidence || "")} confidence · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p></div></div>
+    <div class="r-grid">
+      <div class="r-card"><h4>The narrative</h4><p>${esc(x.narrative?.summary || "")}</p>
+        ${bar10("Strength", x.narrative?.strength)}${bar10("Timeliness", x.narrative?.timeliness)}${bar10("Originality", x.narrative?.originality)}${bar10("Reach", x.narrative?.reach)}</div>
+      <div class="r-card"><h4>How high</h4><div class="ceiling">${esc(x.ceiling?.tier || "?")}</div><p>${esc(x.ceiling?.why || "")}</p>
+        <h4 style="margin-top:12px">Catalyst</h4><p>${esc(x.catalyst || "none found")}</p></div>
+    </div>
+    <div class="r-grid">${list("Bull case", x.bull, "bull")}${list("Bear case", x.bear, "bear")}</div>
+    ${list("Red flags", x.redFlags, "flags")}
+    <div class="r-sources"><h4>What it found</h4>
+      ${so.x && !so.x.error ? `<div class="src"><img class="av sm" src="${esc(so.x.avatar || "")}" alt="" onerror="this.remove()"><span><b>@${esc(so.x.user)}</b> · ${(so.x.followers ?? 0).toLocaleString()} followers${so.x.joined ? ` · joined ${esc(String(so.x.joined).slice(0, 16))}` : ""}<small>${esc(so.x.description || "")}</small></span></div>` : `<div class="src dim">No X account linked${so.x?.error ? ` (${esc(so.x.error)})` : ""}</div>`}
+      ${so.linkedTweet ? `<div class="src"><span><b>Linked tweet</b> by @${esc(so.linkedTweet.author || "?")} · ${(so.linkedTweet.likes ?? 0).toLocaleString()} likes<small>${esc(so.linkedTweet.text || "")}</small></span></div>` : ""}
+      ${so.website && !so.website.error ? `<div class="src"><span><b>Website</b> · <a class="linkish" href="${esc(so.website.url)}" target="_blank" rel="noreferrer">${esc(so.website.title || so.website.url)}</a><small>${esc(so.website.description || "")}</small></span></div>` : ""}
+      ${s.copycats ? `<div class="src"><span><b>Same ticker</b> · ${s.copycats.sameTicker} coins on Solana, this one is #${s.copycats.rankByMcap ?? "?"} by mcap${s.copycats.isOldest ? " and the oldest" : ""}</span></div>` : ""}
+      ${(s.news || []).length ? `<div class="src"><span><b>News this week</b>${s.news.slice(0, 4).map((n) => `<small>· ${esc(n.title)}</small>`).join("")}</span></div>` : `<div class="src dim">No news this week</div>`}
+    </div>
+    <button class="btn" data-research="${esc(mint)}" style="margin-top:12px">Research again</button>
+  </div>`;
+}
+
 async function viewNarratives(main) {
   const nar = await api("narratives");
   main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>What coins are being launched around, and where the money is going. Heat mixes trading volume, coins that survive, and share of all new launches. Lift compares the last hour with the hours before.</p></div></div>
@@ -427,7 +510,7 @@ async function viewRecord(main) {
     </div>`;
 }
 
-const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["fomo", "Fomo crowd buys"], ["brief", "AI briefs"]];
+const NOTIFY = [["launch", "New launches"], ["graduated", "Graduations"], ["momentum", "Momentum"], ["volume", "Volume spikes"], ["mcap-1000000", "$1M milestones"], ["mcap-5000000", "$5M milestones"], ["dump", "Dump warnings"], ["wallet", "Wallet buys"], ["smart", "Smart money"], ["dev-sold", "Dev sold"], ["rugged", "Rugged"], ["fomo", "Fomo crowd buys"], ["research", "A-grade research"], ["brief", "AI briefs"]];
 async function viewSettings(main) {
   const { settings: s } = await api("settings");
   const num = (k, label, help) => `<div class="field"><label for="s-${k}">${label}</label><input class="input num" id="s-${k}" name="${k}" type="number" value="${s[k]}"><small>${help}</small></div>`;
@@ -441,6 +524,11 @@ async function viewSettings(main) {
         <div class="field" style="grid-column:1/-1"><label>Send me</label><div class="checks">${NOTIFY.map(([k, l]) => `<label class="check"><input type="checkbox" name="notifyKinds" value="${k}" ${s.notifyKinds.includes(k) ? "checked" : ""}> ${l}</label>`).join("")}</div></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="aiBriefs" ${s.aiBriefs ? "checked" : ""}> Write AI briefs automatically</label></div>
         ${num("briefEveryMin", "Brief every (minutes)", "How often Claude writes a market brief.")}
+      </div></div>
+    <div class="card"><div class="card-head"><h2>AI research</h2><small>coins about to bond and just bonded</small></div>
+      <div class="form">
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="researchAuto" ${s.researchAuto ? "checked" : ""}> Research automatically</label><small>Coins 80%+ to bonding, and bonded coins with real volume, get researched and graded.</small></div>
+        ${num("researchPerHour", "Max research runs per hour", "Each run uses your Claude subscription (about one normal Claude message). Lower this if you hit your Claude limits.")}
       </div></div>
     <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
       <div class="form">
@@ -546,7 +634,7 @@ async function openCoin(mint) {
         <div class="hero-id"><h2>$${esc(t.symbol)}</h2>
           <div class="sub">${esc(t.name)}${t.dex ? " · " + esc(t.dex) : ""}${t.graduated ? " · graduated" : ""} · ${ago(t.pair_created || t.first_seen)} old</div>
           <div class="chips">${safetyChip(t.safety_score)}${(t.themes || []).map((x) => `<span class="pill">${THEME_EMOJI[x] || ""} ${esc(x)}</span>`).join("")}</div></div>
-        <div class="hero-price"><span class="big num">${price(t.price)}</span><span class="chg ${cls(t.chg_h1)}">${pct(t.chg_h1)} <small>1h</small></span><small class="dim">${money(t.mcap)} mcap</small></div>
+        <div class="hero-price"><span class="big num">${price(t.price)}</span><span class="chg ${cls(t.chg_h1)}">${pct(t.chg_h1)} <small>1h</small></span><small class="dim">${money(t.mcap)} mcap</small>${r.progress != null && !t.graduated ? `<div class="bond hero-bond"><div class="bond-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></div><span class="num">${Math.round(r.progress * 100)}% bonded</span></div>` : ""}</div>
       </div>
     </div>
     <div class="p-acts">
@@ -567,7 +655,7 @@ async function openCoin(mint) {
       <div class="fact"><b>LP locked</b><span>${s?.lpLockedPct != null ? Math.round(s.lpLockedPct) + "%" : "—"}</span></div>
       <div class="fact"><b>Age</b><span>${ago(t.pair_created || t.first_seen)}</span></div>
     </div></div>
-    <div class="p-sec"><h3>AI take</h3><div id="take"><button class="btn" data-explain="${esc(t.mint)}">Ask Claude about this coin</button></div></div>
+    ${researchSection(r.research, t.mint)}
     ${holdersSection(t, s)}
     ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}">${wav(w.wallet, w, "sm")}<span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
     ${fomoFlowSection(r.fomo)}
@@ -579,10 +667,23 @@ async function openCoin(mint) {
     <div class="p-sec"><div class="mint">${esc(t.mint)}</div></div>`;
   p.scrollTop = 0;
 }
+// Refresh the open coin page (or the desk) when its research finishes.
+function pollResearch(mint, tries = 0) {
+  setTimeout(async () => {
+    const r = await api(`research/${mint}`).catch(() => null);
+    if (r?.status === "done" || r?.status === "error" || tries > 40) {
+      if (!$("#drawer").hidden && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      if (route() === "research") viewResearch($("#main"));
+      if (r?.status === "done") toast(`Graded ${r.grade}`);
+      return;
+    }
+    pollResearch(mint, tries + 1);
+  }, 3000);
+}
 function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; }
 
 // ---------- routing ----------
-const VIEWS = { "": viewRadar, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
+const VIEWS = { "": viewRadar, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 async function render() {
   const r = route();
@@ -620,6 +721,16 @@ document.addEventListener("click", async (e) => {
     toast("Following wallet");
     if (!$("#drawer").hidden) openWallet(follow.dataset.follow);
     if (route() === "wallets") viewWallets($("#main"));
+    return;
+  }
+  const rb = el.closest("[data-research]");
+  if (rb) {
+    rb.disabled = true; rb.textContent = "Queued…";
+    try {
+      await post(`research/${rb.dataset.research}`);
+      toast("Researching — about 30 seconds");
+      pollResearch(rb.dataset.research);
+    } catch (err) { toast(err.message); rb.disabled = false; rb.textContent = "Research"; }
     return;
   }
   const ws = el.closest("[data-wscan]");

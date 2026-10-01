@@ -47,6 +47,7 @@ function adopt(t) {
   q.insertToken.run(t.mint, t.symbol || null, t.name || null, t.description || "", t.image || null, t.source, now(), JSON.stringify(t.links || []), 0);
   if (t.boosts) db.prepare("UPDATE tokens SET boosts = ? WHERE mint = ?").run(t.boosts, t.mint);
   if (t.creator) db.prepare("UPDATE tokens SET creator = ?, dev_sol = ? WHERE mint = ?").run(t.creator, t.devSol ?? null, t.mint);
+  if (t.uri) db.prepare("UPDATE tokens SET uri = ? WHERE mint = ?").run(t.uri, t.mint);
   safetyQueue.add(t.mint);
   return true;
 }

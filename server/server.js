@@ -11,6 +11,7 @@ import { writeBrief, explainCoin } from "./ai.js";
 import { notifySignal, notifyBrief, testNotify } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
+import * as research from "./research.js";
 import { raise, adoptMint } from "./engine.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
@@ -125,6 +126,7 @@ async function makeBrief(reason = "scheduled") {
       topCoins: top,
       recentSignals: signalsQuery({ limit: 15, since: Date.now() - 3 * 60 * MIN }).map((s) => ({ kind: s.kind, title: s.title })),
       hitRate: perf().all,
+      researchGrades: research.desk().top.slice(0, 8).map((r) => ({ ticker: r.symbol, grade: r.grade, ceiling: r.ceiling, verdict: r.verdict })),
       fomoBuying: fomo.hotCoins(60, 8).map((c) => ({ ticker: c.symbol, fomoBuyers: c.buyers, fomoSellers: c.sellers, netUsd: Math.round((c.bought || 0) - (c.sold || 0)) })),
       followedWalletBuys: wallets.activity(40).filter((a) => a.side === "buy" && a.t > Date.now() - 2 * 60 * MIN).map((a) => ({ wallet: a.label || a.wallet.slice(0, 6), ticker: a.symbol, usd: Math.round(a.usd || 0) })).slice(0, 15),
     };
@@ -207,6 +209,17 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl }, fomo: fomoOverview() });
     }
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
+    if (p === "/api/research") return send(res, 200, research.desk());
+    const rm = p.match(/^\/api\/research\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (rm) {
+      if (req.method === "POST") {
+        const t = db.prepare("SELECT graduated FROM tokens WHERE mint = ?").get(rm[1]);
+        if (!t) return send(res, 404, { error: "The radar isn't tracking this coin." });
+        db.prepare("DELETE FROM research WHERE mint = ? AND status != 'running'").run(rm[1]);
+        research.enqueue(rm[1], t.graduated ? "bonded" : "near", 1e12);
+      }
+      return send(res, 200, research.researchFor(rm[1]) || {});
+    }
     if (p === "/api/fomo/trader" && req.method === "POST") {
       const b = await readBody(req);
       const w = fomo.markFomo(String(b.wallet || "").trim(), b.handle, wallets.addWallet);
@@ -230,7 +243,7 @@ const server = http.createServer(async (req, res) => {
       if (!t) return send(res, 404, { error: "Unknown coin" });
       const snaps = db.prepare("SELECT t, price, mcap, liquidity, vol_m5 FROM snapshots WHERE mint = ? AND t > ? ORDER BY t").all(m[1], Date.now() - 24 * 60 * MIN);
       const sigs = db.prepare("SELECT * FROM signals WHERE mint = ? AND hidden = 0 ORDER BY t DESC").all(m[1]);
-      return send(res, 200, { token: t, snapshots: snaps, signals: sigs, wallets: wallets.coinWallets(m[1]), fomo: fomo.coinFlow(m[1]) });
+      return send(res, 200, { token: t, snapshots: snaps, signals: sigs, wallets: wallets.coinWallets(m[1]), fomo: fomo.coinFlow(m[1]), research: research.researchFor(m[1]), progress: research.bondingProgress(t) });
     }
     send(res, 404, { error: "not found" });
   } catch (e) {
@@ -250,6 +263,9 @@ process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();
+  research.startResearch(raise);
+  const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});
+  syncSol(); setInterval(syncSol, 5 * MIN);
   fomo.startFomo({
     addWallet: wallets.addWallet,
     raise, adoptMint,

@@ -19,7 +19,7 @@ export const DEFAULTS = {
   discordWebhook: "",
   telegramToken: "",
   telegramChat: "",
-  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief", "wallet", "smart", "dev-sold", "rugged"],
+  notifyKinds: ["launch", "graduated", "momentum", "volume", "mcap-1000000", "mcap-5000000", "dump", "brief", "wallet", "smart", "dev-sold", "rugged", "research", "fomo"],
   briefEveryMin: 60,
   aiBriefs: true,
   // wallets
@@ -27,6 +27,9 @@ export const DEFAULTS = {
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
+  // research
+  researchAuto: true,        // research coins about to bond and just bonded automatically
+  researchPerHour: 20,       // cap on AI research runs per hour (each uses your Claude subscription)
   // fomo (free, on-chain)
   fomoAutoFollow: true,      // follow the best Fomo traders the radar sees on-chain
   fomoFollowTop: 15,
