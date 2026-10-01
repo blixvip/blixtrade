@@ -168,6 +168,28 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
 const send = (res, code, body) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((ok) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { ok(JSON.parse(b || "{}")); } catch { ok({}); } }); });
 
+// Static files from memory (re-checked at most every 2s), and short-lived caches for the heavy API views,
+// so pages answer instantly even when the PC is busy or paging.
+const statics = new Map();
+function staticFile(file) {
+  const c = statics.get(file);
+  if (c && Date.now() - c.checked < 2000) return c.body;
+  const mtime = fs.statSync(file).mtimeMs;
+  if (c && c.mtime === mtime) { c.checked = Date.now(); return c.body; }
+  const body = fs.readFileSync(file);
+  statics.set(file, { body, mtime, checked: Date.now() });
+  return body;
+}
+const memo = new Map();
+function cached(key, ms, fn) {
+  const c = memo.get(key);
+  if (c && Date.now() - c.t < ms) return c.v;
+  const v = fn();
+  memo.set(key, { t: Date.now(), v });
+  return v;
+}
+const forget = (prefix) => { for (const k of memo.keys()) if (k.startsWith(prefix)) memo.delete(k); };
+
 const clients = new Set();
 function broadcast(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -182,10 +204,10 @@ const server = http.createServer(async (req, res) => {
     if (!p.startsWith("/api/")) {
       const file = path.join(PUBLIC, p === "/" ? "index.html" : p);
       if (!file.startsWith(PUBLIC) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-        res.writeHead(200, { "content-type": TYPES[".html"] }); return res.end(fs.readFileSync(path.join(PUBLIC, "index.html")));
+        res.writeHead(200, { "content-type": TYPES[".html"], "cache-control": "no-cache" }); return res.end(staticFile(path.join(PUBLIC, "index.html")));
       }
-      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-store" });
-      return res.end(fs.readFileSync(file));
+      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-cache" });
+      return res.end(staticFile(file));
     }
     if (p === "/api/stream") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
@@ -194,11 +216,12 @@ const server = http.createServer(async (req, res) => {
       req.on("close", () => clients.delete(res));
       return;
     }
-    if (p === "/api/overview") return send(res, 200, overview());
-    if (p === "/api/tokens") return send(res, 200, tokensQuery(params));
-    if (p === "/api/signals") return send(res, 200, signalsQuery(params));
-    if (p === "/api/narratives") return send(res, 200, computeNarratives({ launches: launchLog }));
-    if (p === "/api/perf") return send(res, 200, perf());
+    if (req.method === "POST") forget("");
+    if (p === "/api/overview") return send(res, 200, cached("overview", 3000, overview));
+    if (p === "/api/tokens") return send(res, 200, cached(`tokens${url.search}`, 5000, () => tokensQuery(params)));
+    if (p === "/api/signals") return send(res, 200, cached(`signals${url.search}`, 3000, () => signalsQuery(params)));
+    if (p === "/api/narratives") return send(res, 200, cached("narratives", 20000, () => computeNarratives({ launches: launchLog })));
+    if (p === "/api/perf") return send(res, 200, cached("perf", 60000, perf));
     if (p === "/api/briefs") return send(res, 200, db.prepare("SELECT * FROM briefs ORDER BY t DESC LIMIT 20").all());
     if (p === "/api/events") return send(res, 200, db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT 80").all());
     if (p === "/api/brief" && req.method === "POST") return send(res, 200, await makeBrief("on demand"));
@@ -214,8 +237,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), rpc: { ...rpcStats, custom: !!settings.rpcUrl }, fomo: fomoOverview() });
     }
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
-    if (p === "/api/research") return send(res, 200, research.desk());
-    if (p === "/api/picks") return send(res, 200, brain.picksData());
+    if (p === "/api/research") return send(res, 200, cached("research", 6000, research.desk));
+    if (p === "/api/picks") return send(res, 200, cached("picks", 8000, brain.picksData));
     if (p === "/api/picks/review" && req.method === "POST") { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && req.method === "POST") { brain.scout(); return send(res, 200, { started: true }); }
     const rm = p.match(/^\/api\/research\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
@@ -268,6 +291,10 @@ bus.on("walletTrade", (ev) => broadcast("walletTrade", ev));
 process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.message || e}`));
 process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message || e}`));
 
+// Also answer on IPv6 loopback: browsers try "localhost" as ::1 first and stall before falling back to IPv4.
+const server6 = http.createServer((req, res) => server.emit("request", req, res));
+server6.on("error", () => {});
+server6.listen(PORT, "::1");
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Meme Radar on http://localhost:${PORT}`);
   start();

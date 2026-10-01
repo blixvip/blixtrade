@@ -205,7 +205,7 @@ const THEME_EMOJI = {
   Brainrot: "🧠", "Anime & Waifu": "🌸", "Celebrity & Streamers": "🎤", "Finance & Stocks": "📈", "Space & Aliens": "👽",
   "Religion & Myth": "🐉", Food: "🍕", Animals: "🦦", Gaming: "🎮", "Holidays & Events": "🎃", "Countries & Cities": "🌍",
 };
-const stack = (coins, n = 4) => `<span class="stack">${coins.slice(0, n).map((c) => av(c, "xs")).join("")}</span>`;
+const stack = (coins, n = 4) => `<span class="avs">${coins.slice(0, n).map((c) => av(c, "xs")).join("")}</span>`;
 
 function narMini(n) {
   return `<div class="nar-mini" data-theme="${esc(n.name)}">
@@ -334,13 +334,13 @@ async function viewWallets(main) {
   if (fa) fa.onsubmit = async () => {
     const wallet = $("#fwallet").value.trim(), handle = $("#fhandle").value.trim();
     if (!wallet) return toast("Paste the trader's Solana wallet");
-    try { await post("fomo/trader", { wallet, handle }); toast(`Added ${handle || "Fomo trader"}; reading their trades`); viewWallets(main); }
+    try { await post("fomo/trader", { wallet, handle }); toast(`Added ${handle || "Fomo trader"}; reading their trades`); render(); }
     catch (e) { toast(e.message); }
   };
   $("#addWallet").onsubmit = async () => {
     const address = $("#waddr").value.trim(), label = $("#wlabel").value.trim();
     if (!address) return;
-    try { await post("wallets", { address, label }); toast(`Following ${label || shortAddr(address)}`); viewWallets(main); }
+    try { await post("wallets", { address, label }); toast(`Following ${label || shortAddr(address)}`); render(); }
     catch (e) { toast(e.message); }
   };
 }
@@ -425,7 +425,7 @@ async function viewResearch(main) {
   const d = await api("research");
   const count = (s) => d.stats.find((x) => x.status === s)?.n || 0;
   main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
-      <p>Every coin about to bond on pump.fun and every coin that just bonded gets researched: its description, X account, the tweet it's built on, website, live news, copycats with the same ticker, holders, dev, and who's buying. ${d.fast.provider === "grok" ? `Grok (your SuperGrok login) reads every coin${d.fast.search ? " and searches X live for who is posting it" : ""} (⚡ about ${d.fast.avgMs ? Math.round(d.fast.avgMs / 1000) : 8}s); the strong ones get a deep read from ${d.deepProvider === "grok" ? "grok-4.7 with buy/exit calls (see Picks)" : "Claude"} (◆).` : d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
+      <p>Every coin near bonding or just bonded gets researched: X, website, news, copycats, holders and flow. ${d.fast.provider === "grok" ? `Grok (your SuperGrok login) reads every coin${d.fast.search ? " and searches X live for who is posting it" : ""} (⚡ about ${d.fast.avgMs ? Math.round(d.fast.avgMs / 1000) : 8}s); the strong ones get a deep read from ${d.deepProvider === "grok" ? "grok-4.7 with buy/exit calls (see Picks)" : "Claude"} (◆).` : d.fast.ready ? "Groq gives every coin a fast read (⚡ about a second); the strong ones get a deeper second read from Claude (◆)." : "Claude grades the narrative and how high it could realistically go."}</p></div>
       <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("queued")} queued</span><span class="pill">${count("done") + count("deep")} graded</span>
         ${d.fast.ready ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour · at score ${d.deepMin}+</span></div></div>
     ${d.fast.ready ? (d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>${d.fast.provider === "grok" ? "Grok" : "Groq"} limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : "")
@@ -532,7 +532,7 @@ async function viewPicks(main) {
   const latest = d.narratives.filter((n) => lastScout - n.t < 3 * 60_000);
   const earlier = d.narratives.filter((n) => lastScout - n.t >= 3 * 60_000 && (n.best_mult || n.best_peak)).slice(0, 9);
   main.innerHTML = `<div class="page-head"><div><h1>Grok's picks</h1>
-      <p>Grok (your SuperGrok login, grok-4.7) does a deep read on every coin that passes the first screen: it searches X and the web, checks who's really posting, and decides <b>buy</b>, <b>watch</b> or <b>avoid</b> with an entry and an exit plan. Buy calls need conviction ${d.settings.buyConviction}+. Every call and every graded coin is tracked for 24 hours and each exit plan is paper-traded, so you can see what following Grok would have made. Grok reviews its own results and rewrites its playbook as they come in. Alerts only: it never trades.</p></div>
+      <p>Grok-4.7 deep-reads the best coins, searches X, and calls <b>buy</b>, <b>watch</b> or <b>avoid</b> with an exit plan. Every call is paper-traded and Grok rewrites its playbook from the results. Alerts only.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pkScout" ${d.busy.scouting ? "disabled" : ""}>${d.busy.scouting ? "Scouting…" : "Scout narratives now"}</button><button class="btn primary" id="pkReview" ${d.busy.reviewing ? "disabled" : ""}>${d.busy.reviewing ? "Reviewing…" : "Self-review now"}</button></div></div>
     <div class="kpis">
       <div class="card kpi"><b>Buy calls (7d)</b><span>${c.n}</span><small>${c.open} open · ${c.closed} closed</small></div>
@@ -559,8 +559,8 @@ async function viewPicks(main) {
       ${sc.graded ? `${calTable(sc.byGrade, "Grade")}${calTable(sc.byAction, "Deep read said")}${calTable(sc.byTier, "Read")}${calTable(sc.byOrganic, "X buzz")}${calTable(sc.byStage, "Stage")}${calTable(sc.byTheme, "Narrative")}`
         : empty("Results build up", "Each graded coin needs 6 hours before it counts. This fills in on its own.")}</div>
     ${d.calls.length > d.today.length ? `<div class="card"><div class="card-head"><h2>Earlier calls</h2><small>last 7 days</small></div><div class="calls">${d.calls.filter((x) => !d.today.includes(x)).map(callCard).join("")}</div></div>` : ""}`;
-  $("#pkScout").onclick = async () => { await post("picks/scout"); toast("Grok is scouting X for narratives (about a minute)"); setTimeout(() => route() === "picks" && viewPicks(main), 1500); };
-  $("#pkReview").onclick = async () => { await post("picks/review"); toast("Grok is reviewing its track record"); setTimeout(() => route() === "picks" && viewPicks(main), 1500); };
+  $("#pkScout").onclick = async () => { await post("picks/scout"); toast("Grok is scouting X for narratives (about a minute)"); setTimeout(() => route() === "picks" && render(), 1500); };
+  $("#pkReview").onclick = async () => { await post("picks/review"); toast("Grok is reviewing its track record"); setTimeout(() => route() === "picks" && render(), 1500); };
 }
 
 async function viewNarratives(main) {
@@ -808,12 +808,28 @@ function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; }
 // ---------- routing ----------
 const VIEWS = { "": viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
+// Each view renders into an off-screen node; only the latest navigation is shown, and a skeleton
+// appears right away if the data takes more than a moment.
+let renderSeq = 0;
+const SKELETON = `<div class="boot"><div class="skel big"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>`;
 async function render() {
-  const r = route();
+  const r = route(), seq = ++renderSeq;
   document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.r === r));
   const main = $("#main");
-  try { await (VIEWS[r] || viewRadar)(main); }
-  catch (e) { main.innerHTML = `<div class="card">${empty("Radar isn't responding", e.message)}</div>`; }
+  const slow = setTimeout(() => { if (seq === renderSeq) main.innerHTML = SKELETON; }, 120);
+  const view = VIEWS[r] || viewRadar;
+  // Hidden staging node placed before #main so id lookups inside the view find the new elements first.
+  const tmp = document.createElement("div");
+  tmp.hidden = true;
+  main.before(tmp);
+  try {
+    await view(tmp);
+    if (seq !== renderSeq) return;
+    main.replaceChildren(...tmp.childNodes);
+  } catch (e) {
+    if (seq === renderSeq) main.innerHTML = `<div class="card">${empty("Radar isn't responding", `${e.message}. It may still be starting; this page retries in a few seconds.`)}</div>`;
+    setTimeout(() => { if (seq === renderSeq) render(); }, 4000);
+  } finally { clearTimeout(slow); tmp.remove(); }
 }
 window.addEventListener("hashchange", () => { if (!$("#drawer").hidden) closeCoin(); render(); });
 

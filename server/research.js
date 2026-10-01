@@ -41,7 +41,14 @@ export const ipfs = (u) => u ? String(u).replace(/^https?:\/\/[^/]+\/ipfs\//, GA
 // pump.fun coins bond at roughly 440 SOL of market cap; learn the real figure from coins we saw graduate.
 let solUsd = 120;
 export function setSolPrice(v) { if (v > 0) solUsd = v; }
+// Cached: it scans snapshots, and bondingProgress() calls it once per coin.
+let gradCache = { t: 0, v: 0 };
 function gradMcapUsd() {
+  if (Date.now() - gradCache.t < 5 * MIN && gradCache.v) return gradCache.v;
+  gradCache = { t: Date.now(), v: computeGradMcap() };
+  return gradCache.v;
+}
+function computeGradMcap() {
   const rows = db.prepare(`SELECT (SELECT mcap FROM snapshots s WHERE s.mint = t.mint AND s.mcap > 0 ORDER BY s.t LIMIT 1) m
     FROM tokens t WHERE t.source = 'pump-graduated' AND t.first_seen > ?`).all(now() - 24 * 60 * MIN).map((r) => r.m).filter((m) => m > 15000 && m < 200000).sort((a, b) => a - b);
   const learned = rows.length >= 10 ? rows[Math.floor(rows.length / 2)] : 0;
