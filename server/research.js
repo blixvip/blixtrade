@@ -10,6 +10,7 @@ import { trackGrade, considerCall, considerPick, playbookPrompt, playbook, evide
 import { liveStats, live } from "./livetrades.js";
 import { triageFor } from "./triage.js";
 import { earlyFor } from "./early.js";
+import { getMeta } from "./pulse.js";
 import { verdict, vet } from "./engine.js";
 import { safeUrl, publicUrl, traction, tractionOfSources } from "./quality.js";
 const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled() && !grokBlocked();
@@ -96,6 +97,9 @@ function xHandle(url) {
 }
 
 async function metadata(t) {
+  // The launch feed usually fetched this file already, seconds after the coin was created.
+  const seen = getMeta(t.mint);
+  if (seen && !seen.pending && !seen.failed) return { description: seen.description, twitter: seen.twitter, telegram: seen.telegram, website: seen.website };
   if (!t.uri) return null;
   try {
     const m = await getJson(ipfs(t.uri));
@@ -155,19 +159,24 @@ async function copycats(t) {
   } catch { return null; }
 }
 
-export async function gather(t, stage) {
-  const meta = await metadata(t);
+// A source that has not answered in time is left out rather than holding the whole read up.
+const within = (p, ms, fallback = null) => ms ? Promise.race([p, new Promise((ok) => setTimeout(ok, ms, fallback))]) : p;
+// `budget`: the longest any one outside source may take (first reads use a short one; a slow website is
+// not worth ten seconds of a coin's first minute).
+export async function gather(t, stage, budget = 0) {
+  const g0 = now();
+  const meta = await within(metadata(t), budget);
   const links = json(t.links, []);
   const xUrl = safeUrl(meta?.twitter) || links.find((l) => /twitter|x\.com/i.test(`${l.type} ${l.url}`))?.url;
   const site = safeUrl(meta?.website) || links.find((l) => l.type === "website")?.url;
   const xh = xHandle(xUrl);
   const statusLinks = [meta?.twitter, meta?.website, meta?.description, t.description].join(" ").match(/(?:x|twitter)\.com\/[A-Za-z0-9_]+\/status\/\d+/gi) || [];
   const [profile, siteInfo, tweet, headlines, cats] = await Promise.all([
-    xh && !xh.status ? xProfile(xh.user) : null,
-    website(site),
-    xh?.status ? xStatus(xh.user, xh.status) : statusLinks[0] ? xStatus(...statusLinks[0].split(/\.com\/|\/status\//).slice(1, 3)) : null,
-    news(t.name && t.name.length > 3 ? t.name : t.symbol),
-    copycats(t),
+    within(xh && !xh.status ? xProfile(xh.user) : null, budget),
+    within(website(site), budget, site ? { url: site, error: "site did not answer in time" } : null),
+    within(xh?.status ? xStatus(xh.user, xh.status) : statusLinks[0] ? xStatus(...statusLinks[0].split(/\.com\/|\/status\//).slice(1, 3)) : null, budget),
+    within(news(t.name && t.name.length > 3 ? t.name : t.symbol), budget, []),
+    within(copycats(t), budget),
   ]);
   const s = json(t.safety) || {};
   const nar = computeNarratives({});
@@ -201,6 +210,7 @@ export async function gather(t, stage) {
   if (el) data.earlySignal = { chanceOf2xPct: Math.round(el.p * 100), rank: el.top ? "top 5% of launches" : el.strong ? "top 10% of launches" : "ordinary", atSeconds: el.cp };
   data.traction = { score: tr.score, helping: tr.up, hurting: tr.down,
     measured: ev.traction.reduce((n, b) => n + b.n, 0) >= 60 ? ev.traction.filter((b) => b.n >= 8).map((b) => `traction ${b.label}: ${b.n} past coins, ${b.winPct}% won, average result ${b.avg}x`) : "not enough past results yet" };
+  data.gatherMs = now() - g0;
   return data;
 }
 
@@ -249,6 +259,26 @@ Reply with ONLY a JSON object, no prose around it, keys in this order:
 "ceiling":{"tier":"<$250k|$250k-$1M|$1M-$10M|$10M-$100M|$100M+","why":"1-2 sentences"},
 "bull":["..."],"bear":["..."],"redFlags":["..."],"confidence":"low|medium|high"}`;
 
+// The first read is a quick call: the same decision, with the reasoning squeezed into one line. Writing the
+// full report took the model about 17 seconds a coin, and nine coins in ten are a plain "avoid" that nobody
+// reads. Anything the quick call would trade (or whose story stands out) still gets the full deep read.
+const SYSTEM_QUICK = `You make the first, fast call on a Solana memecoin for a trader who buys around pump.fun bonding and sells by one fixed rule: half at 2x, the rest on a 35% trailing stop, everything out at -40%.
+A WIN is a coin that reaches 2x from its current price before it falls 40%. About 1 coin in 5 that gets this far wins. Most fall.
+You get research gathered seconds ago, including "traction" (0-100 live demand, with base rates measured on this radar's own past reads).
+
+Decide in this order: is real money arriving right now (traction, unique traders, buys against sells, 1m/5m change, volume against market cap)? Who is left to buy at this size, and who is sitting on profit? Is there a specific reason strangers find it in the next 30 minutes, or is it one of many copies?
+Rules:
+- Narrative quality alone has NOT predicted winners on this radar. Live demand has. A great meme with no buyers is not a buy; strong demand with a weak meme can still be a short trade.
+- Up more than ~130% this hour, 40%+ below its high, or above $250k market cap: the easy move is usually gone.
+- Under ~$15k market cap with few traders: too early to tell. That is "watch", not "buy".
+- Never invent facts. A coin minutes old with no socials is normal, not a red flag by itself.
+- trade.pWin is your honest probability (0-100) of a WIN. Most coins belong between 5 and 35; above 50 only with strong demand AND a real edge.
+- trade.action: "buy" = enter now, "watch" = decent but entry or timing is not there, "avoid" = do not trade. Never suggest shorting.
+- grade and score describe the NARRATIVE only (meme strength, timeliness, originality, reach). Most coins are C or worse.
+
+Reply with ONLY this JSON object, nothing else, and keep every string short:
+{"why":"the decisive numbers and reason, max 30 words","trade":{"action":"buy|watch|avoid","pWin":0-100},"grade":"A+|A|A-|B+|B|B-|C+|C|C-|D|F","score":0-100,"verdict":"what to do and why, max 18 words","narrative":{"summary":"what the meme is, max 18 words","theme":"one of: THEME_LIST","tag":"2-4 word name for the specific narrative"},"redFlags":["max 2, each under 10 words"]}`.replace("THEME_LIST", [...THEMES.map(([n]) => n), "Viral moment", "Other"].join(" | "));
+
 const SYSTEM_FULL = SYSTEM.replace("THEME_LIST", [...THEMES.map(([n]) => n), "Viral moment", "Other"].join(" | "));
 // Grok can search X itself, so it also reports what X is actually saying about the coin.
 const SYSTEM_GROK = SYSTEM_FULL.replace("Reply with ONLY a JSON object", `Before grading, use x_search to look the coin up on X by its contract address (mint) and by $TICKER: posts from the last 24 hours, who is posting (follower counts, known traders/KOLs), real engagement, and whether it is spreading organically or only bots, raid groups and "AI signal" accounts are posting it. If the narrative is tied to a news story, person or trend, use web or X search to confirm that story is real and current. Count what you found as evidence in the grade.
@@ -293,6 +323,20 @@ function slim(data) {
   if (d.news) d.news = d.news.slice(0, 4);
   return d;
 }
+// The quick call reads less still: what decides a first call is the tape, the holders and the linked post.
+function slimmer(data) {
+  const d = slim(data);
+  if (d.socials?.website?.text) d.socials.website.text = d.socials.website.text.slice(0, 300);
+  if (d.news) d.news = d.news.slice(0, 3).map((n) => ({ title: n.title, date: n.date }));
+  delete d.gatheredAt; delete d.gatherMs; delete d.mint;
+  return d;
+}
+// Fills in the parts of a report the quick call leaves out, so everything downstream reads one shape.
+function fromQuick(r) {
+  r.trade.why ||= r.why || null;
+  r.quick = true;
+  return r;
+}
 export async function gradeFast(data) {
   if (grokOn()) {
     try {
@@ -314,6 +358,13 @@ export async function gradeFast(data) {
   }
   if (!claudeFast()) throw Object.assign(new Error("No fast AI is available right now"), { busy: true });
   const t0 = Date.now();
+  if (settings.quickReads !== false) {
+    const { text, model, truncated } = await ask(SYSTEM_QUICK + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slimmer(data))}`, 400, { model: FAST_MODEL, room: 0 });
+    if (truncated) throw new Error("the answer was cut off");
+    const r = parse(text);
+    if (!r.trade?.action) throw new Error("the quick call had no decision in it");
+    return { ...fromQuick(r), model, ms: Date.now() - t0, tier: "fast", searched: false };
+  }
   const { text, model, truncated } = await ask(SYSTEM_FULL + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`, 1600, { model: FAST_MODEL });
   if (truncated) throw new Error("the answer was cut off");
   return { ...parse(text), model, ms: Date.now() - t0, tier: "fast", searched: false };
@@ -345,7 +396,7 @@ let raiseFn = null;
 const running = new Set();
 const fastHour = [], deepHour = [];
 const inHour = (list) => { while (list.length && list[0] < now() - 60 * MIN) list.shift(); return list.length; };
-const FAST_WORKERS = 6;
+const FAST_WORKERS = 10;
 
 // A read is only useful while the coin is still in the state that made it interesting.
 const TTL = { new: 25 * MIN, near: 45 * MIN, bonded: 3 * 60 * MIN };
@@ -463,7 +514,7 @@ async function runFast(job) {
   // The safety check runs alongside the read, so a coin that rates well can be entered without waiting for it.
   if (!t.safety_checked) vet(job.mint).catch(() => {});
   try {
-    const data = await gather(t, job.stage);
+    const data = await gather(t, job.stage, 1500);
     const r = await gradeFast(data);
     // A coin seconds old may have no stored price yet: take the live one so its rating is still tracked.
     if (!t.mcap) t.mcap = liveStats(job.mint)?.mc || 0;
@@ -472,12 +523,14 @@ async function runFast(job) {
     r.stage = job.stage;
     r.live = data.liveTrading ? { traders: data.liveTrading.uniqueTraders, buys: data.liveTrading.buys, sells: data.liveTrading.sells } : null;
     // A second, deeper opinion for anything the first read would trade, or whose narrative stands out.
-    const wantsDeep = r.score >= deepMin() || (r.trade?.action && r.trade.action !== "avoid" && (r.traction ?? 0) >= 50);
+    // A read you asked for always gets the full report, straight after its quick call.
+    const manual = isManual(job);
+    const wantsDeep = manual || r.score >= deepMin() || (r.trade?.action && r.trade.action !== "avoid" && (r.traction ?? 0) >= 50);
     save(job.mint, t, r, data, wantsDeep ? "deep" : "done");
     trackGrade(t, r, job.stage);
     considerPick(t, r, job.stage);
-    if (wantsDeep) db.prepare("UPDATE research SET fast = ?, queued = ? WHERE mint = ?").run(JSON.stringify(r), now() - r.score * 1000, job.mint);
-    logEvent("research", `$${t.symbol} fast ${r.grade} in ${r.ms}ms (${r.model.split("/").pop()}): ${r.verdict}`);
+    if (wantsDeep) db.prepare("UPDATE research SET fast = ?, queued = ? WHERE mint = ?").run(JSON.stringify(r), manual ? job.queued : now() - r.score * 1000, job.mint);
+    logEvent("research", `$${t.symbol} fast ${r.grade} in ${r.ms}ms (${r.model.split("/").pop()}, sources ${data.gatherMs}ms): ${r.verdict}`);
     alertIfStrong(t, job.stage, r);
   } catch (e) { fail({ ...job, status: "queued" }, t, e); }
 }

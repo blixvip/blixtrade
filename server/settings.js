@@ -78,6 +78,11 @@ export const DEFAULTS = {
   entryCancelPct: 40,        // drop it if it falls this far below the rated price while waiting
   entryFallPct: 5,           // "falling" = down this much in the last 15 seconds: wait for it to stop
   entryOffHighPct: 60,       // do not enter a coin sitting this far below its all-time high
+  // risk guard: stop taking new picks for a while when things are going badly
+  guardLosses: 5,            // this many losing exits in a row pauses new picks (0 = off)
+  guardPauseMin: 45,         // for this long
+  guardDayLoss: 600,         // and for the rest of the day once $100-a-pick is down this many dollars (0 = off)
+  quickReads: true,          // first reads are quick calls (a few seconds); the full report follows for coins worth it
   buyConviction: 75,         // minimum conviction for a buy call (the self-review can tune this)
   scoutEveryMin: 120,        // Grok narrative scout: searches X/web for narratives starting to run
   scoutSearches: 12,

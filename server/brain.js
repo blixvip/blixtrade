@@ -306,8 +306,31 @@ function stepEntry(w) {
   if (age > P.entryWaitMin * 60_000) return endWatch(w, "skipped", `no clean entry in ${P.entryWaitMin} minutes (${why})`, mcap);
   if (why !== w.why || mcap > (w.hi || 0)) db.prepare("UPDATE entry_watch SET why = ?, hi = MAX(COALESCE(hi, 0), ?), mcap = ? WHERE mint = ?").run(why, mcap, mcap, w.mint);
 }
+// Risk guard. A run of losing exits, or a bad day, usually means the market has turned (or the rule is
+// wrong for it): the radar stops taking new picks instead of feeding the same losing trade again.
+let guardCache = { t: 0, v: null };
+export function riskGuard() {
+  if (now() - guardCache.t < 5000) return guardCache.v;
+  const P = settings;
+  let v = null;
+  if (P.guardLosses > 0) {
+    const last = db.prepare("SELECT exit_mult, exit_t FROM outcomes WHERE kind = 'pick' AND exit_mult IS NOT NULL AND exit_t IS NOT NULL ORDER BY exit_t DESC LIMIT ?").all(P.guardLosses);
+    const until = last.length ? last[0].exit_t + P.guardPauseMin * 60_000 : 0;
+    if (last.length >= P.guardLosses && last.every((o) => o.exit_mult < 1) && now() < until)
+      v = { why: `${P.guardLosses} losing exits in a row: no new picks for ${P.guardPauseMin} minutes`, until };
+  }
+  if (!v && P.guardDayLoss > 0) {
+    const day = db.prepare("SELECT exit_mult, mcap0, last_mcap, illiq, sim FROM outcomes WHERE kind = 'pick' AND t0 > ?").all(dayStart());
+    const pnl = day.reduce((a, o) => { const s = json(o.sim, null), x = o.illiq ? 0 : o.last_mcap / o.mcap0; return a + ((o.exit_mult ?? (s ? s.realized + s.left * x * COST : x * COST)) - 1) * 100; }, 0);
+    if (pnl <= -P.guardDayLoss) { const end = new Date(); end.setHours(24, 0, 0, 0); v = { why: `today is down $${Math.round(-pnl)} at $100 a pick (limit $${P.guardDayLoss}): no new picks until tomorrow`, until: end.getTime() }; }
+  }
+  guardCache = { t: now(), v };
+  return v;
+}
 function enterPick(w, tok, mcap, src) {
   const r = json(w.r, {}), waited = now() - w.t;
+  const hold = riskGuard();
+  if (hold) return endWatch(w, "skipped", `risk guard: ${hold.why}`, mcap);
   // Safety is checked again at the moment of entry: it can change while a coin is being watched.
   const v = tok ? verdict(tok) : { ok: false, reasons: ["the radar stopped tracking it"] };
   if (!v.ok) return endWatch(w, "skipped", `failed safety at entry: ${v.reasons.join("; ")}`, mcap);
@@ -452,17 +475,55 @@ function backfillPicks() {
 }
 
 // Today's list and how it is doing, plus the rated coins that were NOT picked, so the two can be compared.
+// One pick (or one rated coin) as the page shows it.
+function shape(o) {
+  const t = db.prepare("SELECT name, image, mcap, status, safety_score FROM tokens WHERE mint = ?").get(o.mint) || {};
+  const peak = o.peak_mcap / o.mcap0, nowX = o.illiq ? 0 : o.last_mcap / o.mcap0, sim = json(o.sim, null);
+  return { mint: o.mint, symbol: o.symbol, name: t.name || null, image: t.image || null, t: o.t0, grade: o.grade, score: o.score, tier: o.tier, action: o.action, verdict: o.verdict, tag: o.tag, stage: o.stage,
+    // What the exit rule has made of it: banked sales plus whatever is still held, at the price now.
+    ruleX: o.exit_mult ?? (sim ? sim.realized + sim.left * nowX * COST : nowX * COST), ruleClosed: o.exit_mult != null, ruleWhy: o.exit_reason || (sim?.log.length ? `${sim.log.map((x) => x.why).join(", then ")}; still holding ${Math.round(sim.left * 100)}%` : "still holding all of it"), sold: sim?.log || [],
+    ratedAt: o.rated_mcap ?? null, entryMs: o.entry_ms ?? null, entryNote: o.entry_note || null, pwin: o.pwin ?? null, traction: o.traction ?? null,
+    entry: o.mcap0, mcapNow: o.illiq ? 0 : o.last_mcap, peak, peakT: o.peak_t, now: nowX, m1h: o.m1h, low: o.low_mcap / o.mcap0, unsellable: Boolean(o.illiq), dead: t.status === "dead", checked: o.last_t, safety: t.safety_score ?? null };
+}
+
+// Every pick the radar has made, newest first, with the running result of following the exit rule.
+export function allPicks(limit = 1500) {
+  const rows = db.prepare("SELECT * FROM outcomes WHERE kind = 'pick' ORDER BY t0 DESC LIMIT ?").all(limit).map((o) => {
+    const p = shape(o), sim = json(o.sim, null);
+    // Picks made before the live watcher existed were replayed from stored prices: their take-profit filled at exactly its level.
+    return { ...p, exitT: o.exit_t ?? null, held: (o.exit_t || o.last_t || now()) - o.t0, left: sim ? sim.left : 1, replayed: o.entry_ms == null, early: o.grade == null,
+      state: p.ruleClosed ? (p.ruleX > 1 ? "won" : "lost") : "open" };
+  });
+  const closed = rows.filter((p) => p.ruleClosed), wins = closed.filter((p) => p.ruleX > 1);
+  // $100 into every pick, sold by the rule: the running total, oldest first.
+  let run = 0;
+  const curve = [...closed].sort((a, b) => (a.exitT || a.t) - (b.exitT || b.t)).map((p) => { run += (p.ruleX - 1) * 100; return { t: p.exitT || p.t, v: +run.toFixed(1), symbol: p.symbol, x: +p.ruleX.toFixed(2) }; });
+  const days = new Map();
+  for (const p of rows) {
+    const d = new Date(p.t); d.setHours(0, 0, 0, 0);
+    const k = d.getTime(), g = days.get(k) || { day: k, n: 0, closed: 0, wins: 0, pnl: 0, best: null };
+    g.n++;
+    if (p.ruleClosed) { g.closed++; if (p.ruleX > 1) g.wins++; }
+    g.pnl += (p.ruleX - 1) * 100;
+    if (!g.best || p.ruleX > g.best.x) g.best = { symbol: p.symbol, x: +p.ruleX.toFixed(2), mint: p.mint };
+    days.set(k, g);
+  }
+  const by = (key) => { const m = new Map(); for (const p of closed) { const k = p[key] || "none"; const g = m.get(k) || { key: k, n: 0, wins: 0, sum: 0 }; g.n++; if (p.ruleX > 1) g.wins++; g.sum += p.ruleX; m.set(k, g); } return [...m.values()].map((g) => ({ ...g, avg: +(g.sum / g.n).toFixed(2) })).sort((a, b) => b.n - a.n); };
+  const xs = closed.map((p) => p.ruleX);
+  const best = closed.reduce((a, p) => (!a || p.ruleX > a.ruleX ? p : a), null), worst = closed.reduce((a, p) => (!a || p.ruleX < a.ruleX ? p : a), null);
+  return {
+    picks: rows, curve, days: [...days.values()].sort((a, b) => b.day - a.day),
+    totals: { n: rows.length, open: rows.length - closed.length, closed: closed.length, wins: wins.length, winPct: closed.length ? Math.round((100 * wins.length) / closed.length) : null,
+      avg: xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(2) : null, median: median(xs), pnl: +rows.reduce((a, p) => a + (p.ruleX - 1) * 100, 0).toFixed(0),
+      best: best && { symbol: best.symbol, mint: best.mint, x: +best.ruleX.toFixed(2) }, worst: worst && { symbol: worst.symbol, mint: worst.mint, x: +worst.ruleX.toFixed(2) },
+      stops: closed.filter((p) => /stop loss/.test(p.ruleWhy || "")).length, unsellable: rows.filter((p) => p.unsellable).length, replayed: rows.filter((p) => p.replayed).length },
+    byStage: by("stage"), byAction: by("action"), guard: riskGuard(), guardRule: { losses: settings.guardLosses, pauseMin: settings.guardPauseMin, dayLoss: settings.guardDayLoss },
+    rule: { takeProfit: settings.pickTakeProfit, sellPct: settings.pickSellPct, trailPct: settings.pickTrailPct, stopPct: settings.pickStopPct, maxHours: settings.pickMaxHours }, paper: PAPER,
+  };
+}
+
 export function dayData() {
   const d0 = dayStart();
-  const shape = (o) => {
-    const t = db.prepare("SELECT name, image, mcap, status, safety_score FROM tokens WHERE mint = ?").get(o.mint) || {};
-    const peak = o.peak_mcap / o.mcap0, nowX = o.illiq ? 0 : o.last_mcap / o.mcap0, sim = json(o.sim, null);
-    return { mint: o.mint, symbol: o.symbol, name: t.name || null, image: t.image || null, t: o.t0, grade: o.grade, score: o.score, tier: o.tier, action: o.action, verdict: o.verdict, tag: o.tag, stage: o.stage,
-      // What the exit rule has made of it: banked sales plus whatever is still held, at the price now.
-      ruleX: o.exit_mult ?? (sim ? sim.realized + sim.left * nowX * COST : nowX * COST), ruleClosed: o.exit_mult != null, ruleWhy: o.exit_reason || (sim?.log.length ? `${sim.log.map((x) => x.why).join(", then ")}; still holding ${Math.round(sim.left * 100)}%` : "still holding all of it"), sold: sim?.log || [],
-      ratedAt: o.rated_mcap ?? null, entryMs: o.entry_ms ?? null, entryNote: o.entry_note || null, pwin: o.pwin ?? null, traction: o.traction ?? null,
-      entry: o.mcap0, mcapNow: o.illiq ? 0 : o.last_mcap, peak, peakT: o.peak_t, now: nowX, m1h: o.m1h, low: o.low_mcap / o.mcap0, unsellable: Boolean(o.illiq), dead: t.status === "dead", checked: o.last_t, safety: t.safety_score ?? null };
-  };
   const sum = (list) => {
     const xs = list.map((p) => p.now);
     return { n: list.length, medianNow: median(xs), medianPeak: median(list.map((p) => p.peak)), up: list.filter((p) => p.now > 1).length, hit2x: list.filter((p) => p.peak >= 2).length,

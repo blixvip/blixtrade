@@ -290,3 +290,17 @@ test("early rule and launch model end to end", async () => {
   assert.equal(earlyPick({ mint: "EarlyMintX", symbol: "EARLY" }, { p: 0.62, cp: 60 }), false);
   assert.equal(JSON.parse(db.prepare("SELECT r FROM entry_watch WHERE mint = ?").get("EarlyMintX").r).early, true);
 });
+
+test("risk guard: a run of losing exits pauses new picks", async () => {
+  const { riskGuard } = await import("../server/brain.js");
+  const S = await import("../server/settings.js");
+  assert.equal(riskGuard(), null);
+  const t = Date.now();
+  const ins = db.prepare("INSERT INTO outcomes (kind, ref, mint, t0, mcap0, peak_mcap, last_mcap, last_t, exit_mult, exit_t, symbol) VALUES ('pick', ?, ?, ?, 10000, 10000, 5000, ?, 0.55, ?, 'L')");
+  for (let i = 0; i < S.settings.guardLosses; i++) ins.run(`guard${i}:x`, `guard${i}`, t - 60e3 * (i + 2), t, t - 1000 * (i + 1));
+  await new Promise((r) => setTimeout(r, 5100));   // the guard re-checks every five seconds
+  const g = riskGuard();
+  assert.match(g.why, /losing exits in a row/);
+  assert.ok(g.until > t);
+  db.prepare("DELETE FROM outcomes WHERE ref LIKE 'guard%'").run();
+});

@@ -673,18 +673,20 @@ function researchSection(r, mint) {
   const who = providerOf(r.model || x.model);
   const old = Date.now() - r.t > 60 * 60_000;
   return `<div class="p-sec research">
-    <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${esc(x.confidence || "")} confidence · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p>
+    <div class="r-head">${gradeBadge(x.grade, "xl")}<div><h3 style="margin:0 0 4px">AI research <span class="dim">· ${x.quick ? "quick call" : `${esc(x.confidence || "")} confidence`} · ${ago(r.t)} ago</span></h3><p class="r-verdict">${esc(x.verdict)}</p>
       <p class="dim small" style="margin:6px 0 0">${tierMark(r)} ${r.tier === "fast" ? "Fast read" : "Deep read"} by ${esc(who)} (${esc(modelName(r.model || x.model))})${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}${x.searches ? ` · ${x.searches} live searches` : x.searched === false ? " · no live search: judged only the sources below" : ""}${r.status === "deep" ? ` · waiting for a deep read from ${deepName()}` : ""}${x.fast ? ` · fast read said ${esc(x.fast.grade)} (${esc(providerOf(x.fast.model))})` : ""}</p></div></div>
     ${old ? `<div class="warn-box">This research is ${ago(r.t)} old${s.market?.mcap ? ` and was written at ${money(s.market.mcap)} mcap` : ""}. The coin has moved since; the grade has not been refreshed.</div>` : ""}
-    ${x.trade ? `<div class="r-trade act-bg-${esc(x.trade.action)}"><div>${actionBadge(x.trade.action)} <b>Conviction ${x.trade.conviction}</b>${x.trade.entry ? ` · <span class="dim">Entry: ${esc(x.trade.entry)}</span>` : ""}</div>
+    ${x.trade ? `<div class="r-trade act-bg-${esc(x.trade.action)}"><div>${actionBadge(x.trade.action)} ${x.trade.conviction != null ? `<b>Conviction ${x.trade.conviction}</b>` : x.trade.pWin != null ? `<b>${x.trade.pWin}% chance of 2x before −40%</b>` : ""}${x.trade.entry ? ` · <span class="dim">Entry: ${esc(x.trade.entry)}</span>` : ""}</div>
       <p>${esc(x.trade.why || "")}</p>
       ${x.trade.action === "buy" ? `<div class="ladder">${(x.trade.takeProfits || []).map((tp) => `<span>${tp.sellPct}% @ ${tp.atMultiple}x</span>`).join("")}${x.trade.stopLossPct ? `<span class="stop">stop -${x.trade.stopLossPct}%</span>` : ""}${x.trade.trailingStopPct ? `<span>trail ${x.trade.trailingStopPct}%</span>` : ""}${x.trade.timeStopHours ? `<span>${x.trade.timeStopHours}h max</span>` : ""}</div>` : ""}</div>` : ""}
-    <div class="r-grid">
+    ${x.quick ? `<div class="r-card" style="margin-bottom:12px"><h4>The narrative${x.narrative?.tag ? ` · ${esc(x.narrative.tag)}` : ""}</h4><p>${esc(x.narrative?.summary || "")}</p>
+      <p class="note" style="margin:10px 0">This is the quick first call (a few seconds). ${r.status === "deep" ? `The full report from ${deepName()} is on its way.` : "The full report (reasoning, bull and bear case, ceiling, sources checked) is written for coins the quick call would trade, or when you ask."}</p>
+      ${r.status === "deep" ? "" : `<button class="btn" data-research="${esc(mint)}">Write the full report</button>`}</div>` : `<div class="r-grid">
       <div class="r-card"><h4>The narrative</h4><p>${esc(x.narrative?.summary || "")}</p>
         ${bar10("Strength", x.narrative?.strength)}${bar10("Timeliness", x.narrative?.timeliness)}${bar10("Originality", x.narrative?.originality)}${bar10("Reach", x.narrative?.reach)}</div>
       <div class="r-card"><h4>How high</h4><div class="ceiling">${esc(x.ceiling?.tier || "?")}</div><p>${esc(x.ceiling?.why || "")}</p>
         <h4 style="margin-top:12px">Catalyst</h4><p>${esc(x.catalyst || "none found")}</p></div>
-    </div>
+    </div>`}
     ${x.thinking ? `<div class="r-think"><h4>How it reasoned${x.trade?.pWin != null ? ` · ${esc(x.trade.action || "no call")}, ${x.trade.pWin}% chance of 2x before −40%` : ""}</h4>${[["what", "What it is"], ["demand", "Demand right now"], ["buyersLeft", "Who is left to buy"], ["edge", "Edge"], ["kill", "How it loses"]].filter(([k]) => x.thinking[k]).map(([k, l]) => `<p><b>${l}</b>${esc(String(x.thinking[k]))}</p>`).join("")}${x.trade?.why ? `<p><b>Decision</b>${esc(String(x.trade.why))}</p>` : ""}</div>` : ""}
     <div class="r-grid">${list("Bull case", x.bull, "bull")}${list("Bear case", x.bear, "bear")}</div>
     ${list("Red flags", x.redFlags, "flags")}
@@ -754,7 +756,115 @@ function narCard(n) {
 // One line that says where a self-running process stands, so "has not run" is never mistaken for "broken".
 const statusLine = (state, text) => `<div class="status-line s-${state}"><i></i><span>${esc(text)}</span></div>`;
 
+// ---------- Picks: every pick the radar has made ----------
+const picksState = { tab: store.get("picks:tab", "ledger"), state: "all", day: "all", sort: "t", dir: -1, q: "", timer: null };
+const pnlPct = (x) => x == null ? "—" : `${x >= 1 ? "+" : ""}${((x - 1) * 100).toFixed(Math.abs(x - 1) >= 1 ? 0 : 1)}%`;
+const dayName = (t) => { const d = new Date(t), n = new Date(); n.setHours(0, 0, 0, 0); return t >= n.getTime() ? "Today" : t >= n.getTime() - 864e5 ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); };
+// The running paper result, drawn as one line with the zero level marked.
+function equityChart(curve, w = 1100, h = 150) {
+  if (curve.length < 2) return `<div class="empty"><b>Not enough closed picks yet</b>The curve starts with the second closed pick.</div>`;
+  const vs = curve.map((p) => p.v), lo = Math.min(0, ...vs), hi = Math.max(0, ...vs), span = hi - lo || 1;
+  const X = (i) => (i / (curve.length - 1)) * w, Y = (v) => h - 8 - ((v - lo) / span) * (h - 16);
+  const line = curve.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join("");
+  const last = vs[vs.length - 1], col = last >= 0 ? "var(--up)" : "var(--down)";
+  return `<svg class="eq" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Running paper result">
+    <path d="${line} L${w},${Y(0)} L0,${Y(0)} Z" fill="${col}" fill-opacity=".08"/>
+    <line x1="0" x2="${w}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line-2)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+    <div class="eq-axis"><span>${dayName(curve[0].t)} ${clock(curve[0].t)}</span><span>high ${hi >= 0 ? "+" : ""}$${Math.round(hi).toLocaleString()} · low ${lo < 0 ? "−" : ""}$${Math.abs(Math.round(lo)).toLocaleString()}</span><span>${clock(curve[curve.length - 1].t)}</span></div>`;
+}
+const PICK_COLS_UI = [["t", "Picked"], ["symbol", "Coin"], ["state", "Status"], ["entry", "Entry mcap"], ["mcapNow", "Now / exit"], ["peak", "Peak"], ["ruleX", "Result (rule)"], ["now", "Just held"], ["held", "Held"], ["pwin", "AI call"], ["traction", "Traction"], ["safety", "Safety"]];
+function pickLedgerRow(p) {
+  const st = p.state === "open" ? `<span class="st2 open">open${p.left < 0.999 ? ` · ${Math.round(p.left * 100)}% left` : ""}</span>` : `<span class="st2 ${p.state}">${p.state}</span>`;
+  const call = p.early ? `<span class="dim">launch model</span>` : `${p.action ? `<span class="act act-${esc(p.action)}">${esc(p.action)}</span>` : ""}${p.pwin != null ? ` <span class="num">${p.pwin}%</span>` : ""}`;
+  return `<tr class="row" data-mint="${esc(p.mint)}" title="${esc(p.ruleWhy || "")}${p.entryNote ? ` · ${esc(p.entryNote)}` : ""}">
+    <td><span class="num">${clock(p.t)}</span><small class="sub">${dayName(p.t)}</small></td>
+    <td><div class="coin">${av(p, "sm")}<div><b>${esc(p.symbol || "?")}</b>${p.replayed ? ` <span class="tagx" title="Picked before the live watcher existed: result replayed from stored prices, take-profit filled at exactly its level.">replayed</span>` : ""}<small>${esc(p.tag || p.name || p.stage || "")}</small></div></div></td>
+    <td>${st}${p.unsellable ? `<small class="sub down">pool emptied</small>` : ""}</td>
+    <td class="num">${money(p.entry)}</td>
+    <td class="num">${p.unsellable ? "—" : money(p.mcapNow)}</td>
+    <td class="num ${p.peak >= 2 ? "up" : ""}">${mult(p.peak)}</td>
+    <td class="num ${xCls(p.ruleX)}"><b>${pnlPct(p.ruleX)}</b><small class="sub">${esc((p.ruleWhy || "").split(";")[0].slice(0, 34))}</small></td>
+    <td class="num ${xCls(p.now * 0.97)}">${pnlPct(p.now * 0.97)}</td>
+    <td class="num">${mins(p.held)}</td>
+    <td>${call}</td>
+    <td class="num">${p.traction ?? "—"}</td>
+    <td class="num ${p.safety == null ? "dim" : p.safety >= 70 ? "up" : p.safety >= 40 ? "" : "down"}">${p.safety ?? "—"}</td></tr>`;
+}
+function picksLedger(d) {
+  const T = d.totals, S = picksState, q = S.q.toLowerCase();
+  let rows = d.picks.filter((p) => (S.state === "all" || p.state === S.state) && (S.day === "all" || dayName(p.t) === S.day) && (!q || `${p.symbol} ${p.name} ${p.tag} ${p.mint}`.toLowerCase().includes(q)));
+  const val = (p) => S.sort === "symbol" ? String(p.symbol || "").toLowerCase() : S.sort === "state" ? p.state : p[S.sort] ?? -Infinity;
+  rows = rows.sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * S.dir);
+  const kpi = (label, value, sub, c = "") => `<div class="kp"><span>${label}</span><b class="num ${c}">${value}</b><small>${sub}</small></div>`;
+  const dayList = [...new Set(d.picks.map((p) => dayName(p.t)))];
+  const seg = (items, cur, attr) => `<div class="seg">${items.map(([k, l]) => `<button class="${cur === k ? "on" : ""}" data-${attr}="${esc(k)}">${l}</button>`).join("")}</div>`;
+  const split = (title, list) => list.length ? `<div class="mini"><h4>${title}</h4>${list.map((g) => `<div><span>${esc(g.key)}</span><span class="num">${g.wins}/${g.n} won</span><b class="num ${xCls(g.avg)}">${pnlPct(g.avg)}</b></div>`).join("")}</div>` : "";
+  const G = d.guard, GR = d.guardRule;
+  return `<div class="guard ${G ? "held" : ""}"><b>${G ? "Risk guard: new picks paused" : "Risk guard: on"}</b><span>${G ? `${esc(G.why)}. Resumes ${dayName(G.until) === "Today" ? `at ${clock(G.until)}` : "tomorrow"}. Open picks are still managed.` : `New picks pause for ${GR.pauseMin} minutes after ${GR.losses} losing exits in a row, and for the rest of the day once $100-a-pick is down $${GR.dayLoss}. Every entry is re-checked for safety at the second it is taken.`}</span><a class="linkish" href="#/settings">Change limits</a></div>
+    <div class="kps">
+      ${kpi("Picks", T.n, `${T.open} open · ${T.closed} closed`)}
+      ${kpi("Won", T.winPct == null ? "—" : `${T.winPct}%`, T.closed ? `${T.wins} of ${T.closed} closed above entry` : "nothing closed yet", T.winPct == null ? "" : T.winPct >= 50 ? "up" : "down")}
+      ${kpi("Average result", T.avg == null ? "—" : pnlPct(T.avg), `typical pick ${T.median == null ? "—" : pnlPct(T.median)}`, xCls(T.avg))}
+      ${kpi("$100 in every pick", `${T.pnl >= 0 ? "+" : "−"}$${Math.abs(T.pnl).toLocaleString()}`, `sold by the rule, after ${d.paper.costPctPerSide}% costs each way`, T.pnl >= 0 ? "up" : "down")}
+      ${kpi("Best", T.best ? pnlPct(T.best.x) : "—", T.best ? `$${esc(T.best.symbol)}` : "", "up")}
+      ${kpi("Stopped out", T.closed ? `${Math.round((100 * T.stops) / T.closed)}%` : "—", `${T.stops} stop losses · ${T.unsellable} pools emptied`)}
+    </div>
+    <div class="blk"><div class="blk-head"><h2>Running result</h2><small>$100 into every pick, sold by the exit rule: half at ${d.rule.takeProfit}x, ${d.rule.trailPct}% trailing stop, ${d.rule.stopPct}% stop, ${d.rule.maxHours}h limit. Paper only.</small></div>
+      <div class="eq-wrap">${equityChart(d.curve)}</div>
+      <div class="minis">${split("By stage when picked", d.byStage)}${split("By what the AI said", d.byAction)}
+        <div class="mini"><h4>By day</h4>${d.days.slice(0, 6).map((g) => `<div><span>${dayName(g.day)}</span><span class="num">${g.wins}/${g.closed} won · ${g.n} picks</span><b class="num ${g.pnl >= 0 ? "up" : "down"}">${g.pnl >= 0 ? "+" : "−"}$${Math.abs(Math.round(g.pnl)).toLocaleString()}</b></div>`).join("")}</div></div></div>
+    <div class="blk"><div class="blk-head tools"><h2>All picks <span class="count num">${rows.length}${rows.length !== d.picks.length ? ` of ${d.picks.length}` : ""}</span></h2>
+        ${seg([["all", "All"], ["open", "Open"], ["won", "Won"], ["lost", "Lost"]], S.state, "pkstate")}
+        ${seg([["all", "Every day"], ...dayList.slice(0, 5).map((x) => [x, x])], S.day, "pkday")}
+        <input class="input" id="pkq" placeholder="Search coin" value="${esc(S.q)}"></div>
+      <div class="table-wrap"><table class="ledger"><thead><tr>${PICK_COLS_UI.map(([k, l]) => `<th class="sortable ${S.sort === k ? "sorted" : ""}" data-pksort="${k}">${l}${S.sort === k ? (S.dir < 0 ? " ↓" : " ↑") : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.length ? rows.map(pickLedgerRow).join("") : `<tr><td colspan="${PICK_COLS_UI.length}">${empty("No picks match", "Change the filters above.")}</td></tr>`}</tbody></table></div>
+      ${T.replayed ? `<p class="note pad">${T.replayed} early picks are marked “replayed”: they were made before the one-second watcher existed and their result was rebuilt from stored prices, which flatters the take-profit. Hover a row for exactly how it was sold.</p>` : ""}</div>`;
+}
+async function picksTick(force) {
+  if (route() !== "picks") { clearInterval(picksState.timer); picksState.timer = null; return; }
+  const box = $("#pkBox");
+  if (!box || picksState.tab !== "ledger" || (document.hidden && !force)) return;
+  if (!force && document.activeElement?.id === "pkq") return;
+  const d = await api("picks/all").catch(() => null);
+  if (!d || !$("#pkBox")) return;
+  picksState.data = d;
+  const top = box.querySelector(".table-wrap")?.scrollTop || 0;
+  box.innerHTML = picksLedger(d);
+  const tw = box.querySelector(".table-wrap"); if (tw) tw.scrollTop = top;
+}
 async function viewPicks(main) {
+  main.innerHTML = `<div class="page-head slim"><div><h1>Picks</h1><p>Every coin the radar has picked, and what following its one exit rule would have returned. Paper only: nothing is bought.</p></div>
+      <div class="seg big">${[["ledger", "All picks"], ["desk", "AI desk"]].map(([k, l]) => `<button class="${picksState.tab === k ? "on" : ""}" data-pktab="${k}">${l}</button>`).join("")}</div></div>
+    <div id="pkBox"><div class="skel"></div><div class="skel"></div></div>`;
+  clearInterval(picksState.timer);
+  if (picksState.tab === "desk") return picksDesk($("#pkBox"));
+  picksState.timer = setInterval(picksTick, 5000);
+  await picksTick(true);
+}
+document.addEventListener("click", (e) => {
+  const el = e.target.closest?.("[data-pktab],[data-pkstate],[data-pkday],[data-pksort]");
+  if (!el) return;
+  const d = el.dataset, S = picksState;
+  if (d.pktab) { S.tab = d.pktab; store.set("picks:tab", S.tab); return render(); }
+  if (d.pkstate) S.state = d.pkstate;
+  else if (d.pkday) S.day = d.pkday;
+  else if (d.pksort) { if (S.sort === d.pksort) S.dir = -S.dir; else { S.sort = d.pksort; S.dir = d.pksort === "symbol" ? 1 : -1; } }
+  if (S.data && $("#pkBox")) $("#pkBox").innerHTML = picksLedger(S.data);
+});
+document.addEventListener("input", (e) => {
+  if (e.target.id !== "pkq") return;
+  picksState.q = e.target.value.trim();
+  const body = $("#pkBox .ledger tbody");
+  if (!picksState.data || !body) return;
+  // Redraw only the rows, so the box being typed in keeps its cursor.
+  const tmp = document.createElement("div"); tmp.innerHTML = picksLedger(picksState.data);
+  body.innerHTML = tmp.querySelector(".ledger tbody").innerHTML;
+  const c = $("#pkBox .count"); if (c) c.textContent = tmp.querySelector(".count").textContent;
+});
+
+async function picksDesk(main) {
   const d = await api("picks");
   const sc = d.scorecard, c = sc.calls, pb = d.playbook;
   const lastScout = d.narratives[0]?.t;
@@ -1537,6 +1647,9 @@ async function viewSettings(main) {
         ${num("pickTrailPct", "Pick exit: trailing stop (%)", "After taking profit, sell the rest once it falls this far below its high.")}
         ${num("pickStopPct", "Pick exit: stop loss (%)", "Before any profit is taken, sell everything on this fall from the pick price.")}
         ${num("pickMaxHours", "Pick exit: time limit (hours)", "Sell whatever is left after this long.")}
+        ${num("guardLosses", "Risk guard: losing exits in a row", "This many losses in a row pauses new picks. 0 switches it off.")}
+        ${num("guardPauseMin", "Risk guard: pause (minutes)", "How long new picks stay paused after that run of losses.")}
+        ${num("guardDayLoss", "Risk guard: daily loss limit ($)", "With $100 in every pick: once the day is down this much, no new picks until tomorrow. 0 switches it off.")}
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="earlyAuto" ${s.earlyAuto ? "checked" : ""}> Enter the launch model's strongest coins before the AI has read them</label><small>Only while the model's top 10% made money on launches it had never seen.</small></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="claudeFast" ${s.claudeFast ? "checked" : ""}> Claude Haiku does fast reads when Grok and Groq are out</label><small>Seconds per coin on your Claude login, capped by “Max fast reads per hour”. No live X search.</small></div>
         ${num("buyConviction", "Buy call at conviction", "Starting point; the self-review tunes it from results (55-90).")}

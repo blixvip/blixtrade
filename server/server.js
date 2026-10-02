@@ -524,6 +524,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/bot") return send(res, 200, cached("bot", 1000, () => ({ anti: antiSlop(), day: brain.dayData(), live: pulseData().live, scout: research.scoutStats, early: earlyData() })));
     if (p === "/api/triage") return send(res, 200, cached("triage", 30000, triageRecord));
     if (p === "/api/picks") return send(res, 200, cached("picks", 8000, brain.picksData));
+    if (p === "/api/picks/all") return send(res, 200, cached("picks-all", 3000, brain.allPicks));
     if (p === "/api/picks/review" && POST) { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && POST) { const s = brain.scoutStatus(); if (s.available) brain.scout(); return send(res, 200, { started: s.available, why: s.why }); }
     const rm = p.match(new RegExp(`^/api/research/(${MINT})$`));
@@ -630,6 +631,8 @@ server.listen(PORT, "127.0.0.1", () => {
   if (meta.get("deep_cap_v21") !== "1") { if (settings.researchPerHour < 40) saveSettings({ researchPerHour: 40 }); meta.set("deep_cap_v21", "1"); }
   // Fast first reads moved to Claude Haiku while Grok is out: give that lane room to keep up with launches.
   if (meta.get("fast_cap_v17") !== "1") { if (settings.fastPerHour < 200) saveSettings({ fastPerHour: 200 }); meta.set("fast_cap_v17", "1"); }
+  // First reads became quick calls (a few seconds each, a fraction of the words): room for twice as many.
+  if (meta.get("quick_reads_v28") !== "1") { if (settings.fastPerHour < 600) saveSettings({ fastPerHour: 600 }); meta.set("quick_reads_v28", "1"); }
   // Briefs written before completeness was checked: mark the ones that were cut off.
   if (meta.get("briefs_checked") !== "1") {
     for (const b of db.prepare("SELECT id, body FROM briefs").all()) { const why = briefProblem(b.body); if (why) db.prepare("UPDATE briefs SET status = 'partial', stop = ? WHERE id = ?").run(why, b.id); }

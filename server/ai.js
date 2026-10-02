@@ -53,11 +53,12 @@ async function call(system, prompt, budget, model) {
 
 // maxTokens is the room for the answer itself. `truncated` is true when the model still ran out of
 // room after one retry with a bigger budget: the caller must treat that text as partial.
-export async function ask(system, prompt, maxTokens = 1400, { model = MODEL } = {}) {
+// `room`: extra budget for a model that thinks before it writes (the quick model does not, so it passes 0).
+export async function ask(system, prompt, maxTokens = 1400, { model = MODEL, room = THINKING_ROOM } = {}) {
   const t0 = Date.now();
   try {
-    let r = await call(system, prompt, maxTokens + THINKING_ROOM, model);
-    if (r.stop === "max_tokens") r = await call(system, prompt, maxTokens * 2 + THINKING_ROOM * 2, model);
+    let r = await call(system, prompt, maxTokens + room, model);
+    if (r.stop === "max_tokens") r = await call(system, prompt, maxTokens * 2 + room * 2, model);
     const truncated = r.stop === "max_tokens";
     usage.calls++; usage.lastOk = Date.now(); usage.lastMs = Date.now() - t0;
     if (truncated) usage.truncated++;
