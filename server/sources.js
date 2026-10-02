@@ -142,7 +142,7 @@ export function pumpStream({ onToken, onMigration, onStatus }) {
     };
     ws.onmessage = (m) => {
       let d; try { d = JSON.parse(m.data); } catch { return; }
-      if (d.txType === "create" && d.mint) onToken?.({ mint: d.mint, symbol: d.symbol, name: d.name, uri: d.uri, mcapSol: d.marketCapSol, creator: d.traderPublicKey, devSol: d.solAmount, source: "pump-live" });
+      if (d.txType === "create" && d.mint) onToken?.({ mint: d.mint, symbol: d.symbol, name: d.name, uri: d.uri, pool: d.pool, mcapSol: d.marketCapSol, creator: d.traderPublicKey, devSol: d.solAmount, source: "pump-live" });
       else if (d.txType === "migrate" || (d.mint && d.pool && !d.txType)) onMigration?.({ mint: d.mint, pool: d.pool });
     };
     ws.onclose = () => { onStatus?.("reconnecting"); if (alive) setTimeout(connect, retry = Math.min(retry * 2, 60000)); };

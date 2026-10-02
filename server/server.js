@@ -21,6 +21,7 @@ import { testGrok, detectVersion, grokTier } from "./grok.js";
 import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL } from "./quality.js";
 import * as health from "./health.js";
 import { startEarly, earlyData } from "./early.js";
+import * as images from "./images.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 
@@ -460,6 +461,8 @@ const server = http.createServer(async (req, res) => {
   const params = Object.fromEntries(url.searchParams);
   try {
     if (!allowed(req)) return send(res, 403, { error: "Meme Radar only answers this PC." });
+    const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (pic) return await images.serve(pic[1], res);
     if (!p.startsWith("/api/")) {
       const file = path.join(PUBLIC, p === "/" ? "index.html" : p);
       if (!file.startsWith(PUBLIC) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
@@ -647,6 +650,8 @@ server.listen(PORT, "127.0.0.1", () => {
     const last = db.prepare("SELECT t FROM briefs ORDER BY t DESC LIMIT 1").get();
     if (!last || Date.now() - last.t >= settings.briefEveryMin * MIN) tryBrief();
   }, 5 * MIN);
+  setInterval(images.prunePictures, 6 * HOUR);
+  setInterval(() => images.warm(watched), 3000);
   // A daily copy of the database, so a corrupted or lost file costs at most a day.
   setInterval(() => {
     if (Date.now() - +meta.get("backup_t", 0) < DAY) return;

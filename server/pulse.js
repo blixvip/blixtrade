@@ -37,15 +37,18 @@ async function fetchMeta(l) {
     const r = await fetch(uri, { signal: AbortSignal.timeout(6000) });
     const m = JSON.parse((await r.text()).slice(0, 200_000));
     meta.set(l.mint, { image: safeUrl(m.image ? ipfs(m.image) : null), twitter: safeUrl(m.twitter), website: safeUrl(m.website), telegram: safeUrl(m.telegram), description: String(m.description || "").slice(0, 200) });
-  } catch { meta.set(l.mint, { failed: true }); }
+  } catch { meta.set(l.mint, { failed: true, t: now(), n: (tries.get(l.mint) || 0) + 1 }); tries.set(l.mint, (tries.get(l.mint) || 0) + 1); }
   finally { fetching--; }
 }
+const tries = new Map();
 function enrich() {
-  // Newest first, a few at a time: the gateway is free, so stay polite.
-  for (let i = recentLaunches.length - 1; i >= Math.max(0, recentLaunches.length - 60) && fetching < 5; i--) {
-    const l = recentLaunches[i];
-    if (l.uri && !meta.has(l.mint)) fetchMeta(l);
+  // Newest first, a few at a time: the gateway is free, so stay polite. A metadata file that did not
+  // answer is asked for twice more (new files often take a few seconds to appear on the gateways).
+  for (let i = recentLaunches.length - 1; i >= Math.max(0, recentLaunches.length - 90) && fetching < 8; i--) {
+    const l = recentLaunches[i], m = meta.get(l.mint);
+    if (l.uri && (!m || (m.failed && m.n < 3 && now() - m.t > 8000 * m.n))) fetchMeta(l);
   }
+  if (tries.size > 3000) tries.clear();
   if (meta.size > 3000) for (const k of [...meta.keys()].slice(0, 1000)) meta.delete(k);
 }
 
@@ -70,6 +73,7 @@ function row(t, ai) {
     holders: s.totalHolders ?? null, top10: s.top10 ?? null, dev: s.devPct ?? null, insiders: s.insiderPct ?? null,
     safety: t.safety_score, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
     x: link(/twitter|x\.com/i), web: links.find((l) => l.type === "website")?.url || null, tg: link(/telegram|t\.me/i),
+    tiktok: link(/tiktok/i), creator: t.creator || null, paid: (t.boosts || 0) > 0 || Boolean(t.header),
     ai: ai || null,
   };
 }
@@ -91,7 +95,7 @@ export function pulseData() {
     };
     const age = now() - l.seen;
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
-      desc: m.description || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
+      desc: m.description || null, creator: base.creator || l.creator || null, pool: l.pool || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
   }).map(withLive);
   // A coin that's still trading isn't faded, whatever the 4-minute check said.

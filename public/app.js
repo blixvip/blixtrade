@@ -80,11 +80,35 @@ const initials = (s, n = 3) => Array.from(String(s || "?").replace(/^\$/, "")).s
 // would start again from that source on every re-draw and never get to the one that works (an empty box).
 // So: remember which address worked for each coin, and which addresses are dead.
 const imgGood = new Map(), imgBad = new Set();
+// Coin pictures come from the radar itself (/img/<mint>), which fetches them from wherever they live.
+// A coin a few seconds old may not have one yet: the generated picture stands in and the real one is
+// asked for again a few times.
+const picTries = new Map();   // mint -> { n, t }
+const picHave = new Set();    // mints whose picture has loaded once (so re-draws go straight to it)
 document.addEventListener("load", (e) => {
   const i = e.target;
-  if (i?.tagName === "IMG" && i.dataset.mint && !i.src.startsWith("data:") && i.naturalWidth > 1) imgGood.set(i.dataset.mint, i.src);
+  if (i?.tagName !== "IMG" || i.src.startsWith("data:") || !(i.naturalWidth > 1)) return;
+  if (i.dataset.pic) { picHave.add(i.dataset.pic); picTries.delete(i.dataset.pic); i.classList.remove("gen"); i.style.backgroundImage = "none"; }
+  else if (i.dataset.mint) imgGood.set(i.dataset.mint, i.src);
 }, true);
+setInterval(() => {
+  for (const img of document.querySelectorAll("img.av[data-pic].gen")) {
+    const m = img.dataset.pic, tr = picTries.get(m);
+    if (!tr || tr.n > 6 || Date.now() - tr.t < 5000 * 2 ** (tr.n - 1)) continue;
+    const probe = new Image();
+    probe.onload = () => { picHave.add(m); picTries.delete(m); for (const el of document.querySelectorAll(`img.av[data-pic="${m}"]`)) { el.src = probe.src; el.classList.remove("gen"); } };
+    probe.onerror = () => picTries.set(m, { n: tr.n + 1, t: Date.now() });
+    picTries.set(m, { n: tr.n, t: Date.now() + 60_000 });   // not again while this one is in flight
+    probe.src = `/img/${m}?r=${tr.n}`;
+  }
+}, 2000);
 window.avFail = (img) => {
+  if (img.dataset.pic) {
+    if (img.classList.contains("gen")) return;
+    if (!picTries.has(img.dataset.pic)) picTries.set(img.dataset.pic, { n: 1, t: Date.now() });
+    img.classList.add("gen"); img.src = img.dataset.fb;
+    return;
+  }
   if (img.src && !img.src.startsWith("data:")) { imgBad.add(img.src); if (imgBad.size > 4000) imgBad.clear(); }
   const alts = (img.dataset.alt || "").split("|").filter(Boolean);
   if (alts.length) { img.dataset.alt = alts.slice(1).join("|"); img.src = alts[0]; return; }
@@ -100,6 +124,12 @@ document.addEventListener("submit", (e) => e.preventDefault());
 // these in from launch metadata and GeckoTerminal), then a generated one with the ticker.
 function av(t, size = "") {
   const fb = genAvatar(t.mint || t.symbol || "?", initials(t.symbol));
+  if (t.mint && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t.mint)) {
+    // Known to be missing for now: show the generated one straight away, the retry loop swaps it in.
+    const wait = picTries.has(t.mint) && !picHave.has(t.mint);
+    // The generated picture sits behind the real one, so a box is never empty while a picture loads.
+    return `<img class="av ${size} ${wait ? "gen" : ""}" src="${wait ? fb : `/img/${t.mint}`}" data-pic="${t.mint}" data-mint="${t.mint}" data-fb="${fb}" style="background-image:url('${fb}')" alt="">`;
+  }
   const list = [];
   if (t.mint && /pump$/.test(t.mint)) list.push(`https://images.pump.fun/coin-image/${t.mint}?variant=${size === "xl" || size === "lg" ? "200x200" : "86x86"}`);
   if (t.image && !/mypinata\.cloud/.test(t.image)) list.push(t.image);
@@ -775,7 +805,7 @@ async function viewPicks(main) {
 }
 
 // ---------- pulse (live three-column view, AI rating every coin as it streams) ----------
-const pulseState = { tab: store.get("pulse:tab", "new"), botTimer: null, q: "", min: "all", timer: null, rows: new Map(), first: true, f: store.get("pulse:f", {}), ai: null };
+const pulseState = { tab: store.get("pulse:tab", "new"), botTimer: null, q: "", min: "all", timer: null, rows: new Map(), first: true, f: store.get("pulse:f", {}), cq: {}, ai: null };
 const GRADE_RANK = { "A+": 11, A: 10, "A-": 9, "B+": 8, B: 7, "B-": 6, "C+": 5, C: 4, "C-": 3, D: 2, F: 1 };
 const ageStr = (ms) => { const s = ms / 1000; return s < 60 ? `${Math.max(0, Math.floor(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
 const compact = (n) => n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}K` : `$${Math.round(n)}`;
@@ -841,21 +871,103 @@ function pulseRow(t, col) {
 
 // Numeric filters for the live columns. A coin with no reading for a field (holders are unknown until
 // the safety check runs) is hidden by that field's filter rather than assumed to pass.
-const PULSE_FILTERS = [["minMcap", "Mcap ≥", "$"], ["maxMcap", "Mcap ≤", "$"], ["minVol", "Volume ≥", "$"], ["minTx", "Trades ≥", ""], ["minHolders", "Holders/traders ≥", ""],
-  ["maxTop10", "Top 10 hold ≤", "%"], ["maxDev", "Dev holds ≤", "%"], ["maxInsider", "Insiders ≤", "%"], ["maxDevCount", "Dev launches (6h) ≤", ""], ["minAge", "Age ≥", "min"], ["maxAge", "Age ≤", "min"]];
-const PULSE_PRESETS = { "Real traction": { minTx: 40, minVol: 5000, maxDevCount: 3 }, "Clean holders": { maxTop10: 30, maxDev: 5, maxInsider: 15 } };
-function pulseNumeric(t, f) {
-  const has = (k) => f[k] !== undefined && f[k] !== "" && f[k] != null;
-  const ge = (k, v) => !has(k) || (v != null && v >= +f[k]), le = (k, v) => !has(k) || (v != null && v <= +f[k]);
-  const mcap = t.mcap ?? (t.startMcapSol ? t.startMcapSol * (pulseState.sol || 150) : null);
-  return ge("minMcap", mcap) && le("maxMcap", mcap) && ge("minVol", t.vol ?? t.liveVol) && ge("minTx", (t.buys || 0) + (t.sells || 0)) && ge("minHolders", t.holders ?? t.traders)
-    && le("maxTop10", t.top10) && le("maxDev", t.dev) && le("maxInsider", t.insiders) && le("maxDevCount", t.devCount ?? 1) && ge("minAge", t.age / 60_000) && le("maxAge", t.age / 60_000);
+//
+// Pulse Filters: the same layout Axiom and GMGN use. Each column (New Pairs, Final Stretch, Migrated) has
+// its own set: keywords, launchpads, an Audit tab, a $ Metrics tab and a Socials tab, with three saved
+// slots (1 / 2 / 3). Fields those sites fill from their own private indexers (snipers, bundles, X follower
+// counts, fees) are listed but switched off: the radar has no free source for them and does not guess.
+const PF_COLS = [["new", "New Pairs"], ["stretch", "Final Stretch"], ["migrated", "Migrated"]];
+const PF_PROTOCOLS = ["Pump", "Bonk", "Bags", "Moonshot", "Jupiter Studio", "Believe", "LaunchLab", "Dynamic BC", "PumpSwap", "Raydium", "Meteora AMM", "Orca", "Other"];
+const PF_NO_SOURCE = ["Mayhem", "Bonkers", "Rise Rich", "Stonkfun", "Printr", "Liquid", "Surge", "Soar", "Heaven", "Daos.fun", "Candle", "Sugar", "Moonit", "Boop"];
+// [key, label, unit, value(t)]; a null value function = no data source.
+const PF_AUDIT = [
+  ["age", "Age", "m", (t) => t.age / 60_000], ["top10", "Top 10 Holders %", "%", (t) => t.top10], ["dev", "Dev Holding %", "%", (t) => t.dev],
+  ["snipers", "Snipers %", "%", null], ["insiders", "Insiders %", "%", (t) => t.insiders], ["bundle", "Bundle %", "%", null],
+  ["holders", "Holders", "", (t) => t.holders ?? t.traders], ["pro", "Pro Traders", "", null], ["devMig", "Dev Migrations", "", null],
+  ["devPairs", "Dev Pairs Created", "", (t) => t.devCount ?? null], ["safety", "Safety Score", "", (t) => t.safety], ["ai", "AI Score", "", (t) => t.ai?.rated ? t.ai.score : null],
+];
+const PF_METRICS = [
+  ["liq", "Liquidity ($)", "$", (t) => t.liq], ["vol", "Volume ($)", "$", (t) => t.vol ?? t.liveVol], ["mcap", "Market Cap ($)", "$", (t) => t.mcap ?? (t.startMcapSol ? t.startMcapSol * (pulseState.sol || 150) : null)],
+  ["curve", "B. curve %", "%", (t) => t.graduated ? 100 : t.progress != null ? t.progress * 100 : null], ["fees", "Global Fees Paid (SOL)", "SOL", null],
+  ["txns", "Txns", "", (t) => (t.buys || 0) + (t.sells || 0)], ["buys", "Num Buys", "", (t) => t.buys ?? 0], ["sells", "Num Sells", "", (t) => t.sells ?? 0],
+  ["traders", "Traders", "", (t) => t.traders ?? t.holders], ["devBuy", "Dev Buy (SOL)", "SOL", (t) => t.devSol ?? null],
+];
+const PF_SOCIAL_RANGES = [["xFollowers", "Twitter Followers", "", null], ["xFollowing", "Twitter Following", "", null], ["xReuse", "Twitter Reuses", "", null], ["xRenames", "X Renames", "", null], ["tweetAge", "Tweet Age", "h", null]];
+const xInfo = (t) => {
+  if (!t.x) return null;
+  try { const u = new URL(t.x), seg = u.pathname.split("/").filter(Boolean); return { handle: seg[0] && seg[0] !== "i" ? seg[0].toLowerCase() : null, community: /\/i\/communities\//.test(u.pathname), profile: seg.length === 1 && seg[0] !== "i" }; } catch { return null; }
+};
+// [key, label, test(t)]; null test = no data source.
+const PF_TOGGLES = [
+  ["community", "Community", (t) => Boolean(xInfo(t)?.community)], ["paid", "Dex Paid", (t) => Boolean(t.paid)], ["twitter", "Twitter", (t) => Boolean(t.x)], ["website", "Website", (t) => Boolean(t.web)],
+  ["telegram", "Telegram", (t) => Boolean(t.tg)], ["tiktok", "TikTok", (t) => Boolean(t.tiktok)], ["anySocial", "At Least One Social", (t) => Boolean(t.x || t.web || t.tg || t.tiktok)], ["pumpLive", "Only Pump Live", null],
+  ["xProfile", "X profile only", (t) => Boolean(xInfo(t)?.profile)], ["noX", "No X link", (t) => !t.x], ["onlyX", "Only X, no other links", (t) => Boolean(t.x) && !t.web && !t.tg && !t.tiktok],
+];
+// GMGN's checkbox row, kept under Audit.
+const PF_FLAGS = [
+  ["devSold", "Dev Sell All", (t) => t.dev != null && t.dev <= 0.01], ["devHolds", "Dev Still Holding", (t) => t.dev != null && t.dev > 0.01], ["noSlop", "Exclude Slop", (t) => t.tri?.label !== "slop" || Boolean(t.ai?.rated)],
+  ["rated", "AI Rated Only", (t) => Boolean(t.ai?.rated)], ["safe", "Passed Safety Only", (t) => t.safety != null && !t.danger], ["origAvatar", "Original Avatar", null], ["origSocials", "Original Socials", null], ["noWash", "Exclude Wash Trading", null], ["devBurnt", "Dev Burnt", null],
+];
+const PF_RANGES = [...PF_AUDIT, ...PF_METRICS, ...PF_SOCIAL_RANGES];
+const PF_BOOLS = [...PF_TOGGLES, ...PF_FLAGS];
+// Where a coin was launched and where it trades now.
+function protoOf(t) {
+  const m = t.mint || "", d = String(t.dex || "").toLowerCase(), out = new Set();
+  if (/pump$/.test(m) || t.pool === "pump" || d === "pumpfun") out.add("Pump");
+  if (/bonk$/.test(m) || t.pool === "bonk") out.add("Bonk");
+  if (/BAGS$/.test(m) || d === "bags") out.add("Bags");
+  if (/moon$/.test(m) || d === "moonshot") out.add("Moonshot");
+  if (/jups$/.test(m)) out.add("Jupiter Studio");
+  if (/BLV$/.test(m)) out.add("Believe");
+  if (d === "launchlab" || t.pool === "launchlab") out.add("LaunchLab");
+  if (d === "meteoradbc") out.add("Dynamic BC");
+  if (d === "pumpswap") out.add("PumpSwap");
+  if (d === "raydium") out.add("Raydium");
+  if (d === "meteora") out.add("Meteora AMM");
+  if (d === "orca") out.add("Orca");
+  if (!out.size) out.add("Other");
+  return out;
 }
-function pulseFilter(list) {
-  const q = pulseState.q.toLowerCase();
+const pfBlank = () => ({ new: {}, stretch: {}, migrated: {} });
+const pf = { slot: store.get("pulse:pf:slot", 0), slots: store.get("pulse:pf:slots", null) || [pfBlank(), pfBlank(), pfBlank()], col: "new", tab: "protocols", draft: null, more: false, io: false };
+const pfSet = (col) => pf.slots[pf.slot][col] || {};
+const pfSave = () => { store.set("pulse:pf:slots", pf.slots); store.set("pulse:pf:slot", pf.slot); };
+const pfHas = (v) => v !== undefined && v !== "" && v != null;
+const pfWords = (s) => String(s || "").toLowerCase().split(",").map((w) => w.trim().replace(/^@/, "")).filter(Boolean);
+// How many filters are on, by section (the little numbers next to each tab).
+function pfCount(f, part) {
+  const ranges = (list) => list.filter(([k]) => pfHas(f[k + "Min"]) || pfHas(f[k + "Max"])).length;
+  const bools = (list) => list.filter(([k]) => f[k]).length;
+  const n = { protocols: f.protocols ? 1 : 0, audit: ranges(PF_AUDIT) + bools(PF_FLAGS) + (pfWords(f.devWallets).length ? 1 : 0), metrics: ranges(PF_METRICS), socials: ranges(PF_SOCIAL_RANGES) + bools(PF_TOGGLES) + (pfWords(f.handles).length ? 1 : 0) };
+  if (part) return n[part];
+  return n.protocols + n.audit + n.metrics + n.socials + (pfWords(f.kw).length ? 1 : 0) + (pfWords(f.xkw).length ? 1 : 0);
+}
+// Does a coin pass one column's filters? A coin with no reading for a filtered field is hidden, not assumed to pass.
+function pfPass(t, f) {
+  const text = `${t.symbol || ""} ${t.name || ""}`.toLowerCase();
+  const kw = pfWords(f.kw), xkw = pfWords(f.xkw);
+  if (kw.length && !kw.some((w) => text.includes(w))) return false;
+  if (xkw.some((w) => text.includes(w))) return false;
+  if (f.protocols) { const p = protoOf(t); if (!f.protocols.some((x) => p.has(x))) return false; }
+  for (const [k, , , val] of PF_RANGES) {
+    const lo = f[k + "Min"], hi = f[k + "Max"];
+    if (!val || (!pfHas(lo) && !pfHas(hi))) continue;
+    const v = val(t);
+    if (v == null || (pfHas(lo) && v < +lo) || (pfHas(hi) && v > +hi)) return false;
+  }
+  for (const [k, , test] of PF_BOOLS) if (f[k] && test && !test(t)) return false;
+  const handles = pfWords(f.handles);
+  if (handles.length && !handles.includes(xInfo(t)?.handle)) return false;
+  const devs = pfWords(f.devWallets);
+  if (devs.length && !devs.includes(String(t.creator || "").toLowerCase())) return false;
+  return true;
+}
+function pulseFilter(list, col = "new") {
+  const q = pulseState.q.toLowerCase(), f = pfSet(col), cq = (pulseState.cq[col] || "").toLowerCase();
   return list.filter((t) => {
     if (q && !`${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q)) return false;
-    if (!pulseNumeric(t, pulseState.f)) return false;
+    if (cq && !`${t.symbol} ${t.name}`.toLowerCase().includes(cq)) return false;
+    if (!pfPass(t, f)) return false;
     // "Rated" means a finished grade. A coin that is only waiting in the queue has not been rated.
     const done = Boolean(t.ai?.rated), g = done ? GRADE_RANK[t.ai.grade] || 0 : 0;
     if (pulseState.min === "noslop") return t.tri?.label !== "slop" || done;
@@ -867,6 +979,119 @@ function pulseFilter(list) {
     return true;
   });
 }
+
+// ----- the filter window -----
+const PF_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>`;
+function pfRange([k, label, unit, val], f) {
+  const off = !val;
+  return `<div class="pf-field ${off ? "off" : ""}" ${off ? 'title="No free data source for this one, so it is switched off rather than guessed."' : ""}><span>${label}</span>
+    <div class="pf-mm"><label><input class="input num" type="number" step="any" placeholder="Min" data-pf="${k}Min" value="${esc(f[k + "Min"] ?? "")}" ${off ? "disabled" : ""}>${unit ? `<em>${unit}</em>` : ""}</label>
+    <label><input class="input num" type="number" step="any" placeholder="Max" data-pf="${k}Max" value="${esc(f[k + "Max"] ?? "")}" ${off ? "disabled" : ""}>${unit ? `<em>${unit}</em>` : ""}</label></div></div>`;
+}
+const pfBool = ([k, label, test], f) => `<button class="pf-tog ${f[k] ? "on" : ""} ${test ? "" : "off"}" data-pfb="${k}" ${test ? "" : 'disabled title="No free data source for this one."'}>${label}</button>`;
+function pfBody(f) {
+  if (pf.tab === "protocols") {
+    const on = (p) => !f.protocols || f.protocols.includes(p);
+    return `<div class="pf-sec"><b>Protocols</b><button class="btn sm-btn" data-pfall>${f.protocols ? "Select All" : "Unselect All"}</button></div>
+      <div class="pf-protos">${PF_PROTOCOLS.map((p) => `<button class="pf-proto ${on(p) ? "on" : ""}" data-pfp="${p}">${p}</button>`).join("")}
+      ${pf.more ? PF_NO_SOURCE.map((p) => `<button class="pf-proto off" disabled title="The radar does not see this launchpad yet.">${p}</button>`).join("") : ""}</div>
+      <button class="pf-more" data-pfmore>${pf.more ? "Show less" : `Show more <i>${PF_NO_SOURCE.length}</i>`}</button>
+      <div class="pf-sec"><b>Quote Tokens</b></div>
+      <div class="pf-protos">${["SOL", "USDC", "USD1", "STOCK", "OTHER"].map((q) => `<button class="pf-proto ${q === "SOL" ? "on" : "off"}" disabled title="Every coin the radar tracks is paired with SOL.">${q}</button>`).join("")}</div>`;
+  }
+  if (pf.tab === "audit") return `<div class="pf-flags">${PF_FLAGS.map((x) => pfBool(x, f)).join("")}</div><div class="pf-grid">${PF_AUDIT.map((x) => pfRange(x, f)).join("")}</div>
+    <div class="pf-field wide"><span>Search Dev Wallet</span><input class="input" placeholder="wallet1, wallet2…" data-pf="devWallets" value="${esc(f.devWallets || "")}"></div>`;
+  if (pf.tab === "metrics") return `<div class="pf-grid">${PF_METRICS.map((x) => pfRange(x, f)).join("")}</div>`;
+  return `<div class="pf-flags">${PF_TOGGLES.map((x) => pfBool(x, f)).join("")}</div>
+    <div class="pf-field wide"><span>Include Twitter Handles (up to 10, comma separated)</span><input class="input" placeholder="e.g. elonmusk, pumpdotfun…" data-pf="handles" value="${esc(f.handles || "")}"></div>
+    <div class="pf-grid">${PF_SOCIAL_RANGES.map((x) => pfRange(x, f)).join("")}</div>`;
+}
+function pfRender() {
+  let host = $("#pfm");
+  if (!pf.draft) { host?.remove(); return; }
+  if (!host) { host = document.createElement("div"); host.id = "pfm"; document.body.append(host); }
+  const f = pf.draft[pf.col];
+  const badge = (n) => n ? `<i>${n}</i>` : "";
+  const keep = host.querySelector(".pf-scroll")?.scrollTop || 0;
+  host.innerHTML = `<div class="pf-back" data-pfclose></div><div class="pf-win" role="dialog" aria-label="Pulse Filters">
+    <div class="pf-head"><h2>${PF_ICON} Pulse Filters</h2>
+      <div class="pf-slots">${[0, 1, 2].map((i) => `<button class="${pf.slot === i ? "on" : ""}" data-pfslot="${i}" title="Saved filter set ${i + 1}">${i + 1}</button>`).join("")}</div>
+      <button class="pf-ic" data-pfio title="Import / export these filters">⇅</button><button class="pf-ic" data-pfclose title="Close">✕</button></div>
+    <div class="pf-cols">${PF_COLS.map(([k, l]) => `<button class="${pf.col === k ? "on" : ""}" data-pfcol="${k}">${l}${badge(pfCount(pf.draft[k]))}</button>`).join("")}
+      <button class="pf-ic pf-reset" data-pfreset title="Clear this column's filters">↺</button></div>
+    ${pf.io ? `<div class="pf-io"><textarea class="input" id="pfio" spellcheck="false">${esc(JSON.stringify(pf.draft))}</textarea><div><button class="btn sm-btn" data-pfcopy>Copy</button><button class="btn sm-btn" data-pfload>Load what is in the box</button></div></div>` : ""}
+    <div class="pf-scroll">
+      <div class="pf-kw"><label><span>Search Keywords</span><input class="input" placeholder="keyword1, keyword2…" data-pf="kw" value="${esc(f.kw || "")}"></label>
+        <label><span>Exclude Keywords</span><input class="input" placeholder="keyword1, keyword2…" data-pf="xkw" value="${esc(f.xkw || "")}"></label></div>
+      <div class="pf-tabs">${[["protocols", "Protocols"], ["audit", "Audit"], ["metrics", "$ Metrics"], ["socials", "Socials"]].map(([k, l]) => `<button class="${pf.tab === k ? "on" : ""}" data-pftab="${k}">${l}${badge(pfCount(f, k))}</button>`).join("")}</div>
+      <div class="pf-body">${pfBody(f)}</div>
+    </div>
+    <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source.</span><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
+  host.querySelector(".pf-scroll").scrollTop = keep;
+}
+function pfOpen(col) { pf.draft = structuredClone(pf.slots[pf.slot]); pf.col = col || pf.col; pf.io = false; pfRender(); }
+function pfApply(close = true) {
+  if (pf.draft) pf.slots[pf.slot] = structuredClone(pf.draft);
+  pfSave();
+  if (close) { pf.draft = null; pfRender(); }
+  pfHeads(); pulseState.first = true; pulseTick();
+}
+// The column headers show the active slot and how many filters each column has on.
+function pfHeads() {
+  for (const [k] of PF_COLS) {
+    const b = $(`#pfbtn-${k}`); if (!b) continue;
+    const n = pfCount(pfSet(k));
+    b.classList.toggle("on", n > 0); b.innerHTML = `${PF_ICON}${n ? `<i>${n}</i>` : ""}`;
+  }
+  document.querySelectorAll("[data-pslot]").forEach((b) => b.classList.toggle("on", +b.dataset.pslot === pf.slot));
+}
+document.addEventListener("click", (e) => {
+  const el = e.target.closest?.("[data-pfopen],[data-pslot],#pfm button,#pfm .pf-back");
+  if (!el) return;
+  if (el.dataset.pfopen) return pfOpen(el.dataset.pfopen);
+  if (el.dataset.pslot != null) { pf.slot = +el.dataset.pslot; pfSave(); pfHeads(); pulseState.first = true; return pulseTick(); }
+  const d = el.dataset, f = pf.draft?.[pf.col];
+  if (!f) return;
+  if ("pfclose" in d) { pf.draft = null; return pfRender(); }
+  if ("pfapply" in d) return pfApply();
+  if (d.pfslot != null) { pf.slot = +d.pfslot; pf.draft = structuredClone(pf.slots[pf.slot]); pfApply(false); }
+  else if (d.pfcol) pf.col = d.pfcol;
+  else if (d.pftab) pf.tab = d.pftab;
+  else if ("pfreset" in d) pf.draft[pf.col] = {};
+  else if ("pfmore" in d) pf.more = !pf.more;
+  else if ("pfio" in d) pf.io = !pf.io;
+  else if ("pfcopy" in d) { navigator.clipboard?.writeText(JSON.stringify(pf.draft)); toast("Filters copied"); return; }
+  else if ("pfload" in d) {
+    try { const j = JSON.parse($("#pfio").value); pf.draft = { new: j.new || {}, stretch: j.stretch || {}, migrated: j.migrated || {} }; toast("Filters loaded. Press Apply All to use them."); }
+    catch { return toast("That is not a filter export"); }
+  }
+  else if ("pfall" in d) { if (f.protocols) delete f.protocols; else f.protocols = []; }
+  else if (d.pfp) {
+    const cur = new Set(f.protocols || PF_PROTOCOLS);
+    cur.has(d.pfp) ? cur.delete(d.pfp) : cur.add(d.pfp);
+    if (cur.size === PF_PROTOCOLS.length) delete f.protocols; else f.protocols = PF_PROTOCOLS.filter((p) => cur.has(p));
+  }
+  else if (d.pfb) { if (f[d.pfb]) delete f[d.pfb]; else f[d.pfb] = true; }
+  else return;
+  pfRender();
+});
+document.addEventListener("input", (e) => {
+  const k = e.target.dataset?.pf;
+  if (k && pf.draft && e.target.closest("#pfm")) {
+    const f = pf.draft[pf.col], v = e.target.value.trim();
+    if (v === "") delete f[k]; else f[k] = e.target.type === "number" ? +v : v;
+    // Refresh the little counters without redrawing the field being typed in.
+    document.querySelectorAll("#pfm [data-pfcol]").forEach((b) => { const n = pfCount(pf.draft[b.dataset.pfcol]); b.querySelector("i")?.remove(); if (n) b.insertAdjacentHTML("beforeend", `<i>${n}</i>`); });
+    document.querySelectorAll("#pfm [data-pftab]").forEach((b) => { const n = pfCount(f, b.dataset.pftab); b.querySelector("i")?.remove(); if (n) b.insertAdjacentHTML("beforeend", `<i>${n}</i>`); });
+  }
+  const cq = e.target.dataset?.pcq;
+  if (cq) { pulseState.cq[cq] = e.target.value.trim(); pulseState.first = true; pulseTick(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (!pf.draft) return;
+  if (e.key === "Escape") { pf.draft = null; pfRender(); }
+  if (e.key === "Enter" && e.target.closest?.("#pfm") && e.target.tagName === "INPUT") pfApply();
+});
 
 // Patch a column in place: new rows slide in, changed rows flash, order follows the data.
 function patchColumn(el, list, col) {
@@ -915,12 +1140,14 @@ async function pulseTick() {
   pulseState.ai = d.live.ai;
   const cols = { new: d.newPairs, stretch: d.stretch, migrated: d.migrated };
   for (const [k, list] of Object.entries(cols)) {
-    const f = pulseFilter(list);
+    const f = pulseFilter(list, k);
     const colEl = $(`#pcol-${k}`);
     if (colEl.querySelector(".empty") && f.length) colEl.innerHTML = "";
     patchColumn(colEl, f, k);
     $(`#pcount-${k}`).textContent = f.length === list.length ? f.length : `${f.length} of ${list.length}`;
-    $(`#prating-${k}`).innerHTML = list.filter((t) => t.ai?.status === "running").length ? `<i></i>${list.filter((t) => t.ai?.status === "running").length} rating` : "";
+    const reading = list.filter((t) => t.ai?.status === "running").length;
+    $(`#prating-${k}`).innerHTML = reading ? `<i></i>${reading}` : "";
+    $(`#prating-${k}`).title = reading ? `${reading} being rated by the AI right now` : "";
   }
   pulseState.first = false;
   const L = d.live;
@@ -985,7 +1212,7 @@ function applyLive(u) {
 // A brand-new coin: show it the instant it's created.
 function applyLaunch(l) {
   const colEl = $("#pcol-new");
-  if (!colEl || pulseState.tab !== "new" || pulseState.q || pulseState.min !== "all" || Object.keys(pulseState.f).length) return;
+  if (!colEl || pulseState.tab !== "new" || pulseState.q || pulseState.cq.new || pulseState.min !== "all" || pfCount(pfSet("new"))) return;
   if (colEl.querySelector(`[data-mint="${CSS.escape(l.mint)}"]`)) return;
   colEl.querySelector(".empty")?.remove();
   pulseState.sol = l.solUsd || pulseState.sol;
@@ -1128,11 +1355,13 @@ async function botTick() {
   box.querySelectorAll(".pcol-body").forEach((el, i) => { el.scrollTop = tops[i] || 0; });
 }
 
-PANELS.pf = { host: "#pfilters", fields: PULSE_FILTERS, builtin: PULSE_PRESETS, key: "pulse:presets", get: () => pulseState.f, set: (f) => { pulseState.f = f; store.set("pulse:f", f); },
-  presets: () => ({ ...PULSE_PRESETS, ...store.get("pulse:presets", {}) }), apply: () => { pulseState.first = true; pulseTick(); } };
 async function viewPulse(main) {
   pulseState.rows.clear(); pulseState.first = true;
-  const col = (k, title, sub) => `<section class="pcol"><header><h2>${title}</h2><span class="pcount num" id="pcount-${k}">…</span><span class="prating" id="prating-${k}"></span><small>${sub}</small></header><div class="pcol-body" id="pcol-${k}"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div></section>`;
+  // Column header, as on Axiom and GMGN: its own search, the three saved filter sets, and its filter button.
+  const col = (k, title, sub) => `<section class="pcol"><header><h2>${title}</h2><span class="pcount num" id="pcount-${k}">…</span><span class="prating" id="prating-${k}"></span>
+    <span class="pcol-tools"><input class="input pcol-q" data-pcq="${k}" placeholder="Search" value="${esc(pulseState.cq[k] || "")}" title="${sub}">
+    <span class="pslots">${[0, 1, 2].map((i) => `<button class="${pf.slot === i ? "on" : ""}" data-pslot="${i}" title="Saved filter set ${i + 1}">P${i + 1}</button>`).join("")}</span>
+    <button class="pfbtn" id="pfbtn-${k}" data-pfopen="${k}" title="Filters for ${title}">${PF_ICON}</button></span></header><div class="pcol-body" id="pcol-${k}"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div></section>`;
   main.innerHTML = `<div class="pulse-head">
       <div class="pulse-title"><h1>Pulse</h1><svg class="beat" viewBox="0 0 120 24"><path d="M0 12h30l6-9 8 18 7-14 5 5h64"/></svg></div>
       <div class="btabs" id="botTabs">${botTabs()}</div>
@@ -1140,11 +1369,11 @@ async function viewPulse(main) {
       <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA" value="${esc(pulseState.q)}">
         <div class="chips">${[["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["queue", "In queue"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
     </div>
-    <div id="pfilters">${filterPanel("pf", PULSE_FILTERS, pulseState.f, PANELS.pf.presets(), PULSE_PRESETS)}</div>
     <div id="pulseWarn"></div>
     <div id="tabNew" ${pulseState.tab === "new" ? "" : "hidden"}><div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div></div>
     <div id="botView" ${pulseState.tab === "new" ? "hidden" : ""}><div class="skel"></div><div class="skel"></div></div>`;
-  main.querySelector(".pulse-tools").hidden = main.querySelector("#pfilters").hidden = pulseState.tab !== "new";
+  main.querySelector(".pulse-tools").hidden = pulseState.tab !== "new";
+  pfHeads();
   clearInterval(pulseState.timer); clearInterval(pulseState.botTimer);
   pulseState.timer = setInterval(pulseTick, 2500);
   pulseState.botTimer = setInterval(botTick, 2000);
