@@ -25,8 +25,8 @@ function price(p) {
 }
 const KIND = {
   launch: ["New launch", "var(--up)"], graduated: ["Graduated", "var(--violet)"], momentum: ["Momentum", "var(--warn)"],
-  volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "#7ee0c3"],
-  wallet: ["Wallet buy", "#2dd4bf"], smart: ["Followed wallets", "#facc15"], fomo: ["Fomo crowd", "#ff5a5f"], research: ["AI research", "#5cc8ff"], buy: ["Buy call", "#39ff88"], pick: ["AI pick", "#39ff88"], "dev-sold": ["Dev sold", "var(--down)"],
+  volume: ["Volume spike", "var(--info)"], dump: ["Dump warning", "var(--down)"], milestone: ["Milestone", "var(--color-up)"],
+  wallet: ["Wallet buy", "var(--color-accent)"], smart: ["Followed wallets", "var(--color-warn)"], fomo: ["Fomo crowd", "var(--color-caution)"], research: ["AI research", "var(--color-accent)"], buy: ["Buy call", "var(--color-up)"], pick: ["AI pick", "var(--color-up)"], "dev-sold": ["Dev sold", "var(--down)"],
   rugged: ["RugCheck: rugged", "var(--down)"], "liq-pulled": ["Liquidity pulled", "var(--down)"],
 };
 // Links come from coin creators and AI answers: only plain web links are ever put in an href.
@@ -178,7 +178,7 @@ function linkBtn(l) {
 }
 function safetyChip(n) {
   if (n == null) return '<span class="pill">Safety unchecked</span>';
-  return `<span class="pill safe-pill ${n >= 70 ? "ok" : n >= 45 ? "mid" : "bad"}">🛡 Safety ${n}</span>`;
+  return `<span class="pill safe-pill ${n >= 70 ? "ok" : n >= 45 ? "mid" : "bad"}">Safety ${n}</span>`;
 }
 function safety(n) {
   if (n == null) return `<span class="safe na">—</span>`;
@@ -300,16 +300,11 @@ function coinTable(list, { sort, dir = "desc", compact } = {}) {
       <td class="dim hide-sm">${ago(t.pair_created || t.first_seen)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
-const THEME_EMOJI = {
-  "AI & Agents": "🤖", Dogs: "🐶", Cats: "🐱", "Frogs & Pepe": "🐸", Politics: "🏛️", "Elon & X": "🚀", "Degen culture": "🦍",
-  Brainrot: "🧠", "Anime & Waifu": "🌸", "Celebrity & Streamers": "🎤", "Finance & Stocks": "📈", "Space & Aliens": "👽",
-  "Religion & Myth": "🐉", Food: "🍕", Animals: "🦦", Gaming: "🎮", "Holidays & Events": "🎃", "Countries & Cities": "🌍",
-};
 const stack = (coins, n = 4) => `<span class="avs">${coins.slice(0, n).map((c) => av(c, "xs")).join("")}</span>`;
 
 function narMini(n) {
   return `<div class="nar-mini" data-theme="${esc(n.name)}">
-    <div class="nar-mini-top"><span class="emoji">${THEME_EMOJI[n.name] || "✨"}</span><b>${esc(n.name)}</b><span class="num heat-n">${n.heat}</span></div>
+    <div class="nar-mini-top"><b>${esc(n.name)}</b><span class="num heat-n">${n.heat}</span></div>
     <div class="heat"><i style="width:${n.heat}%"></i></div>
     <div class="nar-mini-foot">${n.top.length ? stack(n.top) : ""}<small>${(n.launchShare * 100).toFixed(1)}% of launches</small></div></div>`;
 }
@@ -502,7 +497,7 @@ async function viewWallets(main) {
       ${fomoCard(d.fomo)}
       <div class="card"><div class="card-head"><h2>Early wallets</h2><small>${d.smart.winners} coins that really ran 3x+ studied</small></div>
       <p class="note pad">Wallets that were early buyers or top holders in several coins that ran. Being early in a pump can also mean the wallet belongs to whoever ran it, so this is a lead to check, not an endorsement. Runs that only existed in emptied pools are excluded.</p>
-      ${d.smart.wallets.length ? d.smart.wallets.map((w) => `<div class="sig" style="--k:#facc15" data-wallet="${esc(w.address)}">
+      ${d.smart.wallets.length ? d.smart.wallets.map((w) => `<div class="sig" style="--k:var(--color-warn)" data-wallet="${esc(w.address)}">
         ${wav(w.address, { ...w, source: "smart" })}
         <div style="min-width:0"><span class="tag">${w.coins} winners</span><h3>${esc(w.label || shortAddr(w.address))}</h3>
         <p>${w.early ? `${w.early} early buys` : ""}${w.early && w.holder ? " · " : ""}${w.holder ? `${w.holder} as top holder` : ""} · ${w.tokens.slice(0, 5).map((t) => "$" + esc(t.symbol)).join(" ")}</p></div>
@@ -576,7 +571,7 @@ async function openWallet(address) {
 
 // ---------- research desk ----------
 const gradeClass = (g) => !g ? "" : g.startsWith("A") ? "ga" : g.startsWith("B") ? "gb" : g.startsWith("C") ? "gc" : g === "D" ? "gd" : "gf";
-const tierMark = (r) => r?.tier === "fast" ? `<span class="tier fast" title="Fast read by ${providerOf(r.model)}${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}">⚡</span>` : r?.tier === "deep" ? `<span class="tier deep" title="Deep read by ${providerOf(r.model)}">◆</span>` : "";
+const tierMark = (r) => r?.tier === "fast" ? `<span class="tier fast" title="Fast read by ${providerOf(r.model)}${r.ms ? ` in ${(r.ms / 1000).toFixed(1)}s` : ""}">F</span>` : r?.tier === "deep" ? `<span class="tier deep" title="Deep read by ${providerOf(r.model)}">◆</span>` : "";
 // The lane as it is right now: who is reading, and why that differs from what Settings asks for.
 let lanes = null;
 const deepName = () => lanes?.deep?.actualName || "the deep-read AI";
@@ -585,7 +580,7 @@ function providerCard(pv) {
   if (!pv) return "";
   const row = (label, l) => `<div class="prov"><b>${label}</b><span class="${l.actual ? (l.fallback ? "warn" : "up") : "down"}">${l.actualName || "none available"}</span>${l.fallback ? `<small>set to ${esc(l.configuredName)}; ${esc(l.reason || "unavailable")}</small>` : `<small>as configured${l.search ? " · searches X live" : ""}</small>`}</div>`;
   const notes = [pv.fast.note, pv.deep.note, pv.recovery].filter(Boolean);
-  return `<div class="card provs ${pv.fast.fallback || pv.deep.fallback ? "warn" : ""}"><div class="prov-row">${row("First reads ⚡", pv.fast)}${row("Deep reads ◆", pv.deep)}
+  return `<div class="card provs ${pv.fast.fallback || pv.deep.fallback ? "warn" : ""}"><div class="prov-row">${row("First reads", pv.fast)}${row("Deep reads", pv.deep)}
       <div class="prov"><b>Grok</b><span class="${pv.grok.ok ? "up" : "down"}">${!pv.grok.installed ? "not logged in" : pv.grok.blocked ? "out of credits" : pv.grok.ok ? "available" : "rate limited"}</span><small>${pv.grok.errors} errors${pv.grok.blockedUntil ? ` · re-check in ${mins(pv.grok.blockedUntil - Date.now())}` : ""}</small></div>
       <div class="prov"><b>Claude</b><span class="${pv.claude.ok ? "up" : "down"}">${pv.claude.ok ? "available" : "not logged in"}</span><small>${pv.claude.usedThisHour}/${pv.claude.perHour} reads this hour${pv.claude.truncated ? ` · ${pv.claude.truncated} cut off` : ""}</small></div>
       <div class="prov"><b>Groq</b><span class="${pv.groq.configured ? "up" : "dim"}">${pv.groq.configured ? "key saved" : "no key"}</span><small>optional free fallback</small></div></div>
@@ -630,9 +625,9 @@ async function viewResearch(main) {
   const pv = d.providers, qd = d.queue;
   lanes = pv;
   main.innerHTML = `<div class="page-head"><div><h1>Research desk</h1>
-      <p>Coins near bonding or just bonded are researched: X account, linked tweet, website, news, copycats, holders and flow. ${pv.fast.actual ? `${pv.fast.actualName} gives each one a first read (⚡)${pv.fast.search ? " and searches X live for who is posting it" : ""}; strong ones get a deep read from ${pv.deep.actualName || "the deep lane"} (◆).` : `${pv.deep.actualName || "No AI"} reads them one at a time (◆), ${d.perHour} an hour.`} Only as many coins are queued as can be read while they still matter; the rest are dropped, not left to go stale.</p></div>
+      <p>Coins near bonding or just bonded are researched: X account, linked tweet, website, news, copycats, holders and flow. ${pv.fast.actual ? `${pv.fast.actualName} gives each one a first read${pv.fast.search ? " and searches X live for who is posting it" : ""}; strong ones get a deep read from ${pv.deep.actualName || "the deep lane"}.` : `${pv.deep.actualName || "No AI"} reads them one at a time, ${d.perHour} an hour.`} Only as many coins are queued as can be read while they still matter; the rest are dropped, not left to go stale.</p></div>
       <div class="desk-stats"><span class="pill">${count("running") ? "Researching now" : "Idle"}</span><span class="pill">${count("done") + count("deep")} graded</span>
-        ${pv.fast.actual ? `<span class="pill">⚡ ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">◆ ${d.hour.deep}/${d.perHour} this hour · at score ${d.deepMin}+</span></div></div>
+        ${pv.fast.actual ? `<span class="pill">First reads ${d.hour.fast}/${d.fastPerHour} this hour${d.fast.avgMs ? ` · ${(d.fast.avgMs / 1000).toFixed(1)}s avg` : ""}</span>` : ""}<span class="pill">Deep reads ${d.hour.deep}/${d.perHour} this hour · at score ${d.deepMin}+</span></div></div>
     ${providerCard(pv)}
     <div class="card track" style="margin:14px 0 16px"><div class="track-row">
       <div><b>${qd.size} <span class="dim">/ ${qd.cap}</span></b><span>coins waiting for a first read</span></div>
@@ -643,7 +638,7 @@ async function viewResearch(main) {
     </div><p class="note" style="margin:10px 0 0">The next read always goes to the waiting coin with the most live traction, not the one that waited longest. A brand-new coin is dropped after 25 minutes unread, a coin near bonding after 45, a bonded coin after 3 hours.</p></div>
     ${d.fast.ready && d.fast.cooling.length ? `<div class="card lane-note" style="margin-bottom:16px"><b>${esc(pv.fast.actualName || "Fast AI")} limits:</b> ${d.fast.cooling.map((c) => `${esc(modelName(c.model))} back in ${c.secs < 120 ? c.secs + "s" : Math.round(c.secs / 60) + "m"}`).join(" · ")}. Other models keep going.</div>` : ""}
     ${d.narratives.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Narratives the AI rates</h2><small>average score of the coins carrying them, last 12h</small></div>
-      <div class="nar-rank">${d.narratives.map((n, i) => `<div class="nar-row"><span class="num dim">${i + 1}</span><span class="emoji">${THEME_EMOJI[n.theme] || "✨"}</span><b class="grow">${esc(n.theme)}</b>
+      <div class="nar-rank">${d.narratives.map((n, i) => `<div class="nar-row"><span class="num dim">${i + 1}</span><b class="grow">${esc(n.theme)}</b>
         <span class="dim small">${n.coins} coin${n.coins === 1 ? "" : "s"}${n.strong ? ` · ${n.strong} strong` : ""}</span>
         <div class="meter-bar" style="width:90px"><i style="width:${n.avg}%"></i></div><span class="num">${n.avg}</span>
         ${n.best ? `<span class="nar-best" data-mint="${esc(n.best.mint)}">${av(n.best, "sm")}<b>$${esc(n.best.symbol)}</b>${gradeBadge(n.best.grade)}</span>` : ""}</div>`).join("")}</div></div>` : ""}
@@ -929,7 +924,7 @@ const ICON = {
 };
 
 // First-pass triage (instant rules, then the fast LLM): slop / meh / maybe / promising.
-const TRI = { slop: "SLOP", meh: "MEH", maybe: "MAYBE", promising: "👀 HOT" };
+const TRI = { slop: "SLOP", meh: "MEH", maybe: "MAYBE", promising: "HOT" };
 function triChip(t) {
   const x = t.tri;
   if (!x) return `<span class="tri tri-wait" title="Ranking…">…</span>`;
@@ -974,7 +969,7 @@ function pulseRow(t, col) {
     <div class="pr-side">
       <div class="pr-mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></div>
       <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
-      <div class="pr-act">${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch${t.early.top ? ". Top 5% of launches" : t.early.strong ? ". Top 10% of launches" : ""}">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${t.tr != null ? `<span class="trc ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live traction, 0-100: how much real demand it shows this second. 60+ is the pick line.">▲${t.tr}</span>` : ""}${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a></div>
+      <div class="pr-act">${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch${t.early.top ? ". Top 5% of launches" : t.early.strong ? ". Top 10% of launches" : ""}">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${t.tr != null ? `<span class="trc ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live traction, 0-100: how much real demand it shows this second. 60+ is the pick line.">▲${t.tr}</span>` : ""}${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">Fomo</a></div>
     </div>
   </div>`;
 }
@@ -1378,7 +1373,7 @@ function pickCard(p) {
     <p>${esc(p.verdict || "")}</p>
     <div class="rule-line ${xCls(p.ruleX)}"><b>With the exit rule: ${mult(p.ruleX)}</b><span>${esc(p.ruleWhy)}${p.ruleClosed ? " · fully sold" : ""}</span></div>
     <div class="call-nums"><span><b>Peak since</b>${mult(p.peak)}</span><span><b>After 1h</b>${p.m1h != null ? mult(p.m1h) : "pending"}</span><span><b>Lowest</b>${mult(p.low)}</span><span><b>Safety</b>${p.safety ?? "—"}</span>
-      ${p.unsellable ? "" : `<a class="fomo-q" href="${fomoUrl(p.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">⚡ Fomo</a>`}</div>
+      ${p.unsellable ? "" : `<a class="fomo-q" href="${fomoUrl(p.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">Fomo</a>`}</div>
   </div>`;
 }
 
@@ -1507,7 +1502,7 @@ async function viewNarratives(main) {
     ${nar.emerging.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Emerging words</h2><small>showing up far more in the last hour</small></div>
       <div class="words">${nar.emerging.map((e) => `<span class="word">${esc(e.word)}<em>${e.count}× · ${e.lift.toFixed(1)}x</em></span>`).join("")}</div></div>` : ""}
     <div class="nar-grid">${nar.themes.map((n) => `<div class="card nar">
-      <div class="nar-top"><h3><span class="emoji">${THEME_EMOJI[n.name] || "✨"}</span> ${esc(n.name)}</h3><span class="num" style="font-size:20px">${n.heat}<span class="dim" style="font-size:12px">/100</span></span></div>
+      <div class="nar-top"><h3>${esc(n.name)}</h3><span class="num" style="font-size:20px">${n.heat}<span class="dim" style="font-size:12px">/100</span></span></div>
       <div class="heat" style="margin:0"><i style="width:${n.heat}%"></i></div>
       <div class="nar-nums">
         <div><b>Launch share</b><span>${(n.launchShare * 100).toFixed(1)}%</span></div>
@@ -1627,7 +1622,7 @@ async function viewSettings(main) {
     <div class="card"><div class="card-head"><h2>AI research</h2><small>coins about to bond and just bonded</small></div>
       <div class="form">
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="researchAuto" ${s.researchAuto ? "checked" : ""}> Research automatically</label><small>With a fast AI available: every coin 60%+ to bonding and every bonded coin with volume. Without one: only the strongest.</small></div>
-        <div class="field"><label for="s-fastProvider">⚡ Fast lane</label><div style="display:flex;gap:8px"><select class="input" id="s-fastProvider" name="fastProvider" style="flex:1"><option value="claude" ${s.fastProvider === "claude" ? "selected" : ""}>Claude Haiku (this PC's Claude login)</option><option value="grok" ${s.fastProvider === "grok" || !["claude", "groq"].includes(s.fastProvider) ? "selected" : ""}>Grok (SuperGrok login, searches X live)</option><option value="groq" ${s.fastProvider === "groq" ? "selected" : ""}>Groq (free key)</option></select><button class="btn" type="button" id="testK">Test Grok</button></div><small>Right now: <b>${esc(pv.fast.actualName || "none available")}</b>${pv.fast.fallback ? ` (${esc(pv.fast.reason || "")})` : ""}. Grok uses this PC's Grok CLI login, no key.</small></div>
+        <div class="field"><label for="s-fastProvider">Fast lane</label><div style="display:flex;gap:8px"><select class="input" id="s-fastProvider" name="fastProvider" style="flex:1"><option value="claude" ${s.fastProvider === "claude" ? "selected" : ""}>Claude Haiku (this PC's Claude login)</option><option value="grok" ${s.fastProvider === "grok" || !["claude", "groq"].includes(s.fastProvider) ? "selected" : ""}>Grok (SuperGrok login, searches X live)</option><option value="groq" ${s.fastProvider === "groq" ? "selected" : ""}>Groq (free key)</option></select><button class="btn" type="button" id="testK">Test Grok</button></div><small>Right now: <b>${esc(pv.fast.actualName || "none available")}</b>${pv.fast.fallback ? ` (${esc(pv.fast.reason || "")})` : ""}. Grok uses this PC's Grok CLI login, no key.</small></div>
         <div class="field"><label for="s-grokModel">Grok model</label><select class="input" id="s-grokModel" name="grokModel">${["grok-4.7-build-fast", "grok-4.7", "grok-4.6"].map((m) => `<option ${s.grokModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>build-fast is the quick one. grok-4.7 thinks harder but takes much longer.</small></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="grokSearch" ${s.grokSearch ? "checked" : ""}> Grok searches X live</label><small>Grok looks the coin up on X by contract and ticker: who's posting, real engagement, organic or botted. About 8s per coin, and each search uses subscription credits.</small></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="triageOn" ${s.triageOn ? "checked" : ""}> Rank every new launch</label><small>Instant rules plus a fast AI label every new coin slop / meh / maybe / hot; only maybe+ go on to research.</small></div>
@@ -1787,7 +1782,7 @@ function coinChart(r) {
   }).join("");
   const trades = (r.walletTrades || []).filter((w) => w.t >= x0 && w.t <= x1).map((w) => `<circle class="mk" cx="${X(w.t).toFixed(1)}" cy="${Y(priceAt(w.t)).toFixed(1)}" r="4.5" fill="${w.side === "buy" ? "var(--up)" : "var(--down)"}" stroke="#07080c" stroke-width="1.5"><title>${esc(`${w.label || shortAddr(w.wallet)} ${w.side === "buy" ? "bought" : "sold"} ${usd(w.usd)} · ${time(w.t)}`)}</title></circle>`).join("");
   return `${tabs}<svg class="chart2" viewBox="0 0 ${W} ${H}" role="img" aria-label="Price, volume, alerts and followed-wallet trades">
-    <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#39ff88" : "#ff4d6d"}" stop-opacity=".22"/><stop offset="1" stop-color="${up ? "#39ff88" : "#ff4d6d"}" stop-opacity="0"/></linearGradient></defs>
+    <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "var(--color-up)" : "var(--color-down)"}" stop-opacity=".22"/><stop offset="1" stop-color="${up ? "var(--color-up)" : "var(--color-down)"}" stop-opacity="0"/></linearGradient></defs>
     <path d="${d}L${W},${PH}L0,${PH}Z" fill="url(#fill)"/><path d="${d}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="2"/>
     <g class="vol">${bars}</g>${sigs}${trades}
     <text x="4" y="12">${plainPrice(y1)}</text><text x="4" y="${PH - 2}">${plainPrice(y0)}</text>
@@ -1936,7 +1931,7 @@ async function openCoin(mint) {
         <div class="hero-av">${av(t, "xl")}</div>
         <div class="hero-id"><h2>$${esc(t.symbol || "?")}</h2>
           <div class="sub">${esc(t.name || "")}${t.dex ? " · " + esc(DEX_NAME[t.dex] || t.dex) : ""}${t.graduated ? " · graduated" : ""} · ${ago(t.pair_created || t.first_seen)} old</div>
-          <div class="chips">${r.untracked ? '<span class="pill">Safety unchecked</span>' : safetyChip(t.safety_score)}${stateTags(f)}${(t.themes || []).map((x) => `<span class="pill">${THEME_EMOJI[x] || ""} ${esc(x)}</span>`).join("")}${r.triage ? `<span class="pill" title="${esc(r.triage.why || "")}">triage: ${esc(r.triage.label)} ${r.triage.score}</span>` : ""}</div></div>
+          <div class="chips">${r.untracked ? '<span class="pill">Safety unchecked</span>' : safetyChip(t.safety_score)}${stateTags(f)}${(t.themes || []).map((x) => `<span class="pill">${esc(x)}</span>`).join("")}${r.triage ? `<span class="pill" title="${esc(r.triage.why || "")}">triage: ${esc(r.triage.label)} ${r.triage.score}</span>` : ""}</div></div>
         <div class="hero-price ${f.exitable || r.untracked ? "" : "unreliable"}"><span class="big num">${price(t.price)}</span><span class="chg ${cls(t.chg_h1)}">${t.chg_h1 != null ? `${pct(t.chg_h1)} <small>1h</small>` : L?.chg1m != null ? `${pct(L.chg1m)} <small>1m</small>` : ""}</span><small class="dim">${money(t.mcap)} mcap</small><small class="fresh ${f.stale ? "old" : ""}">${fresh}</small>${r.progress != null && !t.graduated ? `<div class="bond hero-bond"><div class="bond-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></div><span class="num">${Math.round(r.progress * 100)}% bonded</span></div>` : ""}</div>
       </div>
     </div>
@@ -1974,7 +1969,7 @@ async function openCoin(mint) {
     ${t.description ? `<div class="p-sec"><h3>About <span class="dim">· written by the coin's creator</span></h3><p style="margin:0;color:var(--ink-2)">${esc(t.description)}</p></div>` : ""}
     ${r.untracked ? "" : `<div class="p-sec"><details class="fix"><summary>Wrong category? Fix it</summary>
       <p class="note" style="margin:8px 0">Your correction replaces the automatic one and stays put.</p>
-      <div class="checks">${r.themeOptions.map((x) => `<label class="check"><input type="checkbox" name="fixTheme" value="${esc(x)}" ${(t.themes || []).includes(x) ? "checked" : ""}> ${THEME_EMOJI[x] || ""} ${esc(x)}</label>`).join("")}</div>
+      <div class="checks">${r.themeOptions.map((x) => `<label class="check"><input type="checkbox" name="fixTheme" value="${esc(x)}" ${(t.themes || []).includes(x) ? "checked" : ""}> ${esc(x)}</label>`).join("")}</div>
       <div class="filters" style="margin:10px 0 0"><select class="input" id="fixClass">${Object.entries(r.classOptions).map(([k, l]) => `<option value="${k}" ${cls_ === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         <button class="btn primary" data-fix="${esc(t.mint)}">Save category</button>${t.themes_user || t.class_user ? `<button class="btn" data-fix-reset="${esc(t.mint)}">Back to automatic</button>` : ""}</div></details></div>`}
     ${t.pair ? `<div class="p-sec"><h3>Full chart <span class="dim">· DexScreener</span></h3><iframe class="embed" src="https://dexscreener.com/solana/${esc(t.pair)}?embed=1&theme=dark&trades=0&info=0" title="DexScreener chart" loading="lazy"></iframe></div>` : ""}`;

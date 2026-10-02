@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-02",
+  "framework": "vanilla HTML + one ES module (public/app.js), served by server/server.js",
+  "fonts": "Space Grotesk + JetBrains Mono via Google Fonts link (public/index.html), system sans body",
+  "palette": "OKLCH custom properties in public/tokens.css",
+  "motion": "no library; hand-written spring for the side sheet (public/app.js)",
+  "spacing": "4-point named scale in tokens.css; legacy rules still use raw px",
+  "design_md": "design.md"
+}

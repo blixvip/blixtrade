@@ -1,0 +1,69 @@
+/* Meme Radar design tokens. The one place colour, type, space, radius and motion are defined.
+ * styles.css only ever refers to these by name. See design.md at the project root.
+ */
+:root {
+  color-scheme: dark;
+
+  /* surfaces: cool engineered near-black, every neutral tinted toward the accent hue */
+  --color-paper:    oklch(15.5% 0.008 258);
+  --color-paper-2:  oklch(17.5% 0.009 258);
+  --color-paper-3:  oklch(19.5% 0.010 258);
+  --color-paper-4:  oklch(22.5% 0.012 258);
+  --color-paper-5:  oklch(26% 0.014 258);
+  --color-shade:    oklch(9% 0.006 258);
+  --color-rule:     oklch(25% 0.012 258);
+  --color-rule-2:   oklch(33% 0.014 258);
+
+  /* ink */
+  --color-ink:      oklch(93% 0.006 258);
+  --color-ink-2:    oklch(76% 0.012 258);
+  --color-muted:    oklch(67% 0.014 258);
+
+  /* one accent (cobalt): selection, focus, links, the AI. Never a fill larger than a control. */
+  --color-accent:     oklch(70% 0.15 255);
+  --color-accent-ink: oklch(16% 0.03 255);
+  --color-focus:      oklch(74% 0.15 255);
+
+  /* data colours: they mean something and are used for nothing else */
+  --color-up:       oklch(74% 0.15 160);
+  --color-down:     oklch(67% 0.20 18);
+  --color-warn:     oklch(82% 0.14 85);
+  --color-caution:  oklch(73% 0.15 50);
+  --color-on-fill:  oklch(16% 0.02 258);
+
+  /* type: 2 + 1 */
+  --font-display: "Space Grotesk", system-ui, "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-body:    system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+  --font-outlier: "JetBrains Mono", ui-monospace, Consolas, monospace;
+
+  --text-2xs: 0.6875rem; --text-xs: 0.75rem; --text-sm: 0.8125rem; --text-md: 0.875rem;
+  --text-lg: 1rem; --text-xl: 1.25rem; --text-2xl: 1.5rem; --text-display: 1.75rem;
+
+  /* space: 4-point scale */
+  --space-3xs: 0.125rem; --space-2xs: 0.25rem; --space-xs: 0.5rem; --space-sm: 0.75rem;
+  --space-md: 1rem; --space-lg: 1.5rem; --space-xl: 2rem; --space-2xl: 3rem;
+
+  --radius-control: 6px; --radius-card: 8px; --radius-chip: 4px;
+  --rule-hair: 1px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-press: 100ms; --dur-short: 160ms; --dur-medium: 280ms;
+
+  --z-sticky: 5; --z-sticky-nav: 12; --z-sheet: 30; --z-toast: 40; --z-modal: 50;
+  --banner-height: 30px;
+  --side: 208px;
+
+  /* names the older rules still use, pointed at the tokens above */
+  --bg: var(--color-paper); --bg-2: var(--color-paper-2); --card: var(--color-paper-3); --card-2: var(--color-paper-4); --card-3: var(--color-paper-5);
+  --line: var(--color-rule); --line-2: var(--color-rule-2);
+  --ink: var(--color-ink); --ink-2: var(--color-ink-2); --muted: var(--color-muted);
+  --up: var(--color-up); --up-dim: color-mix(in oklch, var(--color-up) 55%, var(--color-paper)); --down: var(--color-down); --warn: var(--color-warn);
+  --info: var(--color-accent); --violet: var(--color-accent); --ai: var(--color-accent);
+  --material: var(--color-paper-2); --material-thick: var(--color-paper-2); --edge: var(--color-rule-2);
+  --r: var(--radius-card); --shadow: none;
+}
+@media (prefers-contrast: more) {
+  :root { --color-rule: oklch(40% 0.014 258); --color-rule-2: oklch(52% 0.014 258); --color-ink-2: oklch(86% 0.01 258); --color-muted: oklch(78% 0.012 258); }
+}
