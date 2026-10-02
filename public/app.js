@@ -528,8 +528,8 @@ async function viewWallets(main) {
 }
 
 async function openWallet(address) {
-  const d = $("#drawer"), p = $("#panel");
-  d.hidden = false;
+  const p = $("#panel");
+  sheetOpen();
   p.innerHTML = `<div class="skel" style="margin-top:22px"></div><div class="skel"></div>`;
   const r = await api(`wallet/${address}`);
   const w = r.wallet, pnl = r.pnl;
@@ -1118,8 +1118,10 @@ function pfBody(f) {
 }
 function pfRender() {
   let host = $("#pfm");
-  if (!pf.draft) { host?.remove(); return; }
+  // It leaves the way it arrived: shrinking back into the button that opened it.
+  if (!pf.draft) { if (host) { host.classList.add("leave"); setTimeout(() => { if (!pf.draft) host.remove(); }, REDUCED.matches ? 0 : 170); } return; }
   if (!host) { host = document.createElement("div"); host.id = "pfm"; document.body.append(host); }
+  host.classList.remove("leave");
   const f = pf.draft[pf.col];
   const badge = (n) => n ? `<i>${n}</i>` : "";
   const keep = host.querySelector(".pf-scroll")?.scrollTop || 0;
@@ -1138,8 +1140,17 @@ function pfRender() {
     </div>
     <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source.</span><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
   host.querySelector(".pf-scroll").scrollTop = keep;
+  if (pf.origin) host.querySelector(".pf-win").style.transformOrigin = pf.origin;
 }
-function pfOpen(col) { pf.draft = structuredClone(pf.slots[pf.slot]); pf.col = col || pf.col; pf.io = false; pfRender(); }
+function pfOpen(col) {
+  pf.draft = structuredClone(pf.slots[pf.slot]); pf.col = col || pf.col; pf.io = false; pf.origin = null;
+  pfRender();
+  // Grow out of the button that was pressed, so it is obvious what this window belongs to.
+  const b = $(`#pfbtn-${pf.col}`)?.getBoundingClientRect(), host = $("#pfm"), w = host.querySelector(".pf-win"), r = w.getBoundingClientRect();
+  if (b) { pf.origin = `${(b.left + b.width / 2 - r.left).toFixed(0)}px ${(b.top + b.height / 2 - r.top).toFixed(0)}px`; w.style.transformOrigin = pf.origin; }
+  host.classList.add("enter");
+  setTimeout(() => host.classList.remove("enter"), 320);
+}
 function pfApply(close = true) {
   if (pf.draft) pf.slots[pf.slot] = structuredClone(pf.draft);
   pfSave();
@@ -1813,11 +1824,92 @@ function holdersSection(t, s) {
   </div>`;
 }
 
+// ---------- the side sheet (coin and wallet detail) ----------
+// It moves on a spring rather than a fixed animation, so it can be caught and turned around at any moment:
+// every move starts from where the sheet is on screen right now, at the speed it is already going. Drag it
+// by its header to throw it shut; it leaves the way it came in.
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)");
+const sheet = { x: null, v: 0, target: 1, raf: 0, last: 0, drag: null, onRest: null };
+const sheetW = () => $("#panel").offsetWidth || 840;
+function sheetPaint() {
+  const p = $("#panel"), w = sheetW();
+  p.style.transform = `translate3d(${sheet.x.toFixed(1)}px,0,0)`;
+  $("#drawer .scrim").style.opacity = Math.max(0, Math.min(1, 1 - sheet.x / w)).toFixed(3);
+}
+// damping 1 = settles without overshoot; below 1 it bounces (only used after a throw). response = seconds.
+function sheetTo(open, { velocity = sheet.v, damping = 1, response = 0.36 } = {}) {
+  const w = sheetW(), to = open ? 0 : w;
+  sheet.target = open ? 0 : 1; sheet.v = velocity;
+  if (sheet.x == null) sheet.x = w;
+  if (REDUCED.matches) { sheet.x = to; sheet.v = 0; sheetPaint(); cancelAnimationFrame(sheet.raf); sheet.raf = 0; return sheetRest(); }
+  const k = (2 * Math.PI / response) ** 2, c = 2 * damping * Math.sqrt(k);
+  cancelAnimationFrame(sheet.raf);
+  sheet.last = performance.now();
+  const tick = (now) => {
+    let dt = Math.min(0.064, (now - sheet.last) / 1000); sheet.last = now;
+    while (dt > 0) { const h = Math.min(dt, 0.004); sheet.v += (-k * (sheet.x - to) - c * sheet.v) * h; sheet.x += sheet.v * h; dt -= h; }
+    if (Math.abs(sheet.x - to) < 0.5 && Math.abs(sheet.v) < 8) { sheet.x = to; sheet.v = 0; sheetPaint(); sheet.raf = 0; return sheetRest(); }
+    sheetPaint();
+    sheet.raf = requestAnimationFrame(tick);
+  };
+  sheet.raf = requestAnimationFrame(tick);
+}
+function sheetRest() {
+  if (sheet.target !== 1) return;
+  $("#drawer").hidden = true; $("#panel").innerHTML = ""; sheet.x = null;
+}
+function sheetOpen() {
+  const d = $("#drawer");
+  if (d.hidden) { d.hidden = false; sheet.x = sheetW(); sheet.v = 0; sheetPaint(); }
+  if (sheet.target !== 0 || sheet.x > 0.5) sheetTo(true);
+}
+const drawerOpen = () => !$("#drawer").hidden && sheet.target === 0;
+// Where a flick would come to rest if nothing stopped it (the same decay scrolling uses).
+const project = (v, rate = 0.998) => (v / 1000) * rate / (1 - rate);
+const rubber = (over, dim, c = 0.55) => (over * dim * c) / (dim + c * Math.abs(over));
+document.addEventListener("pointerdown", (e) => {
+  const head = e.target.closest?.("#panel .hero, #panel .p-head");
+  if (!head || e.button !== 0 || e.target.closest("a, button, input, select, textarea")) return;
+  sheet.drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, base: sheet.x ?? 0, live: false, hist: [[e.timeStamp, e.clientX]] };
+});
+document.addEventListener("pointermove", (e) => {
+  const g = sheet.drag;
+  if (!g || e.pointerId !== g.id) return;
+  const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+  if (!g.live) {
+    // Wait for a clear sideways move before taking over, so text selection and scrolling still work.
+    if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) { if (Math.abs(dy) > 14) sheet.drag = null; return; }
+    g.live = true; g.x0 = e.clientX; g.base = sheet.x ?? 0;
+    cancelAnimationFrame(sheet.raf); sheet.raf = 0;
+    try { $("#panel").setPointerCapture(g.id); } catch {}
+    $("#panel").classList.add("dragging");
+    return;
+  }
+  const raw = g.base + (e.clientX - g.x0);
+  sheet.x = raw < 0 ? -rubber(-raw, sheetW()) : raw;       // past fully open it resists instead of stopping dead
+  g.hist.push([e.timeStamp, e.clientX]); if (g.hist.length > 6) g.hist.shift();
+  sheetPaint();
+});
+const sheetDrop = (e) => {
+  const g = sheet.drag;
+  if (!g || e.pointerId !== g.id) return;
+  sheet.drag = null;
+  if (!g.live) return;
+  $("#panel").classList.remove("dragging");
+  const a = g.hist[0], b = g.hist[g.hist.length - 1], v = b[0] > a[0] ? ((b[1] - a[1]) / (b[0] - a[0])) * 1000 : 0;
+  // The decision comes from where the throw is heading, not from where the finger let go.
+  const shut = sheet.x + project(v) > sheetW() * 0.5;
+  if (shut) { coinData = null; sheetTo(false, { velocity: v, damping: 1, response: 0.3 }); }
+  else sheetTo(true, { velocity: v, damping: 0.8, response: 0.3 });
+};
+document.addEventListener("pointerup", sheetDrop);
+document.addEventListener("pointercancel", sheetDrop);
+
 const SRC_NAME = { dexscreener: "DexScreener" };
 let coinData = null;
 async function openCoin(mint) {
-  const d = $("#drawer"), p = $("#panel");
-  d.hidden = false;
+  const p = $("#panel");
+  sheetOpen();
   p.innerHTML = `<div class="skel" style="margin-top:22px"></div><div class="skel"></div><div class="skel"></div>`;
   let r;
   try { r = await api(`token/${mint}`); } catch (e) { p.innerHTML = `<button class="close" data-close aria-label="Close">✕</button>${empty("Couldn't load this coin", e.message)}`; return; }
@@ -1894,11 +1986,11 @@ function pollResearch(mint, tries = 0) {
     const r = await api(`research/${mint}`).catch(() => null);
     if (r?.status === "deep" && !pollResearch.shown?.has(mint)) {
       (pollResearch.shown ||= new Set()).add(mint);
-      if (!$("#drawer").hidden && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoin(mint);
       toast(`Fast read: ${r.grade}. Waiting for the deep read`);
     }
     if (r?.status === "done" || r?.status === "error" || r?.status === "expired" || tries > 60) {
-      if (!$("#drawer").hidden && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoin(mint);
       if (route() === "research") viewResearch($("#main"));
       if (r?.status === "done") toast(`Graded ${r.grade} by ${providerOf(r.model)}`);
       return;
@@ -1906,7 +1998,7 @@ function pollResearch(mint, tries = 0) {
     pollResearch(mint, tries + 1);
   }, 3000);
 }
-function closeCoin() { $("#drawer").hidden = true; $("#panel").innerHTML = ""; coinData = null; }
+function closeCoin() { coinData = null; if (!$("#drawer").hidden) sheetTo(false); }
 
 // ---------- routing ----------
 const VIEWS = { "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, health: viewHealth, settings: viewSettings };
@@ -1935,7 +2027,7 @@ async function render() {
     setTimeout(() => { if (seq === renderSeq) render(); }, 4000);
   } finally { clearTimeout(slow); tmp.remove(); }
 }
-window.addEventListener("hashchange", () => { if (!$("#drawer").hidden) closeCoin(); render(); });
+window.addEventListener("hashchange", () => { if (drawerOpen()) closeCoin(); render(); });
 
 // ---------- events ----------
 document.addEventListener("click", async (e) => {
@@ -2007,7 +2099,7 @@ document.addEventListener("click", async (e) => {
     const label = prompt("Name this wallet (optional):", "") ?? "";
     await post(`wallet/${follow.dataset.follow}`, { follow: true, label });
     toast("Following wallet");
-    if (!$("#drawer").hidden) openWallet(follow.dataset.follow);
+    if (drawerOpen()) openWallet(follow.dataset.follow);
     if (route() === "wallets") viewWallets($("#main"));
     return;
   }
@@ -2074,7 +2166,7 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "cunrel") { coinState.unreliable = e.target.checked; loadCoins(); }
   if (e.target.id === "sgroup") { sigState.grouped = e.target.checked; render(); }
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#drawer").hidden) closeCoin(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawerOpen()) closeCoin(); });
 
 // ---------- live stream ----------
 function connect() {
