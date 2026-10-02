@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import * as health from "./health.js";
 
 const DIR = path.join(os.homedir(), ".grok");
 const BIN = path.join(DIR, "bin", process.platform === "win32" ? "grok.exe" : "grok");
@@ -17,7 +18,7 @@ let refreshing = null, cooling = 0;
 // Out of subscription credits ("spending-limit"): stop calling Grok entirely and re-check every 30 minutes.
 let blockedUntil = 0, blockedReason = null;
 export const grokBlocked = () => blockedUntil > Date.now();
-const usage = { calls: 0, errors: 0, tokens: 0, searches: 0, lastMs: null, avgMs: null, lastModel: null, lastError: null, limits: null, tier: null };
+const usage = { calls: 0, errors: 0, tokens: 0, searches: 0, lastMs: null, avgMs: null, lastModel: null, lastError: null, lastErrorAt: null, lastOk: null, blockedSince: null, limits: null, tier: null };
 
 export const grokInstalled = () => fs.existsSync(path.join(DIR, "auth.json"));
 export const grokStatus = () => ({ installed: grokInstalled(), ...usage, coolingSecs: cooling > Date.now() ? Math.ceil((cooling - Date.now()) / 1000) : 0,
@@ -90,9 +91,12 @@ async function post(model, body, retried = false, timeout = 90_000) {
   const txt = await r.text();
   if (r.status === 401 && !retried) { await token(true); return post(model, body, true, timeout); }
   if (r.status === 426 && !retried) { await detectVersion(); return post(model, body, true, timeout); }
-  if (r.status === 403 && /spending-limit|run out of credits/i.test(txt)) {
+  // Out of credits comes back as 403 "spending-limit" or 402 "usage balance exhausted", depending on the model.
+  if ((r.status === 403 || r.status === 402) && /spending-limit|run out of credits|balance exhausted|payment required|insufficient/i.test(txt) || r.status === 402) {
     blockedUntil = Date.now() + 30 * 60_000;
     blockedReason = "Grok subscription credits used up for now";
+    usage.blockedSince ||= Date.now();
+    health.fail("grok", blockedReason);
     throw Object.assign(new Error(blockedReason), { busy: true, blocked: true });
   }
   if (r.status === 429) {
@@ -104,6 +108,8 @@ async function post(model, body, retried = false, timeout = 90_000) {
   const j = JSON.parse(txt);
   usage.calls++; usage.tokens += j.usage?.total_tokens || 0; usage.searches += j.usage?.num_server_side_tools_used || 0;
   usage.lastMs = ms; usage.avgMs = usage.avgMs == null ? ms : Math.round(usage.avgMs * 0.8 + ms * 0.2); usage.lastModel = model;
+  usage.lastOk = Date.now(); usage.blockedSince = null;
+  health.ok("grok");
   return { text: textOf(j), model, ms, searches: j.usage?.num_server_side_tools_used || 0 };
 }
 
@@ -127,7 +133,8 @@ export async function askGrok(system, prompt, { model = GROK_MODELS[0], search =
       ? await post(model, { instructions: system, input: [{ role: "user", content: prompt }], tools: [{ type: "x_search" }, { type: "web_search" }], max_output_tokens: maxTokens }, false, timeout)
       : await post(model, { messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens, response_format: { type: "json_object" }, ...(chatEffort ? { reasoning_effort: chatEffort } : {}) }, false, timeout);
   } catch (e) {
-    usage.errors++; usage.lastError = e.message;
+    usage.errors++; usage.lastError = e.message; usage.lastErrorAt = Date.now();
+    if (!e.blocked) health.fail("grok", e.message);
     // A model the subscription doesn't have: try the next one.
     if ((e.status === 400 || e.status === 403 || e.status === 404) && /model/i.test(e.message)) {
       const next = GROK_MODELS[GROK_MODELS.indexOf(model) + 1];

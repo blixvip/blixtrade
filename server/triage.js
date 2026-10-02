@@ -13,6 +13,15 @@ import { getMeta } from "./pulse.js";
 import { liveStats } from "./livetrades.js";
 import { askFast, fastReady as groqReady } from "./fast.js";
 import { askGrok, grokInstalled, grokBlocked } from "./grok.js";
+import { ask, claudeStatus, FAST_MODEL } from "./ai.js";
+
+// Which model can label launches right now: Groq, else Grok, else Claude Haiku on this PC's Claude login.
+const llmFor = () => {
+  if (!settings.triageOn) return null;
+  if (groqReady() && settings.triageProvider !== "grok") return "groq";
+  if (grokInstalled() && !grokBlocked() && settings.triageProvider !== "groq" && settings.fastProvider !== "claude") return "grok";
+  return settings.claudeFast && claudeStatus().ready ? "claude" : null;
+};
 
 db.exec(`CREATE TABLE IF NOT EXISTS triage (
   mint TEXT PRIMARY KEY, t INTEGER, symbol TEXT, name TEXT, rules INTEGER, score INTEGER, label TEXT, why TEXT, model TEXT, ms INTEGER,
@@ -63,14 +72,15 @@ Reply with ONLY JSON: {"r":[{"i":<index>,"s":<0-100>,"l":"slop|meh|maybe|promisi
 let inflight = 0;
 async function batch() {
   if (inflight >= 2 || !settings.triageOn) return;
-  const useGroq = groqReady() && settings.triageProvider !== "grok";
-  const useGrok = !useGroq && grokInstalled() && !grokBlocked() && settings.triageProvider !== "groq";
-  if (!useGroq && !useGrok) return;
+  const llm = llmFor(), useGroq = llm === "groq";
+  if (!llm) return;
   // Wait ~6s after creation so metadata (description, socials) has loaded.
-  const size = useGroq ? 25 : 8;
+  const size = llm === "grok" ? 8 : 25;
   const pending = recentLaunches.filter((l) => !mem.get(l.mint)?.model && !mem.get(l.mint)?.inflight && now() - l.seen > 5000 && now() - l.seen < 10 * MIN).slice(-size);
   if (!pending.length) return;
   if (pending.length < 3 && now() - pending[0].seen < 12_000) return;   // let a small batch fill up
+  // On the Claude login every call counts against the subscription: one call at a time, fuller batches.
+  if (llm === "claude" && (inflight >= 1 || (pending.length < 15 && now() - pending[0].seen < 25_000))) return;
   inflight++;
   for (const l of pending) mem.set(l.mint, { ...(mem.get(l.mint) || {}), inflight: true });
   const items = pending.map((l, i) => {
@@ -82,7 +92,8 @@ async function batch() {
   try {
     const r = useGroq
       ? await askFast(SYSTEM, prompt, 1600, { models: [settings.triageModel, "openai/gpt-oss-20b", "llama-3.1-8b-instant"] })
-      : await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000 });
+      : llm === "grok" ? await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000 })
+      : await ask(SYSTEM, prompt, 1600, { model: FAST_MODEL });
     const out = JSON.parse(r.text.match(/\{[\s\S]*\}/)?.[0] || "{}");
     const ms = now() - t0;
     for (const x of out.r || []) {
@@ -95,9 +106,9 @@ async function batch() {
       const ls = liveStats(l.mint);
       db.prepare(`INSERT INTO triage (mint, t, symbol, name, rules, score, label, why, model, ms, mc0) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(mint) DO UPDATE SET score = excluded.score, label = excluded.label, why = excluded.why, model = excluded.model, ms = excluded.ms`)
-        .run(l.mint, now(), l.symbol, l.name, prev.rules ?? null, score, label, x.w || null, r.model, ms, ls?.mc || null);
+        .run(l.mint, now(), l.symbol == null ? null : String(l.symbol), l.name == null ? null : String(l.name), prev.rules ?? null, score, label, x.w ? String(x.w).slice(0, 80) : null, r.model, ms, ls?.mc || null);
     }
-    triageStats.batches++; triageStats.coins += (out.r || []).length; triageStats.lastMs = ms; triageStats.provider = useGroq ? "groq" : "grok"; triageStats.lastError = null;
+    triageStats.batches++; triageStats.coins += (out.r || []).length; triageStats.lastMs = ms; triageStats.provider = llm; triageStats.lastError = null;
   } catch (e) {
     triageStats.lastError = e.message;
     if (e.blocked) triageStats.provider = "rules";
@@ -115,9 +126,12 @@ function escalate() {
     const t = mem.get(l.mint);
     if (!t || t.escalated) continue;
     const ls = liveStats(l.mint);
-    const strong = ["maybe", "promising"].includes(t.label) && t.score >= settings.triageEscalate;
+    // While a model is labelling launches, the instant rules alone do not send a coin for a full read:
+    // they pass anything with an X link. The rules only decide if the model has not answered in 45 seconds.
+    const strong = ["maybe", "promising"].includes(t.label) && t.score >= settings.triageEscalate && (t.model || !llmFor() || now() - l.seen > 45_000);
     // Traction overrides a harsh label: real buyers showing up means it's worth a proper look.
-    const traction = ls && ls.traders >= 25 && ls.mc >= 9000 && t.label !== "slop";
+    // Real, different buyers in the first seconds matter more than size: 20 traders with more buying than selling is enough.
+    const traction = ls && ls.traders >= 20 && ls.buys > ls.sells && (t.label !== "slop" || ls.traders >= 40);
     if (!strong && !traction) continue;
     t.escalated = true;
     triageStats.escalated++;
@@ -160,6 +174,6 @@ export function startTriage(enqueue) {
   enqueueFn = enqueue;
   setInterval(rulesPass, 1000);
   setInterval(() => batch().catch(() => {}), 2000);
-  setInterval(escalate, 5000);
+  setInterval(escalate, 1000);
   setInterval(checkOutcomes, 60_000);
 }

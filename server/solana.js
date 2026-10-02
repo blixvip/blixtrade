@@ -1,6 +1,7 @@
 // Solana RPC access and swap parsing. Works on the free public RPC (slow, ~1 tx lookup/s);
 // a custom RPC URL in Settings (e.g. a free Helius key) makes wallet tracking much faster.
 import { settings } from "./settings.js";
+import * as health from "./health.js";
 
 export const WSOL = "So11111111111111111111111111111111111111112";
 export const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -18,7 +19,19 @@ const gap = (method) => {
   return method === "getTransaction" ? 1100 : 450;
 };
 let cooldownUntil = 0;
-export const rpcStats = { calls: 0, errors: 0, limited: 0, last: 0 };
+export const rpcStats = { calls: 0, errors: 0, limited: 0, last: 0, lastOk: 0, lastError: null, lastErrorAt: 0, coolingUntil: 0 };
+export const rpcPublic = () => isPublic();
+
+// The public endpoint answers "too many requests" for bursts and "used your data allowance" once an IP
+// has pulled too much; the second needs a much longer rest.
+function limited(msg, attempt) {
+  rpcStats.limited++;
+  const rest = /data allowance/i.test(msg) ? 60_000 : 4000 * (attempt + 1);
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + rest);
+  rpcStats.coolingUntil = cooldownUntil;
+  rpcStats.lastError = msg; rpcStats.lastErrorAt = Date.now();
+  health.fail("rpc", msg);
+}
 
 export async function rpc(method, params, tries = 3) {
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -35,21 +48,27 @@ export async function rpc(method, params, tries = 3) {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
         signal: AbortSignal.timeout(20000),
       });
-      if (r.status === 429) { rpcStats.limited++; cooldownUntil = Date.now() + 4000 * (attempt + 1); continue; }
+      if (r.status === 429) { limited("rate limited (429)", attempt); continue; }
       body = await r.json();
     } catch (e) {
       rpcStats.errors++;
+      rpcStats.lastError = e.name === "TimeoutError" ? "timed out" : e.message; rpcStats.lastErrorAt = Date.now();
+      health.fail("rpc", rpcStats.lastError);
       if (attempt === tries - 1) throw e;
       continue;
     }
     if (body.error) {
-      if (/too many requests/i.test(body.error.message)) { rpcStats.limited++; cooldownUntil = Date.now() + 4000 * (attempt + 1); continue; }
+      if (/too many requests|data allowance|rate limit/i.test(body.error.message)) { limited(body.error.message, attempt); continue; }
       rpcStats.errors++;
+      rpcStats.lastError = body.error.message; rpcStats.lastErrorAt = Date.now();
+      health.fail("rpc", body.error.message);
       throw new Error(body.error.message);
     }
+    rpcStats.lastOk = Date.now();
+    health.ok("rpc");
     return body.result;
   }
-  throw new Error(`${method}: rate limited`);
+  throw Object.assign(new Error(`${method}: rate limited`), { limited: true });
 }
 
 export const signatures = (address, opts = {}) => rpc("getSignaturesForAddress", [address, { limit: 20, ...opts }]);

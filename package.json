@@ -1,10 +1,11 @@
 {
   "name": "meme-radar",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scans Solana memecoins nonstop: safety checks, momentum signals, narratives, AI briefs, alerts, and hit-rate tracking.",
   "type": "module",
   "scripts": {
-    "start": "node --no-warnings server/server.js"
+    "start": "node --no-warnings server/server.js",
+    "test": "node --no-warnings --test test/radar.test.mjs"
   }
 }

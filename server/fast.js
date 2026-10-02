@@ -2,6 +2,7 @@
 // so every candidate coin can be rated. Each Groq model has its own free quota, so when one model
 // is rate limited we move to the next and come back after its cooldown.
 import { settings } from "./settings.js";
+import * as health from "./health.js";
 
 const URL = "https://api.groq.com/openai/v1/chat/completions";
 export const FAST_MODELS = ["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"];
@@ -29,7 +30,7 @@ const secs = (v) => {
   return Number(v) || null;
 };
 
-async function call(model, system, prompt, maxTokens) {
+async function call(model, system, prompt, maxTokens, key) {
   const body = {
     model, temperature: 0.3, max_tokens: maxTokens,
     messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
@@ -41,7 +42,7 @@ async function call(model, system, prompt, maxTokens) {
   const t0 = Date.now();
   const r = await fetch(URL, {
     method: "POST", signal: AbortSignal.timeout(30_000),
-    headers: { authorization: `Bearer ${settings.groqKey}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   const ms = Date.now() - t0;
@@ -56,7 +57,7 @@ async function call(model, system, prompt, maxTokens) {
   }
   if (r.status === 400 && !plain.has(model) && /response_format|reasoning|json/i.test(JSON.stringify(res))) {
     plain.add(model);
-    return call(model, system, prompt, maxTokens);
+    return call(model, system, prompt, maxTokens, key);
   }
   if (r.status === 404 || (r.status === 400 && /model/i.test(res?.error?.message || ""))) {
     cooldown.set(model, Date.now() + 24 * 3600_000);   // model retired or not on this account
@@ -70,20 +71,21 @@ async function call(model, system, prompt, maxTokens) {
   return { text, model, ms };
 }
 
-export async function askFast(system, prompt, maxTokens = 900, { models } = {}) {
-  if (!fastReady()) throw new Error("No Groq key");
+export async function askFast(system, prompt, maxTokens = 900, { models, key = settings.groqKey } = {}) {
+  if (!key) throw Object.assign(new Error("No Groq key"), { busy: true });
   let last;
   const list = models ? [...new Set([...models, ...order()])].filter((m) => !(cooldown.get(m) > Date.now())) : order();
   for (const model of list) {
-    try { return await call(model, system, prompt, maxTokens); }
-    catch (e) { last = e; usage.errors++; usage.lastError = e.message; if (!e.next) throw e; }
+    try { const r = await call(model, system, prompt, maxTokens, key); health.ok("groq"); return r; }
+    catch (e) { last = e; usage.errors++; usage.lastError = e.message; health.fail("groq", e); if (!e.next) throw e; }
   }
-  throw last || new Error("All Groq models are cooling down");
+  throw Object.assign(last || new Error("All Groq models are cooling down"), { busy: true });
 }
 
-export async function testFast() {
+// Tests the key typed in the form (or the saved one when the field is blank) without saving anything.
+export async function testFast(key) {
   try {
-    const r = await askFast('Reply with JSON {"ok":true}.', "ping", 50);
+    const r = await askFast('Reply with JSON {"ok":true}.', "ping", 50, { key: key || undefined });
     return { ok: true, model: r.model, ms: r.ms };
   } catch (e) { return { ok: false, error: e.message }; }
 }

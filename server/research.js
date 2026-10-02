@@ -3,21 +3,26 @@
 // on how strong the narrative is and how high it could realistically go. All sources are free.
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
-import { ask } from "./ai.js";
+import { ask, extractJson, claudeStatus, FAST_MODEL } from "./ai.js";
 import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
 import { askGrok, grokInstalled, grokStatus, grokBlocked } from "./grok.js";
-import { trackGrade, considerCall, playbookPrompt, playbook } from "./brain.js";
-import { liveStats } from "./livetrades.js";
+import { trackGrade, considerCall, considerPick, playbookPrompt, playbook, evidence } from "./brain.js";
+import { liveStats, live } from "./livetrades.js";
 import { triageFor } from "./triage.js";
+import { earlyFor } from "./early.js";
+import { verdict, vet } from "./engine.js";
+import { safeUrl, publicUrl, traction, tractionOfSources } from "./quality.js";
 const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled() && !grokBlocked();
 const deepMin = () => playbook().tuning.deepMinScore ?? settings.deepMinScore;
 
 // Fast lane: Grok on this PC's SuperGrok login (searches X live), Groq as the fallback when a key is set.
-const grokOn = () => settings.fastProvider !== "groq" && grokInstalled() && !grokBlocked();
-const fastReady = () => grokOn() || groqReady();
+const grokOn = () => settings.fastProvider !== "groq" && settings.fastProvider !== "claude" && grokInstalled() && !grokBlocked();
+// Last resort for speed: Claude Haiku on this PC's Claude login. No live X search, but a read takes seconds.
+const claudeFast = () => settings.claudeFast && claudeStatus().ready;
+const fastReady = () => grokOn() || groqReady() || claudeFast();
 const fastStatus = () => {
   const g = grokStatus(), q2 = groqStatus();
-  const provider = grokOn() ? "grok" : q2.ready ? "groq" : null;
+  const provider = grokOn() ? "grok" : q2.ready ? "groq" : claudeFast() ? "claude" : null;
   const cur = provider === "grok" ? g : q2;
   return { ready: Boolean(provider), provider, search: provider === "grok" && settings.grokSearch, avgMs: cur.avgMs, lastError: cur.lastError,
     limits: provider === "grok" ? g.limits : null, cooling: provider === "grok" ? (g.coolingSecs ? [{ model: "Grok", secs: g.coolingSecs }] : []) : q2.cooling, grok: g, groq: q2 };
@@ -32,7 +37,8 @@ CREATE TABLE IF NOT EXISTS research (
 );
 `);
 try { db.exec("ALTER TABLE tokens ADD COLUMN uri TEXT"); } catch {}
-for (const c of ["tier TEXT", "model TEXT", "ms INTEGER", "fast TEXT"]) try { db.exec(`ALTER TABLE research ADD COLUMN ${c}`); } catch {}
+// enq_t: when the coin really joined the queue (`queued` is a sort key: now minus priority).
+for (const c of ["tier TEXT", "model TEXT", "ms INTEGER", "fast TEXT", "enq_t INTEGER", "reads INTEGER DEFAULT 1", "enq_mcap REAL"]) try { db.exec(`ALTER TABLE research ADD COLUMN ${c}`); } catch {}
 
 const MIN = 60_000;
 const now = () => Date.now();
@@ -62,16 +68,21 @@ export function bondingProgress(t) {
   return Math.max(0, Math.min(1, (t.mcap - start) / (end - start)));
 }
 
+// Real memecoins with a believable price only.
+const MEME = "quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'";
 export function candidates() {
-  const near = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND pair IS NOT NULL ORDER BY mcap DESC LIMIT 200`).all()
+  const near = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND pair IS NOT NULL AND ${MEME} ORDER BY mcap DESC LIMIT 200`).all()
     .map((t) => ({ ...t, progress: bondingProgress(t) })).filter((t) => t.progress >= 0.6 && t.progress < 0.995).sort((a, b) => b.progress - a.progress);
-  const bonded = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL
+  const bonded = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND ${MEME}
     AND COALESCE(pair_created, first_seen) > ? ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(now() - 3 * 60 * MIN);
   return { near, bonded };
 }
 
 // ---------- gathering ----------
-async function getText(url, ms = 7000) {
+async function getText(target, ms = 7000) {
+  // Coin websites and metadata links come from whoever launched the coin: public web addresses only.
+  const url = publicUrl(target);
+  if (!url) throw new Error("link not allowed");
   const r = await fetch(url, { signal: AbortSignal.timeout(ms), headers: { "user-agent": "Mozilla/5.0 meme-radar research", accept: "text/html,application/json,*/*" }, redirect: "follow" });
   if (!r.ok) throw new Error(`${r.status}`);
   return (await r.text()).slice(0, 400_000);
@@ -107,7 +118,7 @@ async function xProfile(user) {
     const d = await getJson(`https://api.fxtwitter.com/${user}`);
     const u = d.user;
     if (!u) return { user, error: "account not found" };
-    return { user: u.screen_name, name: u.name, followers: u.followers, following: u.following, tweets: u.tweets, joined: u.joined, description: u.description?.slice(0, 280), avatar: u.avatar_url, verified: u.verification?.verified || false };
+    return { user: u.screen_name, url: `https://x.com/${u.screen_name}`, name: u.name, followers: u.followers, following: u.following, tweets: u.tweets, joined: u.joined, description: u.description?.slice(0, 280), avatar: safeUrl(u.avatar_url), verified: u.verification?.verified || false };
   } catch (e) { return { user, error: e.message }; }
 }
 
@@ -116,7 +127,7 @@ async function xStatus(user, id) {
     const d = await getJson(`https://api.fxtwitter.com/${user}/status/${id}`);
     const tw = d.tweet;
     if (!tw) return null;
-    return { author: tw.author?.screen_name, authorFollowers: tw.author?.followers, text: tw.text?.slice(0, 500), likes: tw.likes, retweets: tw.retweets, views: tw.views, created: tw.created_at };
+    return { url: `https://x.com/${user}/status/${id}`, author: tw.author?.screen_name, authorFollowers: tw.author?.followers, text: tw.text?.slice(0, 500), likes: tw.likes, retweets: tw.retweets, views: tw.views, created: tw.created_at };
   } catch { return null; }
 }
 
@@ -124,8 +135,10 @@ async function news(term) {
   if (!term || term.length < 3) return [];
   try {
     const xml = await getText(`https://news.google.com/rss/search?q=${encodeURIComponent(`"${term}"`)}+when:7d&hl=en-US&gl=US&ceid=US:en`);
-    return [...xml.matchAll(/<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<pubDate>([\s\S]*?)<\/pubDate>[\s\S]*?<\/item>/g)]
-      .slice(0, 6).map((m) => ({ title: m[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim(), date: m[2].trim() }));
+    return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 6).map((m) => {
+      const tag = (n) => (m[1].match(new RegExp(`<${n}>([\\s\\S]*?)</${n}>`))?.[1] || "").replace(/<!\[CDATA\[|\]\]>/g, "").trim();
+      return { title: tag("title"), date: tag("pubDate"), url: safeUrl(tag("link")) };
+    }).filter((n) => n.title);
   } catch { return []; }
 }
 
@@ -145,8 +158,8 @@ async function copycats(t) {
 export async function gather(t, stage) {
   const meta = await metadata(t);
   const links = json(t.links, []);
-  const xUrl = meta?.twitter || links.find((l) => /twitter|x\.com/i.test(`${l.type} ${l.url}`))?.url;
-  const site = meta?.website || links.find((l) => l.type === "website")?.url;
+  const xUrl = safeUrl(meta?.twitter) || links.find((l) => /twitter|x\.com/i.test(`${l.type} ${l.url}`))?.url;
+  const site = safeUrl(meta?.website) || links.find((l) => l.type === "website")?.url;
   const xh = xHandle(xUrl);
   const statusLinks = [meta?.twitter, meta?.website, meta?.description, t.description].join(" ").match(/(?:x|twitter)\.com\/[A-Za-z0-9_]+\/status\/\d+/gi) || [];
   const [profile, siteInfo, tweet, headlines, cats] = await Promise.all([
@@ -162,8 +175,8 @@ export async function gather(t, stage) {
   const flow = db.prepare(`SELECT COUNT(DISTINCT CASE WHEN side = 'buy' THEN wallet END) buyers, COUNT(DISTINCT CASE WHEN side = 'sell' THEN wallet END) sellers
     FROM fomo_flow WHERE mint = ? AND t > ?`).get(t.mint, now() - 60 * MIN);
   const smart = db.prepare(`SELECT COUNT(DISTINCT wt.wallet) n FROM wallet_trades wt JOIN wallets w ON w.address = wt.wallet WHERE wt.mint = ? AND wt.side = 'buy' AND w.watching = 1`).get(t.mint).n;
-  return {
-    stage, ticker: t.symbol, name: t.name, mint: t.mint,
+  const data = {
+    stage, ticker: t.symbol, name: t.name, mint: t.mint, gatheredAt: new Date().toISOString(),
     liveTrading: (() => { const x = liveStats(t.mint); return x ? { mcapUsd: Math.round(x.mc), athUsd: Math.round(x.ath), buys: x.buys, sells: x.sells, uniqueTraders: x.traders, volumeUsd: Math.round(x.vol), change1mPct: x.chg1m && +x.chg1m.toFixed(1) } : null; })(),
     firstTriage: (() => { const x = triageFor(t.mint); return x?.model ? { label: x.label, score: x.score, why: x.why } : null; })(),
     description: meta?.description || t.description || null,
@@ -182,24 +195,57 @@ export async function gather(t, stage) {
     hottestThemesNow: nar.themes.slice(0, 5).map((x) => x.name),
     fomoTradersLastHour: flow, followedWalletsBought: smart,
   };
+  // Live demand, scored the same way for every coin, with how each band has actually done on this radar.
+  const tr = tractionOfSources(data), ev = evidence(), el = earlyFor(t.mint);
+  // The launch model's read of its first minutes, when it has one (it is tested on launches it never saw).
+  if (el) data.earlySignal = { chanceOf2xPct: Math.round(el.p * 100), rank: el.top ? "top 5% of launches" : el.strong ? "top 10% of launches" : "ordinary", atSeconds: el.cp };
+  data.traction = { score: tr.score, helping: tr.up, hurting: tr.down,
+    measured: ev.traction.reduce((n, b) => n + b.n, 0) >= 60 ? ev.traction.filter((b) => b.n >= 8).map((b) => `traction ${b.label}: ${b.n} past coins, ${b.winPct}% won, average result ${b.avg}x`) : "not enough past results yet" };
+  return data;
+}
+
+// The same score for any tracked coin from what is known this second: the live ranking on the dashboard.
+export function liveTraction(t) {
+  const x = !t.graduated ? liveStats(t.mint) : null, s = json(t.safety) || {};
+  const fresh = x && now() - x.last < 15 * MIN;
+  const mcap = (fresh ? x.mc : 0) || t.mcap || 0, prog = t.graduated ? 1 : (fresh ? x.progress : bondingProgress(t)) ?? 0;
+  const ath = Math.max(t.peak_mcap || 0, fresh ? x.ath : 0);
+  return traction({ stage: t.graduated ? "bonded" : prog >= 0.6 ? "near" : "new", mcap, vol5m: Math.round(t.vol_m5 || 0), traders: fresh ? x.traders : undefined, chg1m: fresh ? x.chg1m ?? undefined : undefined,
+    chg5m: t.chg_m5 ?? undefined, chg1h: t.chg_h1 ?? undefined, holders: s.totalHolders ?? undefined, offAth: ath > 0 && mcap > 0 ? Math.min(1, mcap / ath) : undefined });
 }
 
 // ---------- grading ----------
-const SYSTEM = `You are a sharp memecoin narrative analyst. The user trades Solana memecoins right around pump.fun bonding.
-You get research gathered seconds ago about one coin. Judge how strong and how big its NARRATIVE is, and how high it could realistically go.
+// The read is a trade decision, reasoned step by step. It used to be a narrative grade; measured against
+// what the coins did next, that grade had no link to winning trades, while live demand did.
+const SYSTEM = `You are the analyst for a trader who buys Solana memecoins around pump.fun bonding and sells by one fixed rule: half at 2x, the rest on a 35% trailing stop, everything out at -40%.
+A WIN is a coin that reaches 2x from its current price before it falls 40%. Roughly 1 coin in 5 that gets this far is a win. Most fall.
+You get research gathered seconds ago about one coin. It includes "traction": a 0-100 score of live demand, what is helping and hurting it, and base rates measured on this radar's own past reads.
 
-Grade on:
-- Narrative strength: is the meme instantly understandable, funny, emotional, tied to a culture moment or a big name?
-- Timeliness: is there a live catalyst (news, viral tweet, event) right now, or is it stale?
-- Originality: is this the original/first coin for this meme, or a late copycat? (copycats data: rankByMcap, isOldest)
-- Reach: who is talking about it (X account followers, linked tweet engagement, news coverage)?
-- Momentum and holders: real buying, holder spread, dev and insider behaviour.
-Be blunt. Most coins are C or worse. Give A only to coins with a genuinely strong, timely, original narrative AND healthy trading. Never invent facts that are not in the data; say "unknown" instead.
+Work through these steps IN ORDER and write each one down briefly in "thinking" BEFORE you decide anything:
+1. what - what this coin is in plain words, and who would want it.
+2. demand - is real money arriving right now? Use traction, unique traders, buys against sells, the 1-minute and 5-minute change, volume against market cap. Quote the numbers.
+3. buyersLeft - who is left to buy at this market cap, and who is sitting on profit ready to sell into them? Use age, distance below its high, how far it already ran this hour, holder count, top-10, dev and insider share.
+4. edge - a specific reason strangers will find this coin in the next 30 minutes (a live catalyst, a large account, being the original of a meme that is spreading), or is it one of many copies? Use copycats, the linked tweet's real engagement, news, theme heat, followed wallets.
+5. kill - the single most likely way this trade loses.
 
-Reply with ONLY a JSON object, no prose around it:
-{"grade":"A+|A|A-|B+|B|B-|C+|C|C-|D|F","score":0-100,"verdict":"one punchy sentence",
+Rules for the decision:
+- Measured on this radar: narrative quality alone has NOT predicted winners. Live demand has. A great meme with no buyers is not a buy.
+- Strong demand with a weak meme can still be a short trade. Say so plainly instead of dismissing it.
+- Already up more than about 130% this hour, or 40%+ below its high, or above $250k market cap: the easy move is usually gone. It needs an exceptional, specific reason.
+- Under about $15k market cap with few traders: too early to tell. That is "watch", not "buy".
+- Unknown is unknown. Never invent facts that are not in the data. A coin minutes old with no socials yet is normal, not a red flag by itself.
+- Be calibrated. trade.pWin is your honest probability (0-100) of a WIN as defined above. Most coins belong between 5 and 35. Go above 50 only with strong demand AND a real edge. If your past numbers are in the playbook, correct for them.
+- trade.action: "buy" = enter now. "watch" = decent but the entry or timing is not there. "avoid" = do not trade it. These coins cannot be shorted: never suggest it.
+- Quote the measured base rates exactly as given ("won" and "average result"); do not rename them.
+- grade and score describe the NARRATIVE only (meme strength, timeliness, originality, reach). Most coins are C or worse. They are shown to the user but do not decide the trade.
+
+Reply with ONLY a JSON object, no prose around it, keys in this order:
+{"thinking":{"what":"1 sentence","demand":"1-2 sentences with the numbers","buyersLeft":"1-2 sentences","edge":"1-2 sentences","kill":"1 sentence"},
+"trade":{"action":"buy|watch|avoid","pWin":0-100,"why":"the case for or against this trade, 1-2 sentences"},
+"grade":"A+|A|A-|B+|B|B-|C+|C|C-|D|F","score":0-100,"verdict":"one punchy sentence that says what to do and why",
 "narrative":{"summary":"what the meme is, 1-2 sentences","theme":"one of: THEME_LIST","tag":"2-4 word name for the specific narrative, e.g. 'Trump tariff joke'","strength":0-10,"timeliness":0-10,"originality":0-10,"reach":0-10},
 "catalyst":"the live catalyst, or 'none found'",
+"evidence":[{"claim":"one factual claim your decision rests on","source":"where it comes from: a URL you were given or found, or the name of the data field (e.g. socials.linkedTweet, traction, holders)"}],
 "ceiling":{"tier":"<$250k|$250k-$1M|$1M-$10M|$10M-$100M|$100M+","why":"1-2 sentences"},
 "bull":["..."],"bear":["..."],"redFlags":["..."],"confidence":"low|medium|high"}`;
 
@@ -212,7 +258,7 @@ Reply with ONLY a JSON object`);
 // The deep read: Grok's smartest model, more searching, and a trade decision with an exit plan.
 const DEEP_EXTRA = `This is the DEEP read on a coin that passed the first screen. Dig further than a quick read: check the coin's own X account history and whether it is real, whether accounts with real followings (not bots, raid groups or paid "signal" accounts) are posting it, whether the story behind it is spreading beyond crypto, what the first-pass read may have missed, and how earlier coins on the same narrative did.
 Then decide whether to buy RIGHT NOW at the current market cap. Only say "buy" when the narrative is genuinely strong and early enough that a 2x+ is realistic from here; otherwise "watch" (good but wrong entry/timing) or "avoid".
-Add to the JSON: "trade":{"action":"buy|watch|avoid","conviction":0-100,"entry":"when/where to enter, e.g. 'now, under $90k' or 'wait for a dip to $60k'","maxEntryMcap":number_in_usd,
+In this deep read the "trade" object is fuller. Use: "trade":{"action":"buy|watch|avoid","pWin":0-100,"conviction":0-100,"entry":"when/where to enter, e.g. 'now, under $90k' or 'wait for a dip to $60k'","maxEntryMcap":number_in_usd,
 "takeProfits":[{"atMultiple":2,"sellPct":40},{"atMultiple":5,"sellPct":40}],"trailingStopPct":number_or_null,"stopLossPct":number,"timeStopHours":number,"why":"the case for this trade in 1-2 sentences"}
 
 Reply with ONLY a JSON object`;
@@ -220,11 +266,23 @@ const SYSTEM_DEEP_GROK = () => SYSTEM_GROK.replace("Reply with ONLY a JSON objec
 const SYSTEM_DEEP_CLAUDE = () => SYSTEM_FULL.replace("Reply with ONLY a JSON object", DEEP_EXTRA) + playbookPrompt();
 const GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
-function parse(text) {
-  const r = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0]);
-  r.grade = String(r.grade || "").trim().toUpperCase();
-  if (!GRADES.includes(r.grade)) throw new Error(`bad grade ${r.grade}`);
+export function parse(text) {
+  const r = extractJson(text);
+  // Models sometimes invent grades off the scale (D+, D-, E, F+): fold them onto it.
+  let g = String(r.grade || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (/^D[+-]$/.test(g)) g = "D"; else if (/^(E|F[+-]?)$/.test(g)) g = "F";
+  if (!GRADES.includes(g)) throw new Error(`the model returned an unusable grade "${String(r.grade).slice(0, 12)}"`);
+  r.grade = g;
   r.score = Math.max(0, Math.min(100, Math.round(Number(r.score) || 0)));
+  // The trade call: only the three known answers, and a chance between 0 and 100.
+  if (r.trade && typeof r.trade === "object") {
+    const a = String(r.trade.action || "").trim().toLowerCase();
+    r.trade.action = ["buy", "watch", "avoid"].includes(a) ? a : null;
+    r.trade.pWin = r.trade.pWin == null || !Number.isFinite(Number(r.trade.pWin)) ? null : Math.max(0, Math.min(100, Math.round(Number(r.trade.pWin))));
+  } else delete r.trade;
+  // Only real web links survive as evidence or post links.
+  if (Array.isArray(r.evidence)) r.evidence = r.evidence.filter((e) => e?.claim).slice(0, 8).map((e) => ({ claim: String(e.claim).slice(0, 300), source: String(e.source || "").slice(0, 300), url: safeUrl(String(e.source || "").match(/https?:\/\/\S+/)?.[0]) }));
+  if (r.xBuzz?.posts) r.xBuzz.posts = r.xBuzz.posts.filter(Boolean).slice(0, 6).map((p) => ({ ...p, url: /^https:\/\/(x|twitter)\.com\//.test(safeUrl(p.url) || "") ? safeUrl(p.url) : null }));
   return r;
 }
 
@@ -240,14 +298,25 @@ export async function gradeFast(data) {
     try {
       const search = settings.grokSearch;
       const { text, model, ms, searches } = await askGrok((search ? SYSTEM_GROK : SYSTEM_FULL) + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`,
-        { model: settings.grokModel, search, maxTokens: search ? 2500 : 1200 });
+        { model: settings.grokModel, search, maxTokens: search ? 3000 : 1700 });
       return { ...parse(text), model, ms, searches, tier: "fast" };
     } catch (e) {
-      if (!groqReady()) throw e;
+      if (!groqReady() && !claudeFast()) throw e;
     }
   }
-  const { text, model, ms } = await askFast(SYSTEM_FULL, `Research (JSON):\n${JSON.stringify(slim(data))}`, 900);
-  return { ...parse(text), model, ms, tier: "fast" };
+  if (groqReady()) {
+    try {
+      const { text, model, ms } = await askFast(SYSTEM_FULL + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`, 1400);
+      return { ...parse(text), model, ms, tier: "fast" };
+    } catch (e) {
+      if (!claudeFast()) throw e;
+    }
+  }
+  if (!claudeFast()) throw Object.assign(new Error("No fast AI is available right now"), { busy: true });
+  const t0 = Date.now();
+  const { text, model, truncated } = await ask(SYSTEM_FULL + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`, 1600, { model: FAST_MODEL });
+  if (truncated) throw new Error("the answer was cut off");
+  return { ...parse(text), model, ms: Date.now() - t0, tier: "fast", searched: false };
 }
 // Claude: the slower, deeper second opinion for coins the fast read liked (or everything, without a Groq key).
 async function gradeDeep(data, fast) {
@@ -259,12 +328,15 @@ async function gradeDeep(data, fast) {
         { model: settings.deepModel, search: true, maxSearches: settings.deepSearches, effort: "high", maxTokens: 5000, timeout: 300_000 });
       return { ...parse(text), model, ms, searches, tier: "deep" };
     } catch (e) {
-      if (settings.deepProvider === "grok") throw e;
+      // Out of credits or rate limited: Claude takes the read. Any other failure is reported as it is.
+      if (!e.blocked && !e.busy) throw e;
     }
   }
   const t0 = Date.now();
-  const { text, model } = await ask(SYSTEM_DEEP_CLAUDE(), prompt, 1600);
-  return { ...parse(text), model, ms: Date.now() - t0, tier: "deep" };
+  const { text, model, truncated } = await ask(SYSTEM_DEEP_CLAUDE(), prompt, 3000);
+  if (truncated) throw new Error("the answer was cut off");
+  // Claude has no live search here: it judged only the sources the radar gathered.
+  return { ...parse(text), model, ms: Date.now() - t0, tier: "deep", searched: false };
 }
 
 // ---------- queue ----------
@@ -273,32 +345,97 @@ let raiseFn = null;
 const running = new Set();
 const fastHour = [], deepHour = [];
 const inHour = (list) => { while (list.length && list[0] < now() - 60 * MIN) list.shift(); return list.length; };
-const FAST_WORKERS = 4;
+const FAST_WORKERS = 6;
+
+// A read is only useful while the coin is still in the state that made it interesting.
+const TTL = { new: 25 * MIN, near: 45 * MIN, bonded: 3 * 60 * MIN };
+const MANUAL = 9e11;                                   // priorities at or above this are reads you asked for
+const isManual = (job) => now() - job.queued >= MANUAL;
+const expired = { hour: [] };
+
+// Reads per hour the radar can actually do right now, with whichever AI is available.
+const capacity = () => (fastReady() ? settings.fastPerHour : grokDeep() ? settings.deepPerHour : settings.researchPerHour);
+// Never queue more than about 90 minutes of work: anything behind that would be stale when it was read.
+const queueCap = () => Math.max(8, Math.min(settings.queueMax, Math.round(capacity() * 1.5)));
 
 export function enqueue(mint, stage, priority = 0) {
   const cur = db.prepare("SELECT * FROM research WHERE mint = ?").get(mint);
   if (cur && ["queued", "running", "deep"].includes(cur.status)) return;
   if (cur && cur.stage === stage && cur.status === "done") return;
-  db.prepare(`INSERT INTO research (mint, stage, status, queued) VALUES (?, ?, 'queued', ?)
-    ON CONFLICT(mint) DO UPDATE SET stage = excluded.stage, status = 'queued', queued = excluded.queued, error = NULL, fast = NULL, tier = NULL`).run(mint, stage, now() - priority);
+  if (priority < MANUAL) {
+    // Recently dropped as stale or outranked: don't bounce it straight back in.
+    if (cur?.status === "expired" && cur.stage === stage && now() - cur.t < 20 * MIN) return;
+    // Without a fast AI, brand-new launches only get a slot when the queue is nearly empty.
+    if (stage === "new" && !fastReady() && queueSize() >= queueCap() / 2) return;
+  }
+  // The market cap when it was first noticed is kept: it is how "did the radar have it early?" gets answered.
+  const x = liveStats(mint), mc = (x && now() - x.last < 15 * MIN ? x.mc : 0) || db.prepare("SELECT mcap FROM tokens WHERE mint = ?").get(mint)?.mcap || null;
+  db.prepare(`INSERT INTO research (mint, stage, status, queued, enq_t, enq_mcap) VALUES (?, ?, 'queued', ?, ?, ?)
+    ON CONFLICT(mint) DO UPDATE SET stage = excluded.stage, status = 'queued', queued = excluded.queued, enq_t = excluded.enq_t, error = NULL, fast = NULL, tier = NULL`).run(mint, stage, now() - priority, now(), mc);
+}
+const queueSize = () => db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'queued'").get().n;
+
+// How much a waiting coin deserves the next read, from what it is doing right now (not when it was queued).
+function rank(job, t) {
+  if (isManual(job)) return 1e9;
+  const x = liveStats(job.mint);
+  const vol = Math.max(t.vol_h1 || 0, x?.vol || 0);
+  let s = Math.log10(vol + 1) * 12 + Math.min(30, (x?.traders || 0) / 4) + Math.max(-15, Math.min(25, (t.chg_h1 || 0) / 8));
+  if (job.stage === "near") s += (bondingProgress(t) || 0) * 30;
+  if (job.stage === "bonded") s += 12;
+  const pr = now() - job.queued;
+  if (pr >= 5e11) s += 40;                              // lead coin of a narrative the scout just found
+  else if (pr >= 2e11) s += (pr - 2e11) / 1e6 / 3;      // triage score, a third of its weight
+  return s - ((now() - (job.enq_t || 0)) / MIN) * 0.6;  // waiting makes it less timely, not more deserving
+}
+
+// Keep the queue honest: drop reads that went stale, coins that died, and whatever does not fit capacity.
+function trimQueue() {
+  const drop = (mint, why) => { db.prepare("UPDATE research SET status = 'expired', t = ?, error = ? WHERE mint = ? AND status = 'queued'").run(now(), why, mint); expired.hour.push(now()); };
+  const rows = db.prepare("SELECT r.mint, r.stage, r.queued, r.enq_t, t.status tstatus, t.quarantine, t.asset_class, t.vol_h1, t.chg_h1, t.mcap, t.dex, t.graduated FROM research r LEFT JOIN tokens t ON t.mint = r.mint WHERE r.status = 'queued'").all();
+  const keep = [];
+  for (const j of rows) {
+    if (isManual(j)) { keep.push(j); continue; }
+    if (!j.tstatus) drop(j.mint, "the radar stopped tracking this coin");
+    else if (j.tstatus === "dead") drop(j.mint, "the coin died before it could be read");
+    else if (j.quarantine || (j.asset_class && j.asset_class !== "meme")) drop(j.mint, "not a tradable memecoin");
+    else if (!j.enq_t || now() - j.enq_t > (TTL[j.stage] || TTL.near)) drop(j.mint, `waited more than ${Math.round((TTL[j.stage] || TTL.near) / MIN)} minutes; a read that late would be out of date`);
+    else keep.push(j);
+  }
+  const cap = queueCap();
+  if (keep.length > cap) {
+    const ranked = keep.map((j) => ({ j, s: rank(j, j) })).sort((a, b) => b.s - a.s);
+    for (const { j } of ranked.slice(cap)) drop(j.mint, "outranked: more coins were waiting than the AI can read in time");
+  }
+  // A coin still waiting for its deep read after an hour keeps its fast read and moves on.
+  db.prepare("UPDATE research SET status = 'done', error = 'deep read skipped: it waited over an hour' WHERE status = 'deep' AND t < ?").run(now() - 60 * MIN);
+  db.prepare("DELETE FROM research WHERE status = 'expired' AND t < ?").run(now() - 24 * 60 * MIN);
 }
 
 function save(mint, t, r, data, status = "done") {
   db.prepare(`UPDATE research SET status = ?, t = ?, grade = ?, score = ?, ceiling = ?, verdict = ?, report = ?, sources = ?, mcap_at = ?,
     tier = ?, model = ?, ms = ?, error = NULL WHERE mint = ?`)
-    .run(status, now(), r.grade, r.score, r.ceiling?.tier || null, r.verdict, JSON.stringify(r), JSON.stringify(data), t.mcap, r.tier, r.model, r.ms, mint);
+    .run(status, now(), r.grade, r.score, r.ceiling?.tier || null, r.verdict, JSON.stringify(r), JSON.stringify(data), t.mcap || liveStats(mint)?.mc || null, r.tier, r.model, r.ms, mint);
 }
 
 function alertIfStrong(t, stage, r) {
   if (!["A+", "A", "A-"].includes(r.grade) || !raiseFn) return;
   const last = q.lastSignal.get(t.mint, "research");
   if (last && now() - last.t < 6 * 60 * MIN) return;
+  // A strong narrative on a coin that fails safety is still not an approved signal.
+  const v = verdict(q.getToken.get(t.mint) || t);
   const who = r.tier === "fast" ? "Fast read" : "Deep read";
-  raiseFn(t, "research", `${who}: $${t.symbol} ${r.grade}${stage === "near" ? " before bonding" : stage === "new" ? " on a fresh launch" : " after bonding"}`,
-    `${r.verdict} Ceiling ${r.ceiling?.tier || "?"}. ${r.narrative?.summary || ""}`.slice(0, 400));
+  raiseFn(t, "research", `${who}: $${t.symbol} ${r.grade}${stage === "near" ? " before bonding" : stage === "new" ? " on a fresh launch" : " after bonding"}${v.ok ? "" : " (failed safety)"}`,
+    `${r.verdict} Ceiling ${r.ceiling?.tier || "?"}. ${r.narrative?.summary || ""}`.slice(0, 400) + (v.ok ? "" : ` Not safety-screened: ${v.reasons.join("; ")}.`),
+    0, v.ok ? {} : { safe: false, why: v.reasons.join("; ") });
 }
 
 function fail(job, t, e) {
+  // The AI being out of credits or rate limited is not the coin's fault: put it back without using its retry.
+  if (e.busy || e.blocked) {
+    db.prepare("UPDATE research SET status = ?, queued = queued + 60000 WHERE mint = ?").run(job.status, job.mint);
+    return;
+  }
   // One automatic retry a minute later (a flaky site or a malformed answer usually clears up).
   if (!String(job.error || "").startsWith("retry:")) {
     db.prepare("UPDATE research SET status = ?, queued = ?, error = ? WHERE mint = ?").run(job.status, now() + 60_000, `retry: ${String(e.message).slice(0, 280)}`, job.mint);
@@ -308,20 +445,37 @@ function fail(job, t, e) {
   logEvent("error", `research $${t?.symbol}: ${e.message}`);
 }
 
-const nextJob = (status) => db.prepare(`SELECT * FROM research WHERE status = ? AND queued <= ? ${quotaLow() ? "AND stage != 'new'" : ""} ${running.size ? `AND mint NOT IN (${[...running].map(() => "?").join(",")})` : ""}
-  ORDER BY queued ASC LIMIT 1`).get(status, now(), ...running);
+// Deep reads go best-fast-score first. First reads go to whichever waiting coin is doing the most right now.
+function nextJob(status) {
+  const rows = db.prepare(`SELECT * FROM research WHERE status = ? AND queued <= ? ${quotaLow() ? "AND stage != 'new'" : ""} ORDER BY queued ASC LIMIT 200`).all(status, now())
+    .filter((j) => !running.has(j.mint));
+  if (status !== "queued" || rows.length < 2) return rows[0];
+  let best = null, top = -Infinity;
+  for (const j of rows) { const t = q.getToken.get(j.mint); const s = t ? rank(j, t) : -1e9; if (s > top) { top = s; best = j; } }
+  return best;
+}
 
 async function runFast(job) {
   const t = q.getToken.get(job.mint);
   if (!t) { db.prepare("DELETE FROM research WHERE mint = ?").run(job.mint); return; }
   fastHour.push(now());
   db.prepare("UPDATE research SET status = 'running' WHERE mint = ?").run(job.mint);
+  // The safety check runs alongside the read, so a coin that rates well can be entered without waiting for it.
+  if (!t.safety_checked) vet(job.mint).catch(() => {});
   try {
     const data = await gather(t, job.stage);
     const r = await gradeFast(data);
-    const wantsDeep = r.score >= deepMin();
+    // A coin seconds old may have no stored price yet: take the live one so its rating is still tracked.
+    if (!t.mcap) t.mcap = liveStats(job.mint)?.mc || 0;
+    r.traction = data.traction?.score ?? null;
+    r.early = earlyFor(job.mint);
+    r.stage = job.stage;
+    r.live = data.liveTrading ? { traders: data.liveTrading.uniqueTraders, buys: data.liveTrading.buys, sells: data.liveTrading.sells } : null;
+    // A second, deeper opinion for anything the first read would trade, or whose narrative stands out.
+    const wantsDeep = r.score >= deepMin() || (r.trade?.action && r.trade.action !== "avoid" && (r.traction ?? 0) >= 50);
     save(job.mint, t, r, data, wantsDeep ? "deep" : "done");
     trackGrade(t, r, job.stage);
+    considerPick(t, r, job.stage);
     if (wantsDeep) db.prepare("UPDATE research SET fast = ?, queued = ? WHERE mint = ?").run(JSON.stringify(r), now() - r.score * 1000, job.mint);
     logEvent("research", `$${t.symbol} fast ${r.grade} in ${r.ms}ms (${r.model.split("/").pop()}): ${r.verdict}`);
     alertIfStrong(t, job.stage, r);
@@ -338,15 +492,17 @@ async function runDeep(job) {
     // Fast read just gathered the sources; refresh them only if they're getting old.
     const data = fast && job.t > now() - 10 * MIN ? json(job.sources) : await gather(t, job.stage);
     const r = await gradeDeep(data, fast);
+    r.traction = tractionOfSources(data)?.score ?? null;
     if (fast) { r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms }; r.xBuzz ||= fast.xBuzz; }
     save(job.mint, t, r, data);
     trackGrade(t, r, job.stage);
+    considerPick(t, r, job.stage);
     considerCall(t, r, job.stage);
     logEvent("research", `$${t.symbol} ${fast ? `deep ${r.grade} (fast said ${fast.grade})` : `graded ${r.grade}`}: ${r.verdict}`);
     if (!fast || !["A+", "A", "A-"].includes(fast.grade)) alertIfStrong(t, job.stage, r);
   } catch (e) {
     // Claude failed or is out of quota: keep the fast read rather than losing the coin.
-    if (fast && String(job.error || "").startsWith("retry:")) {
+    if (!e.busy && !e.blocked && fast && String(job.error || "").startsWith("retry:")) {
       db.prepare("UPDATE research SET status = 'done', error = ? WHERE mint = ?").run(`deep read failed: ${String(e.message).slice(0, 200)}`, job.mint);
       return;
     }
@@ -378,9 +534,40 @@ function pump() {
 
 // Pick up new candidates. With the fast lane on, rate every coin close to bonding or freshly bonded;
 // without it, only the strongest (Claude's hourly budget is small).
+export const scoutStats = { runs: 0, lastMs: 0, maxMs: 0 };
 function scout() {
+  const t0 = now();
+  try { scoutOnce(); } finally { scoutStats.runs++; scoutStats.lastMs = now() - t0; scoutStats.maxMs = Math.max(scoutStats.maxMs * 0.99, scoutStats.lastMs); }
+}
+function scoutOnce() {
+  trimQueue();
   if (!settings.researchAuto) return;
   const fast = fastReady();
+  // Straight from the live trade feed: a coin is queued the second it crosses 60% bonded with real buyers,
+  // not at the next stored price refresh (which can be half a minute behind).
+  if (fast) {
+    for (const [mint, s] of live) {
+      if (!(s.progress >= 0.6 && s.progress < 0.995) || now() - s.last > 60_000 || s.traders.size < 20) continue;
+      const t = q.getToken.get(mint);
+      if (!t || t.status !== "active" || t.quarantine || (t.asset_class && t.asset_class !== "meme") || json(t.safety)?.danger > 0) continue;
+      enqueue(mint, "near", Math.round(s.progress * 100) * 1000);
+    }
+  }
+  // A coin read earlier that has since taken off gets a fresh read: the first one judged a different coin.
+  if (fast && scoutStats.runs % 5 === 0) {
+    for (const r of db.prepare("SELECT mint, mcap_at, COALESCE(reads, 1) reads FROM research WHERE status = 'done' AND t > ? AND t < ?").all(now() - 60 * MIN, now() - 4 * MIN)) {
+      if (r.reads >= 3) continue;
+      const t = q.getToken.get(r.mint);
+      if (!t || t.status !== "active" || t.quarantine || json(t.safety)?.danger > 0) continue;
+      const m = (!t.graduated && liveStats(r.mint)?.mc) || t.mcap || 0;
+      if (m < settings.pickMinMcap || m > settings.pickMaxMcap || (r.mcap_at > 0 && m < r.mcap_at * 1.5)) continue;
+      const tr = liveTraction(t).score;
+      if (tr < 65) continue;
+      const stage = t.graduated ? "bonded" : (bondingProgress(t) || 0) >= 0.6 ? "near" : "new";
+      db.prepare("UPDATE research SET status = 'queued', stage = ?, queued = ?, enq_t = ?, error = NULL, fast = NULL, tier = NULL, reads = COALESCE(reads, 1) + 1 WHERE mint = ? AND status = 'done'").run(stage, now() - tr * 1000, now(), r.mint);
+      logEvent("research", `$${t.symbol} is taking off (traction ${tr}, ${r.mcap_at > 0 ? `${(m / r.mcap_at).toFixed(1)}x since its last read` : "no price at its last read"}): reading it again`);
+    }
+  }
   const { near, bonded } = candidates();
   for (const t of near) {
     if (t.progress < (fast ? 0.6 : 0.8) || (t.vol_h1 || 0) < (fast ? 3000 : 8000) || json(t.safety)?.danger > 0) continue;
@@ -392,7 +579,7 @@ function scout() {
   }
   // Fast lane only: young coins that survived their first minutes with real trading get a first read too.
   if (fast && !quotaLow()) {
-    const young = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND graduated = 0 AND first_seen > ? AND mcap >= 15000 AND vol_h1 >= 4000
+    const young = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND graduated = 0 AND first_seen > ? AND mcap >= 15000 AND vol_h1 >= 4000 AND ${MEME}
       ORDER BY vol_h1 DESC LIMIT 25`).all(now() - 30 * MIN);
     for (const t of young) {
       if (json(t.safety)?.danger > 0 || (bondingProgress(t) || 0) >= 0.6) continue;
@@ -442,15 +629,49 @@ export function desk() {
     .sort((a, b) => b.rank - a.rank).slice(0, 10);
   const stats = db.prepare("SELECT status, COUNT(*) n FROM research GROUP BY status").all();
   const hour = { fast: inHour(fastHour), deep: inHour(deepHour) };
-  return { near: near.slice(0, 30).map(attach), bonded: bonded.slice(0, 30).map(attach), top, narratives, stats, hour,
+  return { near: near.slice(0, 30).map(attach), bonded: bonded.slice(0, 30).map(attach), top, narratives, stats, hour, queue: queueStatus(), providers: providers(),
     perHour: grokDeep() ? settings.deepPerHour : settings.researchPerHour, deepProvider: grokDeep() ? "grok" : "claude", deepMin: deepMin(), fastPerHour: settings.fastPerHour, auto: settings.researchAuto, fast: fastStatus() };
+}
+
+// The queue as it really is: how many wait, how long the oldest has waited, and how long it would take to clear.
+export function queueStatus() {
+  const waits = db.prepare("SELECT enq_t FROM research WHERE status = 'queued' AND enq_t IS NOT NULL").all().map((r) => now() - r.enq_t).sort((a, b) => a - b);
+  const size = queueSize(), cap = capacity();
+  return { size, cap: queueCap(), perHour: cap, deepWaiting: db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'deep'").get().n,
+    oldestMin: waits.length ? Math.round(waits[waits.length - 1] / MIN) : 0, medianMin: waits.length ? Math.round(waits[waits.length >> 1] / MIN) : 0,
+    etaMin: cap ? Math.round((size / cap) * 60) : null, expiredHour: inHour(expired.hour),
+    errors: db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'error' AND t > ?").get(now() - 24 * 60 * MIN).n };
+}
+
+// Which AI is really doing each job right now, what was configured, and why they differ.
+export function providers() {
+  const g = grokStatus(), c = claudeStatus(), k = groqStatus();
+  const name = { grok: "Grok", groq: "Groq", claude: "Claude", haiku: "Claude Haiku" };
+  const fastWant = settings.fastProvider === "groq" ? "groq" : settings.fastProvider === "claude" ? "haiku" : "grok";
+  const fastNow = grokOn() ? "grok" : groqReady() && settings.fastProvider !== "claude" ? "groq" : claudeFast() ? "haiku" : null;
+  const deepWant = settings.deepProvider === "claude" ? "claude" : "grok";
+  const deepNow = grokDeep() ? "grok" : c.ready ? "claude" : null;
+  const grokWhy = !g.installed ? "Grok is not logged in on this PC (run `grok login`)" : g.blocked ? `${g.blocked}; re-checked ${g.blockedUntil ? `in ${Math.max(1, Math.round((g.blockedUntil - now()) / MIN))} min` : "soon"}` : g.coolingSecs ? `Grok is rate limited for ${g.coolingSecs}s` : null;
+  const lane = (want, cur, why) => ({ configured: want, configuredName: name[want], actual: cur, actualName: cur ? name[cur] : null, fallback: want !== cur, reason: want !== cur ? why : null });
+  return {
+    fast: { ...lane(fastWant, fastNow, fastWant === "grok" ? grokWhy : "no Groq key is saved"), search: fastNow === "grok" && settings.grokSearch,
+      note: fastNow === "haiku" ? "Claude Haiku is doing the first reads: seconds per coin, but it only sees what the radar gathered and cannot search X live." : fastNow ? null : "No fast AI is available, so first reads go straight to the deep lane at its slower pace." },
+    deep: { ...lane(deepWant, deepNow, deepWant === "grok" ? grokWhy : c.loginError), search: deepNow === "grok",
+      note: deepNow === "claude" ? "Claude reads only what the radar gathered (X profile, linked tweet, website, news). It does not search X live." : null },
+    grok: { installed: g.installed, ok: g.installed && !g.blocked && !g.coolingSecs, blocked: g.blocked, blockedUntil: g.blockedUntil, blockedSince: g.blockedSince, errors: g.errors, calls: g.calls, lastError: g.lastError, lastErrorAt: g.lastErrorAt, lastOk: g.lastOk, tier: g.tier, limits: g.limits },
+    groq: { configured: k.ready, errors: k.errors, calls: k.calls, lastError: k.lastError, cooling: k.cooling },
+    claude: { ok: c.ready, loginError: c.loginError, errors: c.errors, calls: c.calls, truncated: c.truncated, lastError: c.lastError, lastErrorAt: c.lastErrorAt, lastOk: c.lastOk, usedThisHour: grokDeep() ? 0 : inHour(deepHour), perHour: settings.researchPerHour },
+    recovery: !g.installed ? "Run `grok login` once to use your SuperGrok subscription, or add a free Groq key in Settings."
+      : g.blocked ? "Grok's subscription credits are spent for this billing period. The radar re-checks every 30 minutes and switches back by itself. Until then: add a free Groq key in Settings for fast reads, or leave it on Claude (slower, no live X search)." : null,
+  };
 }
 
 export function startResearch(raise) {
   raiseFn = raise;
   // Jobs that were mid-read when the radar stopped go back in the queue.
   db.prepare("UPDATE research SET status = CASE WHEN fast IS NOT NULL THEN 'deep' ELSE 'queued' END WHERE status = 'running'").run();
-  const timers = [setInterval(scout, 20_000), setInterval(pump, 2_000)];
-  setTimeout(scout, 15_000);
+  try { trimQueue(); } catch (e) { logEvent("error", `queue: ${e.message}`); }
+  // Both run every second: a new candidate is noticed, queued and handed to a free reader within about a second.
+  const timers = [setInterval(scout, 1000), setInterval(pump, 1000)];
   return () => timers.forEach(clearInterval);
 }

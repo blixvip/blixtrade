@@ -4,10 +4,13 @@ import { db, q, json, logEvent, prune } from "./db.js";
 import * as src from "./sources.js";
 import { themesFor } from "./narratives.js";
 import { settings } from "./settings.js";
-import { startWallets, walletSignals } from "./wallets.js";
+import { startWallets, walletSignals, revalidateWinners } from "./wallets.js";
+import { CURVE_DEX, readingProblem, exitState, classifyAsset, safetyVerdict, cleanLinks, safeUrl } from "./quality.js";
+import * as health from "./health.js";
+import { meta } from "./db.js";
 
 export const bus = new EventEmitter();
-export const stats = { launchesSeen: 0, nursery: 0, graduated: 0, tracked: 0, signals: 0, pump: "connecting", lastCycle: 0, errors: 0, startedAt: Date.now() };
+export const stats = { launchesSeen: 0, nursery: 0, graduated: 0, tracked: 0, signals: 0, pump: "connecting", pumpLast: 0, lastCycle: 0, errors: 0, quarantined: 0, startedAt: Date.now() };
 
 const now = () => Date.now();
 const MIN = 60_000;
@@ -46,7 +49,7 @@ function adopt(t) {
     if (t.mint && t.description) db.prepare("UPDATE tokens SET description = COALESCE(NULLIF(description,''), ?) WHERE mint = ?").run(t.description, t.mint);
     return false;
   }
-  q.insertToken.run(t.mint, t.symbol || null, t.name || null, t.description || "", t.image || null, t.source, now(), JSON.stringify(t.links || []), 0);
+  q.insertToken.run(t.mint, t.symbol || null, t.name || null, t.description || "", safeUrl(t.image), t.source, now(), JSON.stringify(cleanLinks(t.links)), 0);
   if (t.boosts) db.prepare("UPDATE tokens SET boosts = ? WHERE mint = ?").run(t.boosts, t.mint);
   if (t.creator) db.prepare("UPDATE tokens SET creator = ?, dev_sol = ? WHERE mint = ?").run(t.creator, t.devSol ?? null, t.mint);
   if (t.uri) db.prepare("UPDATE tokens SET uri = ? WHERE mint = ?").run(t.uri, t.mint);
@@ -56,9 +59,10 @@ function adopt(t) {
 
 function startPump() {
   return src.pumpStream({
-    onStatus: (s) => { stats.pump = s; },
+    onStatus: (s) => { stats.pump = s; s === "connected" ? health.ok("pumpportal") : health.fail("pumpportal", s); },
     onToken: (t) => {
       stats.launchesSeen++;
+      stats.pumpLast = now();
       const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
       launchLog.push(entry);
       unsaved.push(entry);
@@ -124,28 +128,37 @@ async function discoverFeeds() {
 }
 
 // ---------- enrichment ----------
+const pulled = new Set();   // coins whose pool was just emptied; dumpWatch turns these into warnings
 function applyPair(mint, p) {
-  const links = [
+  const links = cleanLinks([
     ...(p.info?.websites || []).map((w) => ({ type: "website", url: w.url })),
     ...(p.info?.socials || []).map((s) => ({ type: s.type, url: s.url })),
-  ];
+  ]);
   const t = q.getToken.get(mint);
-  const mcap = p.marketCap || p.fdv || 0;
+  const mcap = p.marketCap || p.fdv || 0, liq = p.liquidity?.usd || 0;
+  // A reading from an emptied pool is kept for display (flagged) but never becomes a peak or a return.
+  const problem = readingProblem({ dex: p.dexId, liquidity: liq, mcap }, settings.minExitLiq);
+  if (problem && !t?.quarantine) {
+    stats.quarantined++;
+    if (t && !CURVE_DEX.has(t.dex) && (t.liquidity || 0) >= 5 * settings.minExitLiq && liq < settings.minExitLiq) pulled.add(mint);
+  }
+  const cls = classifyAsset({ ...t, mint, symbol: p.baseToken?.symbol || t?.symbol, name: p.baseToken?.name || t?.name, mcap, liquidity: liq });
   db.prepare(`UPDATE tokens SET
     symbol = COALESCE(?, symbol), name = COALESCE(?, name), image = COALESCE(image, ?), header = COALESCE(?, header),
     pair = ?, dex = ?, pair_created = ?, price = ?, mcap = ?, liquidity = ?,
     vol_m5 = ?, vol_h1 = ?, vol_h24 = ?, buys_m5 = ?, sells_m5 = ?, buys_h1 = ?, sells_h1 = ?,
     chg_m5 = ?, chg_h1 = ?, chg_h24 = ?, links = ?, updated = ?, peak_mcap = MAX(COALESCE(peak_mcap, 0), ?),
-    graduated = CASE WHEN ? THEN 1 ELSE graduated END
+    graduated = CASE WHEN ? THEN 1 ELSE graduated END,
+    quarantine = ?, asset_class = ?, price_t = ?, price_src = 'dexscreener'
     WHERE mint = ?`).run(
-    p.baseToken?.symbol || null, p.baseToken?.name || null, p.info?.imageUrl || null, p.info?.header || null,
-    p.pairAddress, p.dexId, p.pairCreatedAt || null, +p.priceUsd || 0, mcap, p.liquidity?.usd || 0,
+    p.baseToken?.symbol || null, p.baseToken?.name || null, safeUrl(p.info?.imageUrl), safeUrl(p.info?.header),
+    p.pairAddress, p.dexId, p.pairCreatedAt || null, +p.priceUsd || 0, mcap, liq,
     p.volume?.m5 || 0, p.volume?.h1 || 0, p.volume?.h24 || 0,
     p.txns?.m5?.buys || 0, p.txns?.m5?.sells || 0, p.txns?.h1?.buys || 0, p.txns?.h1?.sells || 0,
     p.priceChange?.m5 ?? 0, p.priceChange?.h1 ?? 0, p.priceChange?.h24 ?? 0,
-    JSON.stringify(links.length ? links : json(t?.links, [])), now(), mcap,
-    p.dexId === "pumpswap" ? 1 : 0, mint);
-  q.snapshot.run(mint, now(), +p.priceUsd || 0, mcap, p.liquidity?.usd || 0, p.volume?.m5 || 0);
+    JSON.stringify(links.length ? links : cleanLinks(json(t?.links, []))), now(), problem ? 0 : mcap,
+    p.dexId === "pumpswap" ? 1 : 0, problem, cls, now(), mint);
+  q.snapshot.run(mint, now(), +p.priceUsd || 0, mcap, liq, p.volume?.m5 || 0, problem ? 0 : 1);
 }
 
 async function refreshActive() {
@@ -155,13 +168,19 @@ async function refreshActive() {
   // Hot tokens every cycle, the rest every few cycles.
   const cyc = Math.floor(now() / (30 * 1000));
   const due = rows.filter((r) => r.score >= 50 || r.updated === 0 || cyc % 4 === 0 || now() - r.updated > 3 * MIN).map((r) => r.mint);
-  const pairs = await src.dexTokens(due);
-  for (const m of due) {
+  // Coins that died while one of our alerts is still being scored keep getting priced, so the track
+  // record reflects what really happened to them instead of freezing at their last good price.
+  const scoring = cyc % 4 !== 0 ? [] : db.prepare(`SELECT DISTINCT t.mint FROM tokens t JOIN signals s ON s.mint = t.mint
+    WHERE t.status = 'dead' AND s.hidden = 0 AND s.p24h IS NULL AND s.t > ? LIMIT 300`).all(now() - 25 * 60 * MIN).map((r) => r.mint);
+  const pairs = await src.dexTokens([...due, ...scoring]);
+  for (const m of [...due, ...scoring]) {
     const p = pairs.get(m);
     if (p) applyPair(m, p);
-    else {
+    else if (!pairs.failed?.has(m)) {
       const t = q.getToken.get(m);
       if (t && now() - t.first_seen > 20 * MIN && !t.pair) db.prepare("UPDATE tokens SET status = 'dead', updated = ? WHERE mint = ?").run(now(), m);
+      // It had a market and DexScreener no longer lists one: nothing left to sell into.
+      else if (t?.pair && !t.quarantine && now() - (t.price_t || t.updated || 0) > 30 * MIN) db.prepare("UPDATE tokens SET quarantine = 'no longer listed on any DEX' WHERE mint = ?").run(m);
     }
   }
   for (const m of due) { const t = q.getToken.get(m); if (t?.pair) rescore(t); }
@@ -193,22 +212,26 @@ async function runSafety() {
   const batch = [...safetyQueue].slice(0, 12);
   for (const mint of batch) {
     safetyQueue.delete(mint);
-    try {
-      const before = q.getToken.get(mint);
-      const prev = json(before?.safety);
-      const s = await src.rugcheck(mint);
-      db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ?, creator = COALESCE(creator, ?) WHERE mint = ?").run(JSON.stringify(s), s.clean, now(), s.creator, mint);
-      const t = q.getToken.get(mint);
-      const watched = (t.score || 0) >= 45 || q.lastSignal.get(mint, "launch") || q.lastSignal.get(mint, "momentum") || q.lastSignal.get(mint, "smart");
-      if (watched && prev && prev.devPct >= 1 && s.devPct < 0.2 && cooldownOk(mint, "dev-sold", 1e12))
-        raise(t, "dev-sold", `Dev sold $${t.symbol}`, `The creator held ${prev.devPct.toFixed(1)}% and now holds ${s.devPct.toFixed(2)}%. Mcap ${fmt$(t.mcap)}.`);
-      if (watched && s.rugged && !prev?.rugged && cooldownOk(mint, "rugged", 1e12))
-        raise(t, "rugged", `$${t.symbol} flagged as rugged`, `RugCheck marks this coin as rugged. Mcap ${fmt$(t.mcap)}, liquidity ${fmt$(t.liquidity)}.`);
-    } catch (e) {
+    try { await safetyCheck(mint); }
+    catch (e) {
       if (e.status === 429) { safetyQueue.add(mint); break; }
       db.prepare("UPDATE tokens SET safety_checked = ? WHERE mint = ?").run(now(), mint);
     }
   }
+}
+
+async function safetyCheck(mint) {
+  const before = q.getToken.get(mint);
+  if (!before) return;
+  const prev = json(before.safety);
+  const s = await src.rugcheck(mint);
+  db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ?, creator = COALESCE(creator, ?) WHERE mint = ?").run(JSON.stringify(s), s.clean, now(), s.creator, mint);
+  const t = q.getToken.get(mint);
+  const watched = (t.score || 0) >= 45 || q.lastSignal.get(mint, "launch") || q.lastSignal.get(mint, "momentum") || q.lastSignal.get(mint, "smart");
+  if (watched && prev && prev.devPct >= 1 && s.devPct < 0.2 && cooldownOk(mint, "dev-sold", 1e12))
+    raise(t, "dev-sold", `Dev sold $${t.symbol}`, `The creator held ${prev.devPct.toFixed(1)}% and now holds ${s.devPct.toFixed(2)}%. Mcap ${fmt$(t.mcap)}.`);
+  if (watched && s.rugged && !prev?.rugged && cooldownOk(mint, "rugged", 1e12))
+    raise(t, "rugged", `RugCheck flags $${t.symbol} as rugged`, `RugCheck marks this coin as rugged. Mcap ${fmt$(t.mcap)}, liquidity ${fmt$(t.liquidity)}.`);
 }
 
 // ---------- scoring ----------
@@ -232,10 +255,21 @@ export function scoreToken(t) {
   return Math.round(clamp(s, 0, 100));
 }
 
-function isSafe(t) {
-  const s = json(t.safety);
-  if (t.creator && (devLaunches.get(t.creator) || 0) >= 4) return false; // serial launcher
-  return s && s.danger === 0 && !s.rugged && (t.safety_score ?? 0) >= settings.minSafety;
+// The one safety policy every actionable signal goes through (RugCheck, liquidity, data quality, dev history).
+export const verdict = (t) => safetyVerdict(t, { minSafety: settings.minSafety, minExitLiq: settings.minExitLiq, devCount: t?.creator ? devLaunches.get(t.creator) || 0 : 0 });
+const isSafe = (t) => verdict(t).ok;
+
+// Price and safety-check a coin right now, then judge it. Used before alerting on a coin we just heard about.
+export async function vet(mint) {
+  let t = q.getToken.get(mint);
+  if (!t?.pair || now() - (t.price_t || 0) > 2 * MIN) await enrichNow(mint).catch(() => {});
+  t = q.getToken.get(mint);
+  if (t && (!t.safety_checked || now() - t.safety_checked > 12 * MIN)) {
+    await safetyCheck(mint).catch(() => {});
+    safetyQueue.delete(mint);
+  }
+  t = q.getToken.get(mint);
+  return { token: t, ...verdict(t) };
 }
 
 function cooldownOk(mint, kind, ms) {
@@ -243,21 +277,27 @@ function cooldownOk(mint, kind, ms) {
   return !last || now() - last.t > ms;
 }
 
-export function raise(t, kind, title, detail, hidden = 0) {
-  q.addSignal.run(t.mint, kind, now(), title, detail, t.score, t.price, t.mcap);
+// safe: false marks an alert the coin did not earn through the safety policy (raw wallet activity).
+// It is stored and shown as unscreened, never as an approved opportunity, and is not pushed by default.
+export function raise(t, kind, title, detail, hidden = 0, { safe = true, why = null } = {}) {
+  const tok = q.getToken.get(t.mint);
+  q.addSignal.run(t.mint, kind, now(), title, detail, t.score, t.price, t.mcap, safe ? 1 : 0, safe ? null : why, tok?.liquidity ?? null);
   const sig = db.prepare("SELECT * FROM signals WHERE id = last_insert_rowid()").get();
   if (hidden) { db.prepare("UPDATE signals SET hidden = 1 WHERE id = ?").run(sig.id); return; }
   stats.signals++;
-  bus.emit("signal", { ...sig, token: q.getToken.get(t.mint) });
+  bus.emit("signal", { ...sig, token: tok });
 }
 
 const fmt$ = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n || 0)}`;
 const MILESTONES = [10e6, 5e6, 1e6, 500e3, 100e3];
 
 function rescore(t) {
-  const score = scoreToken(t);
-  const themes = themesFor(t);
+  // Stablecoins, wrapped assets and tokenized stocks are not memecoins: no score, no themes, no signals.
+  const meme = (t.asset_class || "meme") === "meme";
+  const score = meme && !t.quarantine ? scoreToken(t) : 0;
+  const themes = json(t.themes_user, null) || (meme ? themesFor(t) : []);
   db.prepare("UPDATE tokens SET score = ?, themes = ? WHERE mint = ?").run(score, JSON.stringify(themes), t.mint);
+  if (!meme) return;
   t = { ...t, score };
   const safe = isSafe(t);
   const H = 60 * MIN;
@@ -293,7 +333,7 @@ function rescore(t) {
   if (!found.length) return;
   // One alert per coin per scan, and at most one every 20 minutes per coin (graduations excepted).
   const recent = db.prepare(`SELECT 1 FROM signals WHERE mint = ? AND hidden = 0 AND t > ?
-    AND kind NOT IN ('dump', 'dev-sold', 'rugged', 'smart') AND kind NOT LIKE 'wallet:%'`).get(t.mint, now() - 20 * MIN);
+    AND kind NOT IN ('dump', 'dev-sold', 'rugged', 'liq-pulled', 'smart') AND kind NOT LIKE 'wallet:%'`).get(t.mint, now() - 20 * MIN);
   if (recent && found[0][0] !== "graduated") {
     for (const r of found) raise(t, r[0], r[1], r[2], 1); // remember them so they don't fire right after
     return;
@@ -303,26 +343,117 @@ function rescore(t) {
   for (const r of rest) raise(t, r[0], r[1], r[2], 1);
 }
 
-// Warn about coins we signalled that then dumped hard.
+const WARNINGS = "'dump', 'dev-sold', 'rugged', 'liq-pulled'";
+// Warn about coins we signalled that then dumped hard. A price drop and a pulled pool are different
+// things: the first is a dump, the second means holders cannot sell at all.
 function dumpWatch() {
   const rows = db.prepare(`SELECT DISTINCT t.* FROM tokens t JOIN signals s ON s.mint = t.mint
-    WHERE s.t > ? AND s.hidden = 0 AND s.kind NOT IN ('dump', 'dev-sold', 'rugged') AND t.peak_mcap >= 40000 AND t.mcap < t.peak_mcap * 0.4`).all(now() - 24 * 60 * MIN);
+    WHERE s.t > ? AND s.hidden = 0 AND s.kind NOT IN (${WARNINGS}) AND t.quarantine IS NULL AND t.peak_mcap >= 40000 AND t.mcap < t.peak_mcap * 0.4`).all(now() - 24 * 60 * MIN);
   for (const t of rows) if (cooldownOk(t.mint, "dump", 12 * 60 * MIN))
     raise(t, "dump", `Warning: $${t.symbol} is down ${Math.round(100 - 100 * t.mcap / t.peak_mcap)}% from its peak`, `Peak ${fmt$(t.peak_mcap)}, now ${fmt$(t.mcap)}. Liquidity ${fmt$(t.liquidity)}.`);
+  for (const mint of pulled) {
+    pulled.delete(mint);
+    const t = q.getToken.get(mint);
+    const called = t && db.prepare(`SELECT 1 FROM signals WHERE mint = ? AND hidden = 0 AND t > ? AND kind NOT IN (${WARNINGS})`).get(mint, now() - 24 * 60 * MIN);
+    if (called && cooldownOk(mint, "liq-pulled", 1e12))
+      raise(t, "liq-pulled", `Liquidity pulled from $${t.symbol}`, `The pool now holds ${fmt$(t.liquidity)}. Holders cannot sell at the quoted price; treat any price shown as meaningless.`);
+  }
 }
 
 // ---------- outcomes ----------
+// Price multiples at 15m / 1h / 6h / 24h after each alert. A checkpoint taken while the coin cannot be
+// sold (emptied pool, delisted) is recorded as 0 and flagged, and never counts toward the peak.
 function trackOutcomes() {
   const open = q.openSignals.all(now() - 25 * 60 * MIN);
-  const upd = db.prepare("UPDATE signals SET p15 = COALESCE(p15, ?), p1h = COALESCE(p1h, ?), p6h = COALESCE(p6h, ?), p24h = COALESCE(p24h, ?), peak = MAX(COALESCE(peak, 0), ?) WHERE id = ?");
+  const upd = db.prepare(`UPDATE signals SET p15 = COALESCE(p15, ?), p1h = COALESCE(p1h, ?), p6h = COALESCE(p6h, ?), p24h = COALESCE(p24h, ?),
+    peak = CASE WHEN ? IS NULL THEN peak ELSE MAX(COALESCE(peak, 0), ?) END, illiq = MAX(COALESCE(illiq, 0), ?) WHERE id = ?`);
   for (const s of open) {
-    if (!s.price || s.kind === "dump") continue;
+    if (!s.price || /^(dump|dev-sold|rugged|liq-pulled)$/.test(s.kind)) continue;
     const t = q.getToken.get(s.mint);
     if (!t) continue;
-    const x = t.status === "dead" && !t.price ? 0 : (t.price || 0) / s.price;
+    const exit = exitState(t, settings.minExitLiq);
+    // No fresh reading (DexScreener outage, or a coin we stopped pricing): leave the checkpoint empty rather than guess.
+    if (exit.ok && now() - (t.price_t || t.updated || 0) > 20 * MIN) continue;
+    const x = exit.ok ? t.price / s.price : 0;
     const age = now() - s.t;
-    upd.run(age >= 15 * MIN ? x : null, age >= 60 * MIN ? x : null, age >= 6 * 60 * MIN ? x : null, age >= 24 * 60 * MIN ? x : null, x, s.id);
+    const at = (ms, cur) => (cur == null && age >= ms ? x : null);
+    const wrote = [at(15 * MIN, s.p15), at(60 * MIN, s.p1h), at(6 * 60 * MIN, s.p6h), at(24 * 60 * MIN, s.p24h)];
+    upd.run(...wrote, exit.ok ? x : null, x, !exit.ok && wrote.some((v) => v != null) ? 1 : 0, s.id);
   }
+}
+
+// ---------- repair ----------
+// Rebuild recent outcomes, each coin's peak and the "winner" list from stored snapshots, ignoring every
+// reading taken from an emptied pool. Runs once after an upgrade; safe to run again.
+export function rebuildFromSnapshots() {
+  const floor = settings.minExitLiq, DAY = 24 * 60 * MIN;
+  const toks = new Map(db.prepare("SELECT * FROM tokens").all().map((t) => [t.mint, t]));
+  const by = new Map();
+  for (const s of db.prepare("SELECT rowid, mint, t, price, mcap, liquidity, ok FROM snapshots ORDER BY mint, t").iterate()) {
+    let list = by.get(s.mint);
+    if (!list) by.set(s.mint, (list = []));
+    list.push(s);
+  }
+  const trusted = new Map();   // mint -> { first, peak } from believable readings only
+  const setPeak = db.prepare("UPDATE tokens SET peak_mcap = ? WHERE mint = ?");
+  const flag = db.prepare("UPDATE snapshots SET ok = 0 WHERE rowid = ?");
+  db.exec("BEGIN");
+  for (const [mint, list] of by) {
+    const tok = toks.get(mint);
+    const curveBorn = /(pump|bonk|bags)$/i.test(mint) || CURVE_DEX.has(tok?.dex) || /^pump/.test(tok?.source || "");
+    let pooled = false, first = null, peak = 0;
+    for (const s of list) {
+      if ((s.liquidity || 0) >= floor) pooled = true;
+      // Older rows have no flag: before a pool existed a curve coin is tradable; after it, zero liquidity is not.
+      if (s.ok == null) {
+        s.ok = (s.liquidity || 0) >= floor ? (readingProblem({ dex: "amm", liquidity: s.liquidity, mcap: s.mcap }, floor) ? 0 : 1) : curveBorn && !pooled && s.mcap < 2e11 ? 1 : 0;
+        if (!s.ok) flag.run(s.rowid);   // remembered, so charts and later checks skip it too
+      }
+      if (s.ok && s.mcap > 0) { first ??= s.mcap; peak = Math.max(peak, s.mcap); }
+    }
+    trusted.set(mint, { first, peak });
+    if (tok && (tok.peak_mcap || 0) > peak * 1.02) setPeak.run(peak || null, mint);
+  }
+  // Current state: classify every coin, flag unreliable prices, and drop peaks that no snapshot backs up.
+  const fix = db.prepare("UPDATE tokens SET asset_class = ?, quarantine = ?, links = ?, image = ?, peak_mcap = CASE WHEN ? THEN NULL ELSE peak_mcap END WHERE mint = ?");
+  for (const t of toks.values()) {
+    const problem = t.pair ? readingProblem(t, floor) : null;
+    fix.run(classifyAsset(t), problem || (t.quarantine?.startsWith("no longer") ? t.quarantine : null), JSON.stringify(cleanLinks(json(t.links, []))), safeUrl(t.image),
+      problem && !trusted.get(t.mint)?.peak ? 1 : 0, t.mint);
+  }
+  // Signal outcomes.
+  const upd = db.prepare("UPDATE signals SET p15 = ?, p1h = ?, p6h = ?, p24h = ?, peak = ?, illiq = ? WHERE id = ?");
+  let fixed = 0;
+  for (const s of db.prepare("SELECT * FROM signals WHERE price > 0 AND t > ?").all(now() - 3 * DAY + 60 * MIN)) {
+    const list = (by.get(s.mint) || []).filter((x) => x.t >= s.t - MIN);
+    if (!list.length) continue;
+    let peak = null, illiq = 0;
+    for (const x of list) if (x.ok && x.t <= s.t + DAY && x.price > 0) peak = Math.max(peak ?? 0, x.price / s.price);
+    const at = (ms) => {
+      if (now() < s.t + ms) return null;
+      let last = null;
+      for (const x of list) { if (x.t > s.t + ms + 15 * MIN) break; last = x; }
+      if (!last) return null;
+      if (!last.ok) { illiq = 1; return 0; }
+      return last.price / s.price;
+    };
+    const v = [at(15 * MIN), at(60 * MIN), at(6 * 60 * MIN), at(DAY)];
+    if (v.some((x, i) => x !== [s.p15, s.p1h, s.p6h, s.p24h][i]) || peak !== s.peak) fixed++;
+    upd.run(...v, peak, illiq, s.id);
+  }
+  // Alerts that never went through the safety policy (wallet buys, crowd buys, research grades): the ones
+  // whose coin fails the RugCheck part of it today are re-filed as unscreened activity, with the reason.
+  const refile = db.prepare("UPDATE signals SET safe = 0, why_unsafe = ? WHERE id = ?");
+  for (const s of db.prepare("SELECT id, mint FROM signals WHERE hidden = 0 AND COALESCE(safe, 1) = 1 AND (kind LIKE 'wallet:%' OR kind IN ('smart', 'fomo', 'research'))").all()) {
+    const t = toks.get(s.mint), sf = json(t?.safety);
+    const why = !t ? "unknown coin" : !sf ? "safety was never checked" : sf.rugged ? "RugCheck marks it as rugged" : sf.danger > 0 ? `${sf.danger} danger risk${sf.danger > 1 ? "s" : ""}`
+      : (t.safety_score ?? 0) < settings.minSafety ? `safety ${t.safety_score ?? 0}/100, below your minimum of ${settings.minSafety}` : null;
+    if (why) refile.run(`${why} (found when the record was re-checked)`, s.id);
+  }
+  db.exec("COMMIT");
+  const dropped = revalidateWinners(trusted);
+  logEvent("system", `Data repair: re-scored ${fixed} alerts from trusted prices only; removed ${dropped.winners} false winners and paused ${dropped.paused} wallets that were followed because of them`);
+  return { fixed, ...dropped };
 }
 
 // ---------- loop ----------
@@ -338,9 +469,13 @@ async function cycle() {
     dumpWatch();
     trackOutcomes();
     stats.lastCycle = now();
+    health.ok("scan");
+    const gap = health.heartbeat();
+    if (gap && gap.to > stats.lastGap) { stats.lastGap = gap.to; logEvent("system", `Radar was paused for ${Math.round((gap.to - gap.from) / MIN)} minutes (PC asleep or radar stopped). Alerts and checkpoints in that window were missed.`); }
     bus.emit("tick", stats);
   } catch (e) {
     stats.errors++;
+    health.fail("scan", e);
     logEvent("error", e.message);
   } finally {
     running = false;
@@ -364,10 +499,14 @@ export function adoptMint(mint) {
 }
 
 export function start() {
+  stats.lastGap = 0;
+  if (meta.get("repair") !== "2") {
+    try { rebuildFromSnapshots(); meta.set("repair", "2"); } catch (e) { try { db.exec("ROLLBACK"); } catch {} logEvent("error", `data repair: ${e.message}`); }
+  }
   const pump = startPump();
   const stopWallets = startWallets((ev) => {
     bus.emit("walletTrade", ev);
-    walletSignals(ev, raise, adoptMint, enrichNow).catch((e) => logEvent("error", `wallet signal: ${e.message}`));
+    walletSignals(ev, raise, adoptMint, vet).catch((e) => logEvent("error", `wallet signal: ${e.message}`));
   });
   discoverFeeds().then(cycle);
   const timers = [

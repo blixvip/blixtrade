@@ -39,10 +39,12 @@ export function themesFor(t) {
 }
 
 // Rising = share of recent launches carrying a theme vs. its share over the prior window.
+// Only real memecoins with believable prices count: a tokenized Apple share is not a Food meme, and an
+// emptied pool's quoted volume is not money flowing into a theme.
 export function computeNarratives({ recentMin = 60, baseMin = 6 * 60, launches = [] } = {}) {
   const now = Date.now();
   const rows = db.prepare(`SELECT mint, symbol, name, description, image, first_seen, mcap, vol_h1, chg_h1, score, themes, safety_score, status
-    FROM tokens WHERE first_seen > ?`).all(now - baseMin * 60_000);
+    FROM tokens WHERE first_seen > ? AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'`).all(now - baseMin * 60_000);
   const recent = rows.filter((r) => r.first_seen > now - recentMin * 60_000);
   const older = rows.filter((r) => r.first_seen <= now - recentMin * 60_000);
 

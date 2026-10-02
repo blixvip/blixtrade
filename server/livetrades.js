@@ -2,6 +2,9 @@
 // (the public one works, ~50 trades/s) and decode each TradeEvent (mint, SOL size, side, trader,
 // virtual + real reserves). From that every coin on the bonding curve gets a live market cap, exact
 // bonding progress, buys/sells, volume and trader count, pushed to the Pulse page as they happen.
+import fs from "node:fs";
+import path from "node:path";
+import { DATA } from "./db.js";
 import { settings } from "./settings.js";
 import { setSolPrice } from "./research.js";
 
@@ -25,6 +28,9 @@ export const live = new Map();   // mint -> stats
 const dirty = new Set();
 export const feed = { connected: false, trades: 0, perSec: 0, solUsd: 150, since: now(), lastMsg: 0, url: null };
 let sent = 0;
+// Other parts of the radar can follow every trade as it lands (the early radar does).
+const listeners = [];
+export const onLiveTrade = (fn) => listeners.push(fn);
 
 function onTrade(buf) {
   if (buf.length < 8 + 32 + 8 + 8 + 1 + 32 + 8 + 8 + 8 + 8 + 8) return;
@@ -53,6 +59,7 @@ function onTrade(buf) {
   // a sample every ~10s for the 1-minute change
   if (!s.hist.length || now() - s.hist[s.hist.length - 1][0] > 10_000) { s.hist.push([now(), mcSol]); if (s.hist.length > 8) s.hist.shift(); }
   dirty.add(mint);
+  for (const fn of listeners) fn(mint, s, sol, buy);
 }
 
 // What a row needs, in USD.
@@ -115,7 +122,36 @@ async function solPrice() {
   } catch {}
 }
 
+// The per-coin numbers only exist in memory, so a restart used to forget every coin's first price, high,
+// traders and buy/sell counts. They are written to disk every 10 seconds and picked up again when the
+// radar comes back within two minutes (a crash restart takes about two seconds).
+const STATE_FILE = path.join(DATA, "live-state.json");
+export const RESUME_MS = 2 * 60_000;
+export const restored = { coins: 0, gapMs: null };
+let saving = false;
+async function saveState() {
+  if (saving || !live.size) return;
+  saving = true;
+  try {
+    const coins = [];
+    for (const s of live.values()) if (now() - s.last < 30 * 60_000) coins.push({ ...s, traders: [...s.traders] });
+    await fs.promises.writeFile(STATE_FILE + ".tmp", JSON.stringify({ t: now(), solUsd: feed.solUsd, coins }));
+    await fs.promises.rename(STATE_FILE + ".tmp", STATE_FILE);
+  } catch {} finally { saving = false; }
+}
+export function loadState() {
+  try {
+    const j = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    if (!(now() - j.t < RESUME_MS)) return;
+    for (const s of j.coins) live.set(s.mint, { ...s, traders: new Set(s.traders) });
+    if (j.solUsd > 0) feed.solUsd = j.solUsd;
+    restored.coins = live.size; restored.gapMs = now() - j.t;
+  } catch {}
+}
+
 export function startLiveTrades() {
+  loadState();
+  setInterval(saveState, 10_000);
   connect();
   solPrice();
   setInterval(solPrice, 5 * 60_000);

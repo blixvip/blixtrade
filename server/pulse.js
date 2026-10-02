@@ -1,10 +1,12 @@
 // Pulse: the live three-column view (new pairs → about to bond → migrated), Axiom style, with the
 // AI's rating state for every coin (queued, Grok reading it right now, graded, deep read, buy call).
-import { db, json } from "./db.js";
+import { db, q, json } from "./db.js";
 import { recentLaunches, devLaunches } from "./engine.js";
-import { candidates, ipfs, bondingProgress } from "./research.js";
+import { candidates, ipfs, bondingProgress, providers, queueStatus, liveTraction } from "./research.js";
+import { safeUrl, publicUrl, cleanLinks } from "./quality.js";
 import { liveStats, feed } from "./livetrades.js";
 import { triageFor, triageStats } from "./triage.js";
+import { earlyFor } from "./early.js";
 import { grokStatus } from "./grok.js";
 export const getMeta = (mint) => meta.get(mint);
 
@@ -29,9 +31,12 @@ async function fetchMeta(l) {
   fetching++;
   meta.set(l.mint, { pending: true });
   try {
-    const r = await fetch(ipfs(l.uri), { signal: AbortSignal.timeout(6000) });
-    const m = await r.json();
-    meta.set(l.mint, { image: m.image ? ipfs(m.image) : null, twitter: m.twitter || null, website: m.website || null, telegram: m.telegram || null, description: String(m.description || "").slice(0, 200) });
+    // The metadata link and everything in it is written by the coin's creator: public web addresses only.
+    const uri = publicUrl(ipfs(l.uri));
+    if (!uri) throw new Error("link not allowed");
+    const r = await fetch(uri, { signal: AbortSignal.timeout(6000) });
+    const m = JSON.parse((await r.text()).slice(0, 200_000));
+    meta.set(l.mint, { image: safeUrl(m.image ? ipfs(m.image) : null), twitter: safeUrl(m.twitter), website: safeUrl(m.website), telegram: safeUrl(m.telegram), description: String(m.description || "").slice(0, 200) });
   } catch { meta.set(l.mint, { failed: true }); }
   finally { fetching--; }
 }
@@ -47,20 +52,20 @@ function enrich() {
 // ---------- rows ----------
 function researchMap(mints) {
   if (!mints.length) return new Map();
-  const rows = db.prepare(`SELECT mint, status, grade, score, tier, verdict, stage, report, t FROM research WHERE mint IN (${mints.map(() => "?").join(",")})`).all(...mints);
+  const rows = db.prepare(`SELECT mint, status, grade, score, tier, verdict, stage, report, t, model FROM research WHERE status != 'expired' AND mint IN (${mints.map(() => "?").join(",")})`).all(...mints);
   return new Map(rows.map((r) => {
     const rep = json(r.report, {});
-    return [r.mint, { status: r.status, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict, stage: r.stage, t: r.t,
-      action: rep.trade?.action || null, conviction: rep.trade?.conviction ?? null, tag: rep.narrative?.tag || null, organic: rep.xBuzz?.organic || null }];
+    return [r.mint, { status: r.status, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict, stage: r.stage, t: r.t, model: r.model, rated: Boolean(r.grade) && ["done", "deep"].includes(r.status),
+      action: rep.trade?.action || null, pwin: rep.trade?.pWin ?? null, conviction: rep.trade?.conviction ?? null, tag: rep.narrative?.tag || null, organic: rep.xBuzz?.organic || null }];
   }));
 }
 
 function row(t, ai) {
   const s = json(t.safety) || {};
-  const links = json(t.links, []);
+  const links = cleanLinks(json(t.links, []));
   const link = (re) => links.find((l) => re.test(`${l.type} ${l.url}`))?.url || null;
   return {
-    mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.pair_created || t.first_seen),
+    mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.pair_created || t.first_seen), dex: t.dex, priceT: t.price_t || t.updated || null,
     mcap: t.mcap, vol: t.vol_h1, liq: t.liquidity, chg5: t.chg_m5, chg1h: t.chg_h1, buys: t.buys_h1, sells: t.sells_h1,
     holders: s.totalHolders ?? null, top10: s.top10 ?? null, dev: s.devPct ?? null, insiders: s.insiderPct ?? null,
     safety: t.safety_score, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
@@ -86,7 +91,7 @@ export function pulseData() {
     };
     const age = now() - l.seen;
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
-      desc: m.description || null, devSol: l.devSol, tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
+      desc: m.description || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
   }).map(withLive);
   // A coin that's still trading isn't faded, whatever the 4-minute check said.
@@ -99,11 +104,58 @@ export function pulseData() {
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
   watched.clear();
   for (const r of [...newPairs, ...stretch, ...migrated]) watched.add(r.mint);
-  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd, triage: triageStats, grokBlocked: grokStatus().blocked }, ts: now() } };
+  const pv = providers(), qs = queueStatus();
+  // Who is actually doing the reading right now, and why it may differ from what was configured.
+  const lanes = { fast: pv.fast.actualName, deep: pv.deep.actualName, fastFallback: pv.fast.fallback ? pv.fast.reason : null, deepFallback: pv.deep.fallback ? pv.deep.reason : null, note: pv.fast.note || pv.deep.note, recovery: pv.recovery };
+  cache = { t: now(), v: { newPairs, stretch, migrated, live: { running, queued, ratedHour, launchesPerMin: perMin, tradesPerSec: feed.perSec, feed: feed.connected, solUsd: feed.solUsd, triage: triageStats, grokBlocked: grokStatus().blocked, ai: lanes, queue: qs }, ts: now() } };
   return cache.v;
+}
+
+// The anti-slop list: today's launches that got past triage. `fresh` are decent-looking coins not yet
+// sent for a read, `reading` are in the queue or being read right now, `rated` have their grade.
+export function antiSlop() {
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  const jobs = db.prepare(`SELECT mint, status, enq_t, t FROM research WHERE COALESCE(enq_t, t) > ? AND status != 'expired' ORDER BY COALESCE(t, enq_t) DESC LIMIT 240`).all(d0.getTime());
+  const ai = researchMap(jobs.map((j) => j.mint));
+  const rows = jobs.map((j) => {
+    const t = q.getToken.get(j.mint);
+    return t && { ...withLive(row(t, ai.get(j.mint))), tri: triageFor(j.mint), waited: j.enq_t ? now() - j.enq_t : null, state: "tracked", tr: liveTraction(t).score, early: earlyFor(j.mint) };
+  }).filter(Boolean);
+  const fresh = pulseData().newPairs.filter((r) => r.tri && ["maybe", "promising"].includes(r.tri.label) && !r.ai && r.state !== "faded").slice(0, 60);
+  const dropped = db.prepare("SELECT COUNT(*) n FROM research WHERE COALESCE(enq_t, t) > ? AND status = 'expired'").get(d0.getTime()).n;
+  return { fresh, reading: rows.filter((r) => !r.ai?.rated), rated: rows.filter((r) => r.ai?.rated), dropped };
+}
+
+// Coin pictures. Most tracked coins arrive without one (only coins with a paid DexScreener profile carry
+// an image), so every 20 seconds a batch of picture-less coins is looked up: first in the launch
+// metadata the radar already fetched, then on GeckoTerminal, which serves the on-chain image for
+// almost every token (30 coins per call).
+const imgTried = new Map();   // mint -> when it was last looked up
+async function fillImages() {
+  // Picked coins first (they stay on the lists after they die), then everything still being tracked.
+  const rows = [...db.prepare("SELECT mint FROM tokens WHERE image IS NULL AND mint IN (SELECT mint FROM outcomes WHERE kind = 'pick' AND t0 > ? UNION SELECT mint FROM entry_watch WHERE t > ?)").all(now() - 48 * 60 * MIN, now() - 48 * 60 * MIN),
+    ...db.prepare("SELECT mint FROM tokens WHERE status = 'active' AND image IS NULL ORDER BY COALESCE(updated, first_seen) DESC LIMIT 400").all()]
+    .filter((r) => now() - (imgTried.get(r.mint) || 0) > 45 * MIN);
+  const set = db.prepare("UPDATE tokens SET image = ? WHERE mint = ? AND image IS NULL");
+  const ask = [];
+  for (const r of rows) {
+    const m = meta.get(r.mint);
+    if (m?.image) set.run(m.image, r.mint); else if (ask.length < 30) ask.push(r.mint);
+  }
+  if (!ask.length) return;
+  for (const m of ask) imgTried.set(m, now());
+  if (imgTried.size > 5000) for (const [m, t] of imgTried) if (now() - t > 60 * MIN) imgTried.delete(m);
+  const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${ask.join(",")}`, { signal: AbortSignal.timeout(12_000), headers: { accept: "application/json" } });
+  if (!r.ok) return;
+  for (const t of (await r.json()).data || []) {
+    const img = safeUrl(t.attributes?.image_url);
+    if (img && !/missing/.test(img) && t.attributes?.address) set.run(img, t.attributes.address);
+  }
 }
 
 export function startPulse() {
   const timer = setInterval(enrich, 1500);
-  return () => clearInterval(timer);
+  const pics = setInterval(() => fillImages().catch(() => {}), 20_000);
+  setTimeout(() => fillImages().catch(() => {}), 8000);
+  return () => { clearInterval(timer); clearInterval(pics); };
 }

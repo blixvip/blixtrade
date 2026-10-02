@@ -1,5 +1,7 @@
 // Data sources. All free, no keys: DexScreener, GeckoTerminal, RugCheck, PumpPortal (live launches).
 
+import * as health from "./health.js";
+
 // Simple per-host throttle so we stay under each API's rate limit.
 const gates = new Map();
 function throttle(host, perMinute) {
@@ -13,6 +15,8 @@ function throttle(host, perMinute) {
 
 const LIMITS = { "api.dexscreener.com": 200, "api.geckoterminal.com": 25, "api.rugcheck.xyz": 40 };
 
+const SERVICE = { "api.dexscreener.com": "dexscreener", "api.geckoterminal.com": "geckoterminal", "api.rugcheck.xyz": "rugcheck" };
+
 export async function getJson(url, { timeout = 15000 } = {}) {
   const host = new URL(url).host;
   await throttle(host, LIMITS[host] || 60);
@@ -22,7 +26,13 @@ export async function getJson(url, { timeout = 15000 } = {}) {
     const r = await fetch(url, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "meme-radar/0.1" } });
     if (r.status === 429) throw Object.assign(new Error(`${host} rate limited`), { status: 429 });
     if (!r.ok) throw Object.assign(new Error(`${host} ${r.status}`), { status: r.status });
-    return await r.json();
+    const body = await r.json();
+    health.ok(SERVICE[host] || host);
+    return body;
+  } catch (e) {
+    // A coin RugCheck has never seen is a normal 4xx, not an outage.
+    if (!(e.status >= 400 && e.status < 429)) health.fail(SERVICE[host] || host, e.name === "AbortError" ? "timed out" : e);
+    throw e;
   } finally {
     clearTimeout(timer);
   }
@@ -34,7 +44,7 @@ const SOL = "solana";
 export async function dexLatestProfiles() {
   const list = await getJson("https://api.dexscreener.com/token-profiles/latest/v1");
   return list.filter((t) => t.chainId === SOL).map((t) => ({
-    mint: t.tokenAddress, description: t.description || "", image: t.icon?.startsWith("http") ? t.icon : null,
+    mint: t.tokenAddress, description: t.description || "", image: t.icon?.startsWith("https://") ? t.icon : null,
     links: (t.links || []).map((l) => ({ type: l.type || l.label?.toLowerCase() || "link", url: l.url })), source: "dex-profile",
   }));
 }
@@ -48,12 +58,15 @@ export async function dexBoosts(kind = "latest") {
 }
 
 // Up to 30 mints per call. Returns the most liquid pair per token.
+// out.failed holds the mints whose request failed, so "no pair" is never confused with "no answer".
 export async function dexTokens(mints) {
   const out = new Map();
+  out.failed = new Set();
   for (let i = 0; i < mints.length; i += 30) {
     const chunk = mints.slice(i, i + 30);
     let pairs = [];
-    try { pairs = await getJson(`https://api.dexscreener.com/tokens/v1/${SOL}/${chunk.join(",")}`); } catch (e) { if (e.status === 429) throw e; continue; }
+    try { pairs = await getJson(`https://api.dexscreener.com/tokens/v1/${SOL}/${chunk.join(",")}`); }
+    catch (e) { for (const m of chunk) out.failed.add(m); if (e.status === 429) throw e; continue; }
     for (const p of pairs || []) {
       const mint = p.baseToken?.address;
       if (!mint || !chunk.includes(mint)) continue;

@@ -173,26 +173,28 @@ function autoFollow(addWallet) {
 }
 
 // "Fomo crowd buying $X": 3+ different Fomo users bought in the last 30 minutes, and buying beats selling.
-export function crowdSignals(raise, adoptMint) {
+// Only coins that pass the safety policy alert; a crowd buying an unsafe coin is not an opportunity.
+export async function crowdSignals(raise, adoptMint, vet) {
   const rows = db.prepare(`SELECT mint, COUNT(DISTINCT CASE WHEN side = 'buy' THEN wallet END) buyers,
     SUM(CASE WHEN side = 'buy' THEN usd ELSE 0 END) - SUM(CASE WHEN side = 'sell' THEN usd ELSE 0 END) net
     FROM fomo_flow WHERE t > ? GROUP BY mint HAVING buyers >= 3 AND net > 0`).all(now() - 30 * MIN);
   for (const r of rows) {
-    adoptMint(r.mint);
-    const t = q.getToken.get(r.mint);
     const last = q.lastSignal.get(r.mint, "fomo");
     if (last && now() - last.t < 3 * 60 * MIN) continue;
-    if (t?.safety && JSON.parse(t.safety).danger > 0) continue;
-    const tk = { mint: r.mint, symbol: t?.symbol || r.mint.slice(0, 4), score: t?.score || 0, price: t?.price || null, mcap: t?.mcap || null };
-    raise(tk, "fomo", `Fomo crowd buying $${tk.symbol}`, `${r.buyers} Fomo traders bought in the last 30 minutes, net $${Math.round(r.net).toLocaleString()} in.${t?.mcap ? ` Mcap $${Math.round(t.mcap).toLocaleString()}.` : ""}`);
+    adoptMint(r.mint);
+    const v = await vet(r.mint).catch(() => null);
+    const t = v?.token;
+    if (!t?.pair || !v.ok) continue;
+    const tk = { mint: r.mint, symbol: t.symbol || r.mint.slice(0, 4), score: t.score || 0, price: t.price || null, mcap: t.mcap || null };
+    raise(tk, "fomo", `Fomo crowd buying $${tk.symbol}`, `${r.buyers} Fomo traders bought in the last 30 minutes, net $${Math.round(r.net).toLocaleString()} in.${t.mcap ? ` Mcap $${Math.round(t.mcap).toLocaleString()}.` : ""} Passed safety (${t.safety_score}/100).`);
   }
 }
 
-export function startFomo({ addWallet, raise, adoptMint, onTrade }) {
+export function startFomo({ addWallet, raise, adoptMint, vet, onTrade }) {
   const timers = [
     setInterval(learnPayers, 60_000),
     setInterval(() => readFlow(onTrade).catch((e) => logEvent("error", `fomo flow: ${e.message}`)), 25_000),
-    setInterval(() => { autoFollow(addWallet); crowdSignals(raise, adoptMint); }, 2 * MIN),
+    setInterval(() => { autoFollow(addWallet); crowdSignals(raise, adoptMint, vet).catch((e) => logEvent("error", `fomo crowd: ${e.message}`)); }, 2 * MIN),
     setInterval(() => db.prepare("DELETE FROM fomo_flow WHERE t < ?").run(now() - 7 * 24 * 60 * MIN), 60 * MIN),
   ];
   setTimeout(learnPayers, 5000);

@@ -18,11 +18,15 @@ async function run() {
   try { if (fs.statSync(logFile).size > 5e6) fs.writeFileSync(logFile, ""); } catch {}
   const log = fs.openSync(logFile, "a");
   const started = Date.now();
-  const child = spawn(process.execPath, ["--no-warnings", path.join(ROOT, "server", "server.js")], {
+  // If Node itself gives up (out of memory, an internal fatal error) it leaves a report saying where.
+  const reports = path.join(ROOT, "data", "reports");
+  fs.mkdirSync(reports, { recursive: true });
+  const child = spawn(process.execPath, ["--no-warnings", "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
     cwd: ROOT, windowsHide: true, stdio: ["ignore", log, log],
   });
   child.on("exit", (code) => {
-    fs.appendFileSync(logFile, `[supervisor] radar exited with ${code} at ${new Date().toISOString()}\n`);
+    fs.closeSync(log);
+    fs.appendFileSync(logFile, `[supervisor] radar exited with ${code} at ${new Date().toISOString()} after ${Math.round((Date.now() - started) / 60_000)}m\n`);
     delay = Date.now() - started > 60_000 ? 2000 : Math.min(delay * 2, 60_000);
     setTimeout(run, delay);
   });
