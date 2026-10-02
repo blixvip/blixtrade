@@ -1,4 +1,4 @@
-// Opens Meme Radar in its own window, starting the radar hidden if it isn't running.
+// Opens Blix in its own window, starting the radar hidden if it isn't running.
 // `node bin/open.mjs --background` only makes sure the radar is running (used at login).
 import { spawn } from "node:child_process";
 import fs from "node:fs";

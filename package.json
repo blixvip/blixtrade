@@ -1,11 +1,12 @@
 {
-  "name": "meme-radar",
+  "name": "blix-trade",
   "private": true,
   "version": "0.2.0",
-  "description": "Scans Solana memecoins nonstop: safety checks, momentum signals, narratives, AI briefs, alerts, and hit-rate tracking.",
+  "description": "Blix Trade: scans Solana memecoins nonstop: safety checks, momentum signals, narratives, AI briefs, alerts, and hit-rate tracking.",
   "type": "module",
   "scripts": {
     "start": "node --no-warnings server/server.js",
     "test": "node --no-warnings --test test/radar.test.mjs"
-  }
+  },
+  "productName": "Blix"
 }

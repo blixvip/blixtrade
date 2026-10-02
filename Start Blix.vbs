@@ -1,4 +1,4 @@
-' Opens Meme Radar with no console window. Pass /background to only start the radar.
+' Opens Blix with no console window. Pass /background to only start the radar.
 Set sh = CreateObject("WScript.Shell")
 dir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
 sh.CurrentDirectory = dir

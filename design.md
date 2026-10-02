@@ -1,4 +1,6 @@
-# Design — Meme Radar
+# Design — Blix
+
+The product is **Blix**. Its full name is **Blix Trade**; everything a person sees says Blix.
 
 The locked design system for this app. Every page reads from it. Do not pick a new
 look per page: extend or amend this file when the system needs to grow.

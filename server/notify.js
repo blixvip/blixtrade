@@ -84,7 +84,7 @@ export async function notifySignal(sig) {
   const jobs = [];
   if (on.discord) {
     jobs.push(["discord", post(settings.discordWebhook, {
-      username: "Meme Radar",
+      username: "Blix",
       embeds: [{
         title: sig.title, url: dex, description: sig.detail + more,
         color: COLORS[kindOf(sig.kind)] ?? 0x94a3b8,
@@ -125,7 +125,7 @@ export async function notifyBrief(body) {
   if (!wants("brief") || inQuietHours()) return;
   const short = body.length > 3900 ? body.slice(0, 3890) + "…" : body;
   const on = channels(), jobs = [];
-  if (on.discord) jobs.push(["discord", post(settings.discordWebhook, { username: "Meme Radar", embeds: [{ title: "Market brief", description: short, color: COLORS.brief }] })]);
+  if (on.discord) jobs.push(["discord", post(settings.discordWebhook, { username: "Blix", embeds: [{ title: "Market brief", description: short, color: COLORS.brief }] })]);
   if (on.telegram) jobs.push(["telegram", post(`https://api.telegram.org/bot${settings.telegramToken}/sendMessage`, { chat_id: settings.telegramChat, text: `Market brief\n\n${short}` })]);
   if (jobs.length) await deliver(jobs, { title: "Market brief" });
 }
@@ -133,8 +133,8 @@ export async function notifyBrief(body) {
 // Sends a test to the destinations as typed in the form (s = saved settings with the unsaved edits on top).
 export async function testNotify(s = settings) {
   const on = channels(s), jobs = [];
-  if (on.discord) jobs.push(["discord", post(s.discordWebhook, { username: "Meme Radar", content: "Meme Radar is connected." })]);
-  if (on.telegram) jobs.push(["telegram", post(`https://api.telegram.org/bot${s.telegramToken}/sendMessage`, { chat_id: s.telegramChat, text: "Meme Radar is connected." })]);
+  if (on.discord) jobs.push(["discord", post(s.discordWebhook, { username: "Blix", content: "Blix is connected." })]);
+  if (on.telegram) jobs.push(["telegram", post(`https://api.telegram.org/bot${s.telegramToken}/sendMessage`, { chat_id: s.telegramChat, text: "Blix is connected." })]);
   if (!jobs.length) return { errors: [s.telegramToken && !s.telegramChat ? "Add the Telegram chat ID too." : "Add a Discord webhook or a Telegram bot first."], sent: [] };
   const res = await deliver(jobs, { title: "Test message", kind: "test" });
   return { errors: res.map((r, i) => r.status === "rejected" ? `${jobs[i][0]}: ${r.reason.message.replace(/bot\d+:[\w-]+/g, "bot…")}` : null).filter(Boolean), sent: res.map((r, i) => r.status === "fulfilled" ? jobs[i][0] : null).filter(Boolean) };

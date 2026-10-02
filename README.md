@@ -1,4 +1,6 @@
-# Meme Radar
+# Blix
+
+**Blix Trade**, known as Blix.
 
 A local system that scans Solana memecoins around the clock, filters out likely scams, spots breakouts and rising narratives, writes AI market briefs, pushes alerts, and keeps score of how its calls actually did. Dashboard at http://localhost:4420.
 
@@ -19,7 +21,7 @@ The **Health** page lists every dependency (launch feed, prices, RPC, wallet str
 
 ## Open it
 
-Double-click **Meme Radar** on the Desktop. The radar also starts hidden at login so it keeps collecting data and scoring its signals.
+Double-click **Blix** on the Desktop. The radar also starts hidden at login so it keeps collecting data and scoring its signals.
 
 From a terminal: `npm start` (radar + dashboard, foreground).
 
