@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in Blix is wrong, missing or misleading
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Pulse
+        2. Filter P2 on Final stretch
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Pulse, Coin sheet / chart / quote, Signals, Picks / paper desk, Research / AI reads, Narratives, Wallets / smart money, Fomo, Track record, Alerts (Discord / Telegram), Remote tunnel, Settings / backups, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: health
+    attributes:
+      label: Health page
+      description: Paste the issues listed on the Health page, and relevant lines from data/logs. Remove webhook URLs, tokens and keys.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: output of `git rev-parse --short HEAD`, Node version, OS

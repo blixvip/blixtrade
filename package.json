@@ -2,11 +2,47 @@
   "name": "blix-trade",
   "private": true,
   "version": "0.2.0",
-  "description": "Blix Trade: scans Solana memecoins nonstop: safety checks, momentum signals, narratives, AI briefs, alerts, and hit-rate tracking.",
+  "description": "Blix Trade: the open-source Solana memecoin terminal. Live pump.fun feed, Axiom/GMGN-style Pulse, holder ledgers, real Jupiter quotes, Fomo buys, AI reads, smart money, honest track record.",
   "type": "module",
   "scripts": {
     "start": "node --no-warnings server/server.js",
     "test": "node --no-warnings --test test/radar.test.mjs"
   },
-  "productName": "Blix"
+  "productName": "Blix",
+  "license": "MIT",
+  "homepage": "https://github.com/blixvip/blixtrade#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blixvip/blixtrade.git"
+  },
+  "bugs": {
+    "url": "https://github.com/blixvip/blixtrade/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "keywords": [
+    "solana",
+    "memecoin",
+    "trading-terminal",
+    "pump-fun",
+    "pumpfun",
+    "pumpportal",
+    "dexscreener",
+    "rugcheck",
+    "jupiter",
+    "fomo",
+    "gmgn",
+    "axiom",
+    "photon",
+    "bullx",
+    "smart-money",
+    "wallet-tracker",
+    "narratives",
+    "claude",
+    "grok",
+    "sse",
+    "sqlite",
+    "open-source"
+  ]
 }

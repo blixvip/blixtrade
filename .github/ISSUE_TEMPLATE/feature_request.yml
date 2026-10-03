@@ -1,0 +1,29 @@
+name: Feature request
+description: A column, a filter, a feed, a model, a page
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The job, not the button. "Spot bundled launches before they bond" beats "add a bundle column".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work in Blix. Where it lives (Pulse card, coin sheet, Signals...), what data it needs, which API it would use.
+  - type: dropdown
+    id: data
+    attributes:
+      label: Does it need a new data source
+      options: ["No, uses what Blix already has", "Yes, a free public one", "Yes, a paid one"]
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Fits the rules
+      options:
+        - label: Works without adding an npm dependency
+        - label: Positive signals from it would go through the safety policy
+        - label: Does not require Blix to sign transactions

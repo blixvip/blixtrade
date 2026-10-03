@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/blixvip/blixtrade/security/advisories/new
+    about: Report privately. Do not open a public issue.
+  - name: Docs
+    url: https://github.com/blixvip/blixtrade/tree/main/docs
+    about: API reference and the long-form how-it-works.
