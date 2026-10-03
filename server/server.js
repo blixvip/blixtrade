@@ -1,4 +1,4 @@
-// Meme Radar — HTTP API + live event stream + dashboard.
+// Blix (Blix Trade) — HTTP API + live event stream + dashboard.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,11 +13,19 @@ import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
 import * as research from "./research.js";
 import * as brain from "./brain.js";
-import { pulseData, antiSlop, startPulse, watched, getMeta } from "./pulse.js";
+import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf } from "./pulse.js";
 import { startLiveTrades, drainUpdates, liveStats, feed as liveFeed } from "./livetrades.js";
+import { startHolders, holdersFor, liveHolders, holderStats } from "./holders.js";
+import * as paper from "./paper.js";
+import { quote } from "./quote.js";
+import { candles, startCandles } from "./candles.js";
+import { startTunnel, tunnelStats } from "./tunnel.js";
 import { startTriage, triageRecord, triageFor } from "./triage.js";
 import { testFast } from "./fast.js";
-import { testGrok, detectVersion, grokTier } from "./grok.js";
+import { testGrok, detectVersion, grokTier, grokBilling } from "./grok.js";
+import { startTape, tapeStats } from "./tape.js";
+import { startClusters, clusterBoard } from "./clusters.js";
+import { coverageStats } from "./coverage.js";
 import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL } from "./quality.js";
 import * as health from "./health.js";
 import { startEarly, earlyData } from "./early.js";
@@ -277,6 +285,8 @@ function tokenDetail(mint) {
     signals: db.prepare("SELECT * FROM signals WHERE mint = ? AND hidden = 0 ORDER BY t DESC").all(mint),
     walletTrades: db.prepare(`SELECT wt.wallet, wt.side, wt.usd, wt.t, w.label FROM wallet_trades wt JOIN wallets w ON w.address = wt.wallet WHERE wt.mint = ? AND wt.t > ? ORDER BY wt.t`).all(mint, Date.now() - 3 * DAY),
     wallets: wallets.coinWallets(mint), fomo: fomo.coinFlow(mint), research: research.researchFor(mint),
+    // The live ledger from the trade feed (who holds what, dev, snipers, bundle) and any paper positions in it.
+    holders: holdersFor(mint, { top: 20 }), paper: paper.positionsFor(mint),
     progress: liveFresh && !t.graduated ? live.progress : row ? research.bondingProgress(row) : null,
     themeOptions: THEMES.map(([n]) => n), classOptions: ASSET_LABEL,
   };
@@ -348,6 +358,30 @@ function healthReport() {
   add("grok", "Grok (fast reads, deep reads, narrative scout)", !pv.grok.installed ? "off" : pv.grok.blocked ? "down" : pv.grok.ok ? (pv.grok.calls ? "ok" : "idle") : "degraded",
     !pv.grok.installed ? "Not logged in on this PC" : pv.grok.blocked ? `${pv.grok.blocked}${pv.grok.blockedSince ? ` since ${ago(pv.grok.blockedSince)}` : ""}; next re-check ${pv.grok.blockedUntil ? `in ${Math.max(1, Math.round((pv.grok.blockedUntil - now) / MIN))}m` : "soon"} · ${pv.grok.errors} errors` : `${pv.grok.calls} calls, ${pv.grok.errors} errors this session`,
     { lastOk: pv.grok.lastOk, lastFail: pv.grok.lastErrorAt, lastError: pv.grok.lastError, fix: pv.recovery });
+  // What Grok has cost today, by job, against the daily budget; and what the subscription itself reports.
+  const sp = pv.grok.spend, bill = pv.grok.billing;
+  if (pv.grok.installed && sp) {
+    const lanes = Object.entries(sp.lanes).sort((a, b) => b[1].usd - a[1].usd).map(([k, v]) => `${k} $${v.usd.toFixed(2)} (${v.calls})`).join(", ");
+    add("grok-spend", "Grok spend today", sp.budget && sp.today >= sp.budget ? "degraded" : "ok",
+      `$${sp.today.toFixed(2)}${sp.budget ? ` of the $${sp.budget.toFixed(2)} daily budget` : " (no daily limit set)"}${lanes ? ` · ${lanes}` : ""}${bill?.used != null ? ` · the subscription reports ${bill.used} used this billing period` : ""}`,
+      { spend: sp, billing: bill || null, fix: sp.budget && sp.today >= sp.budget ? "Grok is paused until midnight; Claude is covering. Raise the daily Grok budget in Settings to give it more." : null });
+  }
+  add("tape", "Price tapes (for replay)", tapeStats.lastFlush && now - tapeStats.lastFlush > 5 * MIN ? "degraded" : "ok",
+    `${tapeStats.recording} coins being recorded second by second · ${tapeStats.flushed.toLocaleString()} bars saved this session`, { lastOk: tapeStats.lastFlush });
+  try {
+    const cv = coverageStats(), L = cv.launches || {};
+    add("coverage", "Coverage (every coin that trades)", !liveFeed.connected ? "degraded" : "ok",
+      `${((L.pumpportal || 0) + (L.chainOnly || 0)).toLocaleString()} launches (${(L.chainOnly || 0).toLocaleString()} only seen on chain; PumpPortal missed them) · ${(cv.moving5m || 0).toLocaleString()} coins moving now of ${(cv.trading5m || 0).toLocaleString()} trading`, { stats: cv });
+  } catch {}
+  add("holders", "Holder ledger (from the trade feed)", !liveFeed.connected ? "degraded" : "ok",
+    `${holderStats.books.toLocaleString()} coins with a live ledger (${holderStats.wallets.toLocaleString()} wallets) · ${holderStats.genesis.toLocaleString()} seen from their first trade, ${holderStats.partial.toLocaleString()} joined late (no sniper/bundle figures for those) · ${holderStats.unknownSells.toLocaleString()} sells of tokens the radar never saw bought`, { stats: holderStats });
+  const tn = tunnelStats;
+  add("tunnel", "Remote access (blixvip.com/trade)", !settings.publicHost || !settings.tunnelKey ? "off" : !tn.exe ? "down" : tn.url && tn.registered && !tn.registerError ? "ok" : "degraded",
+    !settings.publicHost || !settings.tunnelKey ? "Switched off (no public hostname or tunnel key)" : !tn.exe ? "cloudflared is not installed on this PC" : tn.url ? `https://${settings.publicHost} → ${tn.url}${tn.registered ? ` · registered ${ago(tn.registered)}` : ""}${tn.registerError ? ` · register failing: ${tn.registerError}` : ""} · ${tn.restarts} tunnel restarts` : `Tunnel starting${tn.lastExit ? ` (cloudflared exited with ${tn.lastExit.code} ${ago(tn.lastExit.t)})` : ""}`,
+    { lastOk: tn.registered, lastError: tn.registerError || tn.lastError, url: tn.url });
+  const pd = paper.desk();
+  add("paper", "Paper desk", pd.open.some((p) => p.stale) ? "degraded" : pd.open.length ? "ok" : "idle",
+    `${pd.open.length} open paper position${pd.open.length === 1 ? "" : "s"}${pd.open.some((p) => p.stale) ? ` (${pd.open.filter((p) => p.stale).length} without a live price right now)` : ""} · today ${pd.summary.todayN} closed, ${pd.summary.todayPnl >= 0 ? "+" : "−"}$${Math.abs(pd.summary.todayPnl).toFixed(0)} · all time ${pd.summary.allN} closed, ${pd.summary.allPnl >= 0 ? "+" : "−"}$${Math.abs(pd.summary.allPnl).toFixed(0)} (after ${pd.cost}% costs each way; nothing is really traded)`);
   add("groq", "Groq (optional fast fallback)", !pv.groq.configured ? "off" : pv.groq.cooling.length ? "degraded" : health.stateOf("groq", HOUR),
     pv.groq.configured ? `${pv.groq.calls} calls, ${pv.groq.errors} errors` : "No key saved. Free at console.groq.com/keys; keeps fast reads running when Grok is out.", { ...hp("groq"), lastError: pv.groq.lastError });
   add("claude", "Claude (briefs, fallback reads)", !pv.claude.ok ? "down" : health.stateOf("claude", 3 * HOUR) === "down" ? "degraded" : pv.claude.calls ? health.stateOf("claude", 3 * HOUR) : "idle",
@@ -360,6 +394,10 @@ function healthReport() {
   const sc = brain.scoutStatus();
   add("scout", "Narrative scout", settings.scoutEveryMin <= 0 ? "off" : !sc.available ? "down" : sc.overdue ? "degraded" : "ok",
     sc.why || `Last scouted ${ago(sc.lastOk)}, every ${sc.every}m`, { lastOk: sc.lastOk, lastError: sc.last?.outcome !== "ok" ? sc.last?.detail : null });
+  const cb = clusterBoard();
+  add("clusters", "Live narrative detection", cb.stats.lastError && !cb.stats.cards ? "degraded" : "ok",
+    `${cb.stats.launches.toLocaleString()} launches compared this session · ${cb.stats.forming} burst${cb.stats.forming === 1 ? "" : "s"} forming now · ${cb.stats.cards} named · ${cb.armed.length} narrative${cb.armed.length === 1 ? "" : "s"} armed, ${cb.stats.armedHits} matching launches caught${cb.grok ? "" : " · Grok is unavailable, so bursts are recorded but not looked up on X"}`,
+    { lastError: cb.stats.lastError });
   const lb = db.prepare("SELECT t, status, stop FROM briefs ORDER BY t DESC LIMIT 1").get();
   add("briefs", "AI briefs", !settings.aiBriefs ? "off" : !lb ? "idle" : lb.status !== "complete" ? "degraded" : now - lb.t > settings.briefEveryMin * MIN * 2.5 ? "degraded" : "ok",
     !settings.aiBriefs ? "Switched off" : !lb ? "None written yet" : `Last brief ${ago(lb.t)}${lb.status !== "complete" ? ` was incomplete (${lb.stop})` : ""}`, { lastOk: lb?.t || null });
@@ -395,7 +433,7 @@ function exportData(withSecrets) {
   };
 }
 function importData(d) {
-  if (d?.app !== "meme-radar") throw Object.assign(new Error("That file is not a Meme Radar export."), { status: 400 });
+  if (d?.app !== "meme-radar") throw Object.assign(new Error("That file is not a Blix export."), { status: 400 });
   const done = { wallets: 0, rules: 0, settings: 0 };
   if (d.settings) { saveSettings(d.settings); done.settings = Object.keys(d.settings).length; }
   for (const w of d.wallets || []) {
@@ -417,15 +455,48 @@ const PAGE_HEADERS = {
   "cache-control": "no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "x-frame-options": "DENY",
   "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src * data:; frame-src https://dexscreener.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
 };
-// The radar answers this PC only. A page on another site (or a hostname pointed at 127.0.0.1) must not
-// be able to read settings or change them through the browser.
+// The radar answers this PC, plus one public hostname reached through a Cloudflare Tunnel (settings.publicHost).
+// A page on another site (or a hostname pointed at 127.0.0.1) must not be able to read settings or change
+// them through the browser: the Host and Origin must be one of ours.
 const LOCAL = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
+const hostOf = (req) => String(req.headers.host || "").toLowerCase();
+// Public = the configured hostname, or the quick tunnel's own trycloudflare.com address (the Worker on the
+// public hostname forwards through it and says so in x-forwarded-host).
+const isPublicHost = (req) => { const h = hostOf(req); return Boolean(settings.publicHost) && (h === settings.publicHost.toLowerCase() || /\.trycloudflare\.com$/.test(h)); };
 function allowed(req) {
-  if (!LOCAL.has(String(req.headers.host || "").toLowerCase())) return false;
+  const host = hostOf(req);
+  if (!LOCAL.has(host) && !isPublicHost(req)) return false;
   const origin = req.headers.origin;
-  if (origin && !LOCAL.has(origin.replace(/^https?:\/\//, "").toLowerCase())) return false;
+  if (origin) { const oh = origin.replace(/^https?:\/\//, "").toLowerCase(); if (!LOCAL.has(oh) && oh !== host && oh !== String(settings.publicHost || "").toLowerCase()) return false; }
   return req.method === "GET" || req.headers["sec-fetch-site"] === undefined || ["same-origin", "none"].includes(req.headers["sec-fetch-site"]);
 }
+// Through the tunnel the page is on the open internet, so a browser has to present the remote key once
+// (?key=…), which is then kept in a cookie for a year. The key is generated on first start and shown on the
+// Settings page of the local copy. Local pages never need it.
+import crypto from "node:crypto";
+if (!settings.remoteKey) saveSettings({ remoteKey: crypto.randomBytes(24).toString("base64url") });
+const cookieOf = (req, name) => (String(req.headers.cookie || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)) || [])[1] || null;
+const safeEq = (a, b) => typeof a === "string" && typeof b === "string" && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+function remoteGate(req, res, url) {
+  if (!isPublicHost(req)) return false;
+  const key = url.searchParams.get("key");
+  if (key && safeEq(key, settings.remoteKey)) {
+    // Key accepted: keep it in a cookie and reload the page without it in the address bar.
+    url.searchParams.delete("key");
+    res.writeHead(302, { location: url.pathname + (url.search || ""), "set-cookie": `blix_key=${settings.remoteKey}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`, "cache-control": "no-store" });
+    res.end();
+    return true;
+  }
+  if (safeEq(cookieOf(req, "blix_key"), settings.remoteKey)) return false;
+  if (url.pathname.startsWith("/api/")) { send(res, 401, { error: "Blix remote: key required." }); return true; }
+  res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" });
+  res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Blix</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1117;color:#e6e8ef;font:15px system-ui,sans-serif}form{display:grid;gap:10px;width:min(320px,90vw)}h1{font-size:18px;margin:0 0 4px}input,button{font:inherit;padding:10px 12px;border-radius:6px;border:1px solid #3a3f4d;background:#171a22;color:inherit}button{background:#e6e8ef;color:#0f1117;font-weight:600;cursor:pointer}small{color:#8b90a0}</style>
+<form method="get" action="/"><h1>Blix</h1><small>This is the live terminal on Kai's PC. Enter the access key.</small><input name="key" type="password" placeholder="Access key" autofocus autocomplete="current-password"><button>Open</button></form>`);
+  return true;
+}
+// Only a local page may read the remote link (it contains the key).
+const remoteLink = () => settings.publicHost ? `https://${settings.publicHost}/?key=${settings.remoteKey}` : null;
 
 // Static files from memory (re-checked at most every 2s), and short-lived caches for the heavy API views,
 // so pages answer instantly even when the PC is busy or paging.
@@ -460,7 +531,9 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   const params = Object.fromEntries(url.searchParams);
   try {
-    if (!allowed(req)) return send(res, 403, { error: "Meme Radar only answers this PC." });
+    if (!allowed(req)) return send(res, 403, { error: "Blix only answers this PC and its own public hostname." });
+    if (remoteGate(req, res, url)) return;
+    if (p === "/api/remote-link") return LOCAL.has(hostOf(req)) ? send(res, 200, { host: settings.publicHost || null, link: remoteLink() }) : send(res, 403, { error: "local only" });
     const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (pic) return await images.serve(pic[1], res);
     if (!p.startsWith("/api/")) {
@@ -484,6 +557,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/tokens") return send(res, 200, cached(`tokens${url.search}`, 5000, () => tokensQuery(params)));
     if (p === "/api/signals") return send(res, 200, cached(`signals${url.search}`, 3000, () => signalsQuery(params)));
     if (p === "/api/narratives") return send(res, 200, cached("narratives", 20000, () => computeNarratives({ launches: launchLog })));
+    if (p === "/api/clusters") return send(res, 200, cached("clusters", 2000, () => ({ ...clusterBoard(), calls: brain.narrativeBoard() })));
     if (p === "/api/perf") return send(res, 200, cached("perf", 60000, perf));
     if (p === "/api/health") return send(res, 200, cached("health", 4000, healthReport));
     if (p === "/api/briefs") return send(res, 200, db.prepare("SELECT * FROM briefs ORDER BY t DESC LIMIT 20").all());
@@ -527,12 +601,33 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/picks/all") return send(res, 200, cached("picks-all", 3000, brain.allPicks));
     if (p === "/api/picks/review" && POST) { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && POST) { const s = brain.scoutStatus(); if (s.available) brain.scout(); return send(res, 200, { started: s.available, why: s.why }); }
+    // The live holder ledger for one coin: top holders tagged dev / sniper / bundle, with what each has in.
+    const hm = p.match(new RegExp(`^/api/holders/(${MINT})$`));
+    if (hm) { const h = holdersFor(hm[1], { top: +params.top || 25 }); return h ? send(res, 200, h) : send(res, 404, { error: "The radar has not seen this coin trade since it started." }); }
+    // The paper desk: open at a preset size, sell all or part, change a position's exit rule, forget a closed one.
+    // Real quotes and candles for the coin page's trade panel and chart (quote.js, candles.js).
+    if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip }));
+    const cm = p.match(new RegExp(`^/api/candles/(${MINT})$`));
+    if (cm) return send(res, 200, await candles(cm[1], params.tf));
+    if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
+    if (p === "/api/paper") {
+      if (POST) { const b = await readBody(req); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
+      return send(res, 200, paper.desk());
+    }
+    const pm = p.match(/^\/api\/paper\/(\d+)(\/sell|\/rule|\/sellq|\/preview)?$/);
+    if (pm) {
+      if (pm[2] === "/sellq" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.sellQuoted(+pm[1], b.pct ?? 100, { why: b.why || "sold" }), desk: paper.desk() }); }
+      if (pm[2] === "/preview") return send(res, 200, await paper.previewSell(+pm[1], params.pct));
+      if (pm[2] === "/sell" && POST) { const b = await readBody(req); return send(res, 200, { position: paper.sell(+pm[1], b.pct ?? 100, { why: b.why || "sold" }), desk: paper.desk() }); }
+      if (pm[2] === "/rule" && POST) return send(res, 200, { position: paper.setRule(+pm[1], await readBody(req)), desk: paper.desk() });
+      if (!pm[2] && req.method === "DELETE") { paper.remove(+pm[1]); return send(res, 200, paper.desk()); }
+    }
     const rm = p.match(new RegExp(`^/api/research/(${MINT})$`));
     if (rm) {
       if (POST) {
         let t = db.prepare("SELECT graduated FROM tokens WHERE mint = ?").get(rm[1]);
-        // A coin still in the launch feed: start tracking it so it can be researched.
-        if (!t && recentLaunches.some((l) => l.mint === rm[1])) { adoptMint(rm[1]); await vet(rm[1]).catch(() => {}); t = db.prepare("SELECT graduated FROM tokens WHERE mint = ?").get(rm[1]); }
+        // A coin still in the launch feed, or one the live trade feed is pricing: start tracking it so it can be read.
+        if (!t && (recentLaunches.some((l) => l.mint === rm[1]) || liveStats(rm[1]))) { adoptMint(rm[1]); await vet(rm[1]).catch(() => {}); t = db.prepare("SELECT graduated FROM tokens WHERE mint = ?").get(rm[1]); }
         if (!t) return send(res, 404, { error: "The radar isn't tracking this coin." });
         db.prepare("DELETE FROM research WHERE mint = ? AND status != 'running'").run(rm[1]);
         research.enqueue(rm[1], t.graduated ? "bonded" : "near", 1e12);
@@ -596,12 +691,26 @@ bus.on("tick", (s) => broadcast("tick", s));
 bus.on("brief", (b) => broadcast("brief", b));
 bus.on("walletTrade", (ev) => broadcast("walletTrade", ev));
 // New pump.fun coins go to the page the moment they're created; live trade numbers every 400ms.
-bus.on("launch", (l) => { watched.add(l.mint); if (clients.size) broadcast("launch", { ...l, solUsd: liveFeed.solUsd }); });
+bus.on("launch", (l) => {
+  watched.add(l.mint);
+  if (!clients.size) return;
+  broadcast("launch", { ...l, solUsd: liveFeed.solUsd });
+  // Someone is watching: get its picture and socials now, not on the next sweep.
+  metaNow(l.mint); images.eager(l.mint);
+});
+// The page swaps a coin's real picture in the moment the radar has it, and gets migrated prices as they move.
+images.onPictureReady((mint) => { if (clients.size && watched.has(mint)) broadcast("pic", { mint }); });
+onMigratedPrices((u) => { if (clients.size) broadcast("mig", { u }); });
+pictureHooks(images.hasPicture, images.retry);
 setInterval(() => {
   if (!clients.size) return;
-  const u = drainUpdates(watched);
+  // Each row: the live numbers from the trade feed, then the holder ledger's figures for that coin.
+  const u = drainUpdates(watched).map((row) => [...row, ...liveHolders(row[0])]);
   if (u.length) broadcast("live", { u, sol: liveFeed.solUsd });
-}, 400);
+}, 300);
+// A paper position closed by its own exit rule: tell the page (and the event log keeps it).
+paper.exitHook((pos) => broadcast("paper", { pos }));
+paper.nameHook(nameOf);
 
 // A bad API response should never take the radar down.
 process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.message || e}`));
@@ -612,12 +721,22 @@ const server6 = http.createServer((req, res) => server.emit("request", req, res)
 server6.on("error", () => {});
 server6.listen(PORT, "::1");
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Meme Radar on http://localhost:${PORT}`);
+  console.log(`Blix on http://localhost:${PORT}`);
+  // v30: the launch-labelling model is off (its labels barely separated winners), picks are decided by live
+  // demand and the launch model rather than the AI's call, and Grok scouts narratives hourly inside a daily budget.
+  if (meta.get("next_level_v30") !== "1") {
+    saveSettings({ triageOn: false, pickMinTraction: Math.max(65, settings.pickMinTraction), scoutEveryMin: Math.min(60, settings.scoutEveryMin || 60) });
+    meta.set("next_level_v30", "1");
+  }
   start();
   research.startResearch(raise);
   brain.startBrain(raise, research.enqueue);
   startPulse();
   startLiveTrades();
+  startHolders();
+  paper.startPaper();
+  startCandles();
+  startTunnel(PORT);
   startTriage(research.enqueue);
   startEarly({ enqueue: research.enqueue, earlyPick: brain.earlyPick });
   // New alert types are switched on once for existing installs (they can be switched off again in Settings).
@@ -625,6 +744,8 @@ server.listen(PORT, "127.0.0.1", () => {
   if (!settings.buyMigrated) saveSettings({ notifyKinds: [...new Set([...settings.notifyKinds, "buy"])], buyMigrated: true });
   addKind("kind_liq_pulled", "liq-pulled");
   addKind("kind_pick", "pick");
+  addKind("kind_narrative", "narrative");
+  startClusters({ enqueue: research.enqueue, raise });
   // Grok is out of credits for the month: Claude is the chosen AI for every lane until it is switched back in Settings.
   if (meta.get("claude_lanes_v25") !== "1") { saveSettings({ fastProvider: "claude", deepProvider: "claude" }); meta.set("claude_lanes_v25", "1"); }
   // Deep second opinions now go to every coin the first read would trade: give that lane more room.
@@ -638,7 +759,9 @@ server.listen(PORT, "127.0.0.1", () => {
     for (const b of db.prepare("SELECT id, body FROM briefs").all()) { const why = briefProblem(b.body); if (why) db.prepare("UPDATE briefs SET status = 'partial', stop = ? WHERE id = ?").run(why, b.id); }
     meta.set("briefs_checked", "1");
   }
-  detectVersion().then(grokTier).catch(() => {});
+  startTape();
+  detectVersion().then(grokTier).then(grokBilling).catch(() => {});
+  setInterval(() => grokBilling().catch(() => {}), 10 * MIN);
   const syncSol = () => wallets.solPrice().then(research.setSolPrice).catch(() => {});
   syncSol(); setInterval(syncSol, 5 * MIN);
   fomo.startFomo({

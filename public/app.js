@@ -1,4 +1,5 @@
 // Blix (Blix Trade) dashboard.
+import { mountChart, mountPanel } from "./trade.js";
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const api = (p, opt) => fetch(`/api/${p}`, opt).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.error || r.status); return b; });
@@ -94,7 +95,7 @@ document.addEventListener("load", (e) => {
 setInterval(() => {
   for (const img of document.querySelectorAll("img.av[data-pic].gen")) {
     const m = img.dataset.pic, tr = picTries.get(m);
-    if (!tr || tr.n > 6 || Date.now() - tr.t < 5000 * 2 ** (tr.n - 1)) continue;
+    if (!tr || tr.n > 7 || Date.now() - tr.t < 2000 * 2 ** (tr.n - 1)) continue;
     const probe = new Image();
     probe.onload = () => { picHave.add(m); picTries.delete(m); for (const el of document.querySelectorAll(`img.av[data-pic="${m}"]`)) { el.src = probe.src; el.classList.remove("gen"); } };
     probe.onerror = () => picTries.set(m, { n: tr.n + 1, t: Date.now() });
@@ -102,6 +103,11 @@ setInterval(() => {
     probe.src = `/img/${m}?r=${tr.n}`;
   }
 }, 2000);
+// The radar says a coin's picture just arrived: swap it in everywhere that coin is on screen.
+function applyPic(mint) {
+  picHave.add(mint); picTries.delete(mint);
+  for (const el of document.querySelectorAll(`img.av[data-pic="${CSS.escape(mint)}"]`)) if (el.classList.contains("gen") || !(el.naturalWidth > 1)) { el.classList.remove("gen"); el.src = `/img/${mint}?p=1`; }
+}
 window.avFail = (img) => {
   if (img.dataset.pic) {
     if (img.classList.contains("gen")) return;
@@ -128,7 +134,7 @@ function av(t, size = "") {
     // Known to be missing for now: show the generated one straight away, the retry loop swaps it in.
     const wait = picTries.has(t.mint) && !picHave.has(t.mint);
     // The generated picture sits behind the real one, so a box is never empty while a picture loads.
-    return `<img class="av ${size} ${wait ? "gen" : ""}" src="${wait ? fb : `/img/${t.mint}`}" data-pic="${t.mint}" data-mint="${t.mint}" data-fb="${fb}" style="background-image:url('${fb}')" alt="">`;
+    return `<img class="av ${size} ${wait ? "gen" : ""}" src="${wait ? fb : `/img/${t.mint}`}" data-pic="${t.mint}" data-mint="${t.mint}" data-fb="${fb}" style="background-image:url('${fb}')" alt="" loading="lazy" decoding="async">`;
   }
   const list = [];
   if (t.mint && /pump$/.test(t.mint)) list.push(`https://images.pump.fun/coin-image/${t.mint}?variant=${size === "xl" || size === "lg" ? "200x200" : "86x86"}`);
@@ -282,7 +288,7 @@ function feedRows(list, grouped) {
 // Same-name coins are different coins. Each row carries what tells them apart: short contract, launchpad,
 // age, and whether it is the biggest of its ticker or one of several copies.
 const DEX_NAME = { pumpfun: "pump.fun curve", pumpswap: "PumpSwap", raydium: "Raydium", meteora: "Meteora", meteoradbc: "Meteora curve", orca: "Orca", bags: "Bags curve" };
-const idLine = (t) => `<small class="idline"><span class="mono" title="${esc(t.mint)}">${shortAddr(t.mint)}</span>${t.dex ? ` · ${esc(DEX_NAME[t.dex] || t.dex)}` : ""}</small>`;
+const idLine = (t) => { const i = protoInfo(t); return `<small class="idline"><span class="mono" title="${esc(t.mint)}">${shortAddr(t.mint)}</span>${i.launch ? ` · ${esc(i.full)}` : ""}${t.dex ? ` · ${esc(DEX_NAME[t.dex] || t.dex)}` : ""} · Solana</small>`; };
 const dupTag = (t) => t.dupes > 1 ? `<span class="st ${t.dupTop ? "top" : "dup"}" title="${t.dupes} tracked coins share this ticker. ${t.dupTop ? "This is the largest by market cap." : "This is not the largest; check the contract."}">${t.dupTop ? `largest of ${t.dupes}` : `1 of ${t.dupes} copies`}</span>` : "";
 
 function coinTable(list, { sort, dir = "desc", compact } = {}) {
@@ -737,7 +743,7 @@ function narCard(n) {
   const withMint = (n.examples || []).filter((e) => e.mint);
   return `<div class="card scout ${n.review === "expired" ? "expired" : ""}">
     <div class="scout-top"><h3>${esc(n.name)}</h3>${stageBadge(n.stage)}<span class="num conf" title="Confidence the AI gave this thesis when it wrote it">${n.confidence}</span></div>
-    <div class="scout-age"><span class="st ${rvCls === "up" ? "top" : rvCls === "warn" ? "old" : "bad"}">${rvLabel}</span><span class="dim small">researched ${mins(n.researchAge)} ago by ${esc(providerOf(n.model))}${cat.searches ? ` (${cat.searches} live searches)` : ""} · coin prices refreshed ${n.pricesAge != null ? `${mins(n.pricesAge)} ago` : "at scouting"}</span></div>
+    <div class="scout-age"><span class="st ${rvCls === "up" ? "top" : rvCls === "warn" ? "old" : "bad"}">${rvLabel}</span><span class="dim small">${n.source === "cluster" ? `caught as a burst of launches${n.detect_ms != null ? `, named ${mins(n.detect_ms)} after it began` : ""} · ` : ""}researched ${mins(n.researchAge)} ago by ${n.model === "radar" ? "the radar alone (not looked up on X)" : esc(providerOf(n.model))}${cat.searches ? ` (${cat.searches} live searches)` : ""}${n.seen > 1 ? ` · found ${n.seen} times` : ""} · coin prices refreshed ${n.pricesAge != null ? `${mins(n.pricesAge)} ago` : "at scouting"}</span></div>
     ${n.review === "expired" ? `<p class="note warn-note">This thesis has not been re-checked since it was written. The catalysts below may be over; only the coin prices are current.</p>` : ""}
     <p>${esc(n.thesis || "")}</p>
     ${(cat.catalysts || []).length ? `<ul class="cats">${cat.catalysts.slice(0, 3).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
@@ -745,7 +751,7 @@ function narCard(n) {
     <div class="kw">${(n.keywords || []).map((k) => `<span>${esc(k)}</span>`).join("")}</div>
     ${withMint.length ? `<div class="dim small">Contracts the AI named: ${withMint.map((e) => `<span class="linkish mono" data-mint="${esc(e.mint)}">${esc(e.ticker || "")} ${shortAddr(e.mint)}</span>`).join(" · ")}</div>` : ""}
     ${n.matches?.length ? `<div class="scout-coins">${n.matches.slice(0, 8).map((m) => `<span class="leader ${m.dead ? "paused" : ""}" data-mint="${esc(m.mint)}" title="${esc(m.mint)}">${av(m, "sm")}<b>$${esc(m.symbol)}</b><span class="dim">${money(m.mcap)}${m.dead ? " · dead" : m.late ? " · launched after" : ""}</span></span>`).join("")}</div>` : `<div class="dim small">No radar coins on it yet${n.stage === "early" ? " (early: watch for launches)" : ""}</div>`}
-    <div class="scout-foot"><span class="dim small">${cat.risk ? `Risk: ${esc(cat.risk)}` : ""}</span>${ran ? `<span class="pill ${n.best_mult >= 3 || n.best_peak >= 1e6 ? "ran" : ""}" title="Best move among matched coins after the call, from sellable prices only">${n.status === "scored" ? "Result" : "So far"}: ${n.best_mult ? `best ${mult(n.best_mult)}` : "no coin tracked from before the call"}${n.best_peak ? ` · peak ${money(n.best_peak)}` : ""}${n.launches_after ? ` · ${n.launches_after} new coins` : ""}</span>` : ""}</div>
+    <div class="scout-foot"><span class="dim small">${cat.risk ? `Risk: ${esc(cat.risk)}` : ""}</span>${ran ? `<span class="pill ${n.best_mult >= 3 || n.best_peak >= 1e6 ? "ran" : ""}" title="Best move among matched coins after the call, from sellable prices only">${n.status === "scored" ? "Result" : "So far"}: ${n.best_mult ? `best ${mult(n.best_mult)}` : "no coin tracked from before the call"}${n.best_peak ? ` · peak ${money(n.best_peak)}` : ""}${n.med_mult ? ` · typical coin ${mult(n.med_mult)}` : ""}${n.lead_mult ? ` · lead coin ${mult(n.lead_mult)}` : ""}${n.launches_after ? ` · ${n.launches_after} new coins` : ""}</span>` : ""}</div>
   </div>`;
 }
 // One line that says where a self-running process stands, so "has not run" is never mistaken for "broken".
@@ -807,7 +813,7 @@ function picksLedger(d) {
     </div>
     <div class="blk"><div class="blk-head"><h2>Running result</h2><small>$100 into every pick, sold by the exit rule: half at ${d.rule.takeProfit}x, ${d.rule.trailPct}% trailing stop, ${d.rule.stopPct}% stop, ${d.rule.maxHours}h limit. Paper only.</small></div>
       <div class="eq-wrap">${equityChart(d.curve)}</div>
-      <div class="minis">${split("By stage when picked", d.byStage)}${split("By what the AI said", d.byAction)}
+      <div class="minis">${split("By stage when picked", d.byStage)}${split("By what the AI said", d.byAction)}${d.byVia ? split("By what made it a pick", d.byVia.map((g) => ({ ...g, key: { model: "launch model", demand: "live demand", ai: "the AI's call" }[g.key] || g.key }))) : ""}
         <div class="mini"><h4>By day</h4>${d.days.slice(0, 6).map((g) => `<div><span>${dayName(g.day)}</span><span class="num">${g.wins}/${g.closed} won · ${g.n} picks</span><b class="num ${g.pnl >= 0 ? "up" : "down"}">${g.pnl >= 0 ? "+" : "−"}$${Math.abs(Math.round(g.pnl)).toLocaleString()}</b></div>`).join("")}</div></div></div>
     <div class="blk"><div class="blk-head tools"><h2>All picks <span class="count num">${rows.length}${rows.length !== d.picks.length ? ` of ${d.picks.length}` : ""}</span></h2>
         ${seg([["all", "All"], ["open", "Open"], ["won", "Won"], ["lost", "Lost"]], S.state, "pkstate")}
@@ -862,10 +868,13 @@ document.addEventListener("input", (e) => {
 async function picksDesk(main) {
   const d = await api("picks");
   const sc = d.scorecard, c = sc.calls, pb = d.playbook;
-  const lastScout = d.narratives[0]?.t;
-  const latest = d.narratives.filter((n) => lastScout - n.t < 3 * 60_000);
-  const earlier = d.narratives.filter((n) => lastScout - n.t >= 3 * 60_000 && (n.best_mult || n.best_peak)).slice(0, 9);
   const st = d.status, rv = st.review, scout = st.scout, cs = st.calls;
+  // Narratives now arrive from live bursts as well as the scout, so "the latest scout" is no longer one batch:
+  // show every thesis that is still current, and fall back to the newest few when all of them have expired.
+  const current = d.narratives.filter((n) => n.review !== "expired");
+  const lastScout = d.narratives.length ? Date.now() - d.narratives[0].researchAge : null;
+  const latest = current.length ? current.slice(0, 12) : d.narratives.slice(0, 6);
+  const earlier = d.narratives.filter((n) => !latest.includes(n) && (n.best_mult || n.best_peak)).slice(0, 9);
   const stale = latest.length && latest.every((n) => n.review === "expired");
   const wins = c.closed ? Math.round(c.winRate * c.closed) : 0;
   main.innerHTML = `<div class="page-head"><div><h1>AI picks</h1>
@@ -897,7 +906,7 @@ async function picksDesk(main) {
           <div class="dim small">Tuned: buy calls at conviction ${pb.tuning.buyConviction ?? "—"}+, deep reads at score ${pb.tuning.deepMinScore ?? "—"}+</div>`
         : empty("No playbook yet", rv.why)}</div>
     </div>
-    <div class="card" style="margin:16px 0"><div class="card-head"><h2>${stale ? "Last scouted narratives (out of date)" : "Running narratives"}</h2><small>${lastScout ? `scouted ${ago(lastScout)} ago` : "first scout runs a few minutes after start"}</small></div>
+    <div class="card" style="margin:16px 0"><div class="card-head"><h2>${stale ? "Last scouted narratives (out of date)" : "Running narratives"}</h2><small>${lastScout ? `newest ${ago(lastScout)} ago` : "first scout runs a few minutes after start"} · <a class="linkish" href="#/narratives">live bursts →</a></small></div>
       ${scout.why ? `<div class="warn-box" style="margin:0 16px 12px"><b>Not being refreshed.</b> ${esc(scout.why)}</div>` : stale ? `<div class="warn-box" style="margin:0 16px 12px"><b>These are ${ago(lastScout)} old.</b> Every thesis below has expired; a new scout is due.</div>` : ""}
       ${latest.length ? `<div class="scouts">${latest.map(narCard).join("")}</div>` : empty("No narratives scouted yet", scout.why || `The scout searches X and the web every ${scout.every} minutes.`)}
       ${earlier.length ? `<h4 class="sub">How earlier calls did</h4><div class="scouts">${earlier.map(narCard).join("")}</div>` : ""}</div>
@@ -910,7 +919,9 @@ async function picksDesk(main) {
 }
 
 // ---------- pulse (live three-column view, AI rating every coin as it streams) ----------
-const pulseState = { tab: store.get("pulse:tab", "new"), botTimer: null, q: "", min: "all", timer: null, rows: new Map(), first: true, f: store.get("pulse:f", {}), cq: {}, ai: null };
+const pulseState = { tab: store.get("pulse:tab", "new"), botTimer: null, q: "", min: store.get("pulse:min", "noslop"), timer: null, rows: new Map(), first: true, f: store.get("pulse:f", {}), cq: {}, ai: null,
+  // terminal state: per-column sort, the watchlist, the selected row (keyboard), density, sound, paper desk sizes
+  sort: store.get("pulse:sort", {}), watch: new Set(store.get("pulse:watch", [])), sel: null, compact: store.get("pulse:compact", false), sound: store.get("pulse:sound", false), sizes: [0.1, 0.25, 0.5, 1], desk: null };
 const GRADE_RANK = { "A+": 11, A: 10, "A-": 9, "B+": 8, B: 7, "B-": 6, "C+": 5, C: 4, "C-": 3, D: 2, F: 1 };
 const ageStr = (ms) => { const s = ms / 1000; return s < 60 ? `${Math.max(0, Math.floor(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
 const compact = (n) => n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}K` : `$${Math.round(n)}`;
@@ -921,28 +932,74 @@ const ICON = {
   users: `<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3.5 3.5 0 0 1 0 7M21 20c0-2.6-1.6-4.8-4-5.6"/></svg>`,
   crown: `<svg viewBox="0 0 24 24"><path d="M3 8l4 4 5-7 5 7 4-4-2 11H5z"/></svg>`,
   chef: `<svg viewBox="0 0 24 24"><path d="M7 18h10v3H7zM6 14a4 4 0 1 1 2-7.5 4 4 0 0 1 8 0A4 4 0 1 1 18 14v4H6z"/></svg>`,
+  star: `<svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z"/></svg>`,
 };
 
 // First-pass triage (instant rules, then the fast LLM): slop / meh / maybe / promising.
 const TRI = { slop: "SLOP", meh: "MEH", maybe: "MAYBE", promising: "HOT" };
 function triChip(t) {
   const x = t.tri;
-  if (!x) return `<span class="tri tri-wait" title="Ranking…">…</span>`;
+  if (!x) return "";
   return `<span class="tri tri-${esc(x.label)} ${x.src === "rules" ? "is-rules" : ""}" title="${esc(`${x.src === "rules" ? "Instant rules" : `Fast AI (${String(x.model || "").split("/").pop()})`}: ${x.why || ""}`)}">${TRI[x.label] || x.label}<em>${x.score}</em></span>`;
 }
 
 function aiChip(t) {
   const a = t.ai;
-  if (!a) return t.state === "faded" ? `<span class="ai none">faded</span>` : t.state === "watching" ? `<span class="ai none">watching</span>` : `<span class="ai none">—</span>`;
+  // Not read yet: one press sends it to the front of the AI's queue (a coin the radar is not tracking yet is adopted first).
+  if (!a) return t.state === "faded" ? `<span class="ai none">faded</span>` : `<button class="ai none rd" data-research="${esc(t.mint)}" title="Send to the AI for a first read now (hotkey r)">read</button>`;
   if (a.status === "queued") return `<span class="ai queued" title="Waiting for a read. Not rated yet.">queued</span>`;
   // Name whoever is really reading: a deep read when a first grade already exists, else the first-read lane.
   if (a.status === "running") return `<span class="ai reading"><i></i>${a.grade ? `${pulseState.ai?.deep || "AI"} deep read` : `${pulseState.ai?.fast || pulseState.ai?.deep || "AI"} reading`}</span>`;
-  if (a.status === "error" || !a.rated) return `<span class="ai none">no read</span>`;
+  if (a.status === "error" || !a.rated) return `<button class="ai none rd" data-research="${esc(t.mint)}" title="The last read failed. Press to try again.">retry read</button>`;
   const buy = a.action === "buy";
   return `<span class="ai done ${gradeClass(a.grade)} ${buy ? "buy" : ""}" title="${esc(`${a.tier === "deep" ? "Deep" : "Fast"} read by ${providerOf(a.model)}, ${ago(a.t)} ago${a.pwin != null ? `. Trade call: ${a.action || "none"}, ${a.pwin}% chance of 2x before -40%. The grade is for the narrative only` : ""}: ${a.verdict || ""}`)}">${buy ? `<b class="buy-tag">BUY</b>` : ""}${a.tier === "deep" ? "◆" : "⚡"}<b>${esc(a.grade)}</b><em>${a.score}</em>${a.pwin != null ? `<i class="pw ${a.action === "avoid" ? "no" : ""}">${a.action === "avoid" ? "avoid" : `${a.pwin}%`}</i>` : ""}${a.status === "deep" ? `<i class="spin"></i>` : ""}</span>`;
 }
 
+// One Pulse row: a fixed four-line terminal layout. Line 1 ticker · name · market cap. Line 2 age ·
+// launchpad · links · contract · volume and 1-minute change. Line 3 the live stat strip (holders, top 10,
+// dev, snipers, bundle, trades, the 5-minute window). Line 4 the rank, the AI call with its verdict, and
+// the actions. Every live number keeps its lv-* hook so the 200ms push updates it in place.
 function pulseRow(t, col) {
+  const prog = t.progress != null ? Math.round(t.progress * 100) : null;
+  const ring = col === "migrated" ? 100 : prog ?? 0;
+  const tx = (t.buys || 0) + (t.sells || 0), buyShare = tx ? (t.buys || 0) / tx : null;
+  const a = t.ai, rated = a && a.verdict && ["done", "deep"].includes(a.status);
+  const vol = t.vol ?? t.liveVol;
+  const H = t.hl || {}, curve = !t.graduated && col !== "migrated";
+  const holders = curve ? (H.h ?? t.holders ?? null) : (t.holders ?? H.h ?? null);
+  const top10 = curve ? (H.t10 ?? t.top10 ?? null) : (t.top10 ?? H.t10 ?? null);
+  const dev = curve ? (H.dev ?? t.dev ?? null) : (t.dev ?? H.dev ?? null);
+  const st = (k, icon, v, fmt, bad, title, unit = "%") => `<span class="sc lv-${k}w ${bad ? "bad" : ""}" title="${esc(title)}" ${v == null ? "hidden" : ""}>${icon}<b class="lv-${k}">${v == null ? "" : fmt(v)}</b>${unit}</span>`;
+  const sizes = pulseState.sizes, main = sizes[1] ?? sizes[0];
+  const note = rated ? `${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}` : t.tri?.why && col === "new" ? `${esc(t.tri.why)}${t.desc ? ` · ${esc(t.desc)}` : ""}` : t.desc && col === "new" ? esc(t.desc) : "";
+  const rank = t.tr != null ? `<span class="rk ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live rank 0-100: real demand this second (5-minute volume, traders, 1m and 5m change, size, distance from its high). Measured on past reads as the one ranking that predicted winners. 60+ is the pick line.">${t.tr}</span>` : "";
+  return `<div class="pr ${a?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""} ${t.tri?.label === "slop" && !a ? "slop" : ""} ${pulseState.sel === t.mint ? "sel" : ""} ${pulseState.watch.has(t.mint) ? "watched" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
+    <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
+    <div class="pr-b">
+      <div class="r1"><button class="star ${pulseState.watch.has(t.mint) ? "on" : ""}" data-pwatch="${esc(t.mint)}" title="Watchlist (w)">${ICON.star}</button><b class="sym">${esc(t.symbol || "?")}</b><span class="nm">${esc(t.name || "")}</span>
+        <span class="r-right mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></span></div>
+      <div class="r2"><span class="pr-age">${ageStr(t.age)}</span>${protoChips(t)}<span class="links">${extLink(t.x, ICON.x, "") && `<span title="X">${extLink(t.x, ICON.x, "")}</span>`}${extLink(t.web, ICON.web, "untrusted") && `<span title="Website set by the creator (unverified)">${extLink(t.web, ICON.web, "untrusted")}</span>`}${extLink(t.tg, ICON.tg, "") && `<span title="Telegram">${extLink(t.tg, ICON.tg, "")}</span>`}</span><span class="ca mono" title="Contract ${esc(t.mint)}">${esc(t.mint.slice(0, 4))}…${esc(t.mint.slice(-4))}</span>
+        <span class="r-right vol"><small>V</small><b class="num lv-v">${compact(vol)}</b>${t.chg1m != null ? `<i class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</i>` : t.chg5 != null ? `<i class="num lv-c5 ${cls(t.chg5)}">${pct(t.chg5)}</i>` : `<i class="num lv-chg"></i>`}</span></div>
+      <div class="r3">
+        ${st("h", ICON.users, holders, String, false, curve ? "Holders now, from the live trade feed" : "Holders (RugCheck)", "")}
+        ${holders == null && t.traders != null ? `<span class="sc lv-trw" title="Traders seen live">${ICON.users}<b class="lv-tr">${t.traders}</b></span>` : ""}
+        ${st("t10", ICON.crown, top10, (v) => String(Math.round(v)), top10 > 45, "Top 10 holders share of the supply")}
+        ${st("dev", ICON.chef, dev, (v) => (+v).toFixed(1), dev > 8, "Dev wallet share of the supply")}
+        ${dev == null && t.devSol != null ? `<span class="sc lv-devsol" title="Dev bought at launch">${ICON.chef}<b>${(+t.devSol).toFixed(2)}</b> SOL</span>` : ""}
+        <i class="flag bad lv-ds" ${H.ds ? "" : "hidden"} title="The dev wallet sold ${H.ds === "all" ? "everything" : "more than half of"} what it held">${H.ds === "all" ? "DEV SOLD" : "DEV SELLING"}</i>
+        ${st("sn", "SN", H.snN ? H.sn : null, String, H.sn > 20, `Snipers: ${H.snN ?? "?"} wallets bought within 2 blocks of the first trade${H.snOut != null ? `, ${H.snOut} already out` : ""}; share of supply they still hold`)}
+        ${st("bd", "BD", H.bdN ? H.bd : null, String, H.bd > 15, `Bundle: ${H.bdN ?? "?"} other wallets bought in the launch block; share of supply they still hold`)}
+        ${t.devCount >= 4 ? `<span class="sc ${t.devCount >= 10 ? "bad" : ""}" title="Coins this dev wallet launched in the last 6h">dev<b>×${t.devCount}</b></span>` : ""}
+        <span class="sc lv-txw" title="Buys / sells" ${tx ? "" : "hidden"}>TX<b class="lv-tx">${tx}</b><i class="bs"><i class="lv-bs" style="width:${Math.round((buyShare ?? 0.5) * 100)}%"></i></i></span>
+        ${t.win ? `<span class="sc win ${t.win.netSol < 0 ? "bad" : ""}" title="Last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, ${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol} SOL net buying${t.win.chg != null ? `, ${t.win.chg >= 0 ? "+" : ""}${t.win.chg}% price` : ""}">5m<b>${t.win.traders}w</b><b>${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}</b>SOL${t.win.chg != null ? `<b class="${cls(t.win.chg)}">${t.win.chg >= 0 ? "+" : ""}${t.win.chg}%</b>` : ""}</span>` : ""}
+      </div>
+      <div class="r4">${rank}${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${aiChip(t)}<span class="note">${note}</span>
+        <span class="acts"><span class="pr-quick"><button class="qb main" data-pbuy="${esc(t.mint)}" data-sol="${main}" title="Paper buy ${main} SOL at the price this second (b). Nothing is really bought.">B ${main}</button><span class="qb-more">${sizes.filter((s) => s !== main).map((s) => `<button class="qb" data-pbuy="${esc(t.mint)}" data-sol="${s}" title="Paper buy ${s} SOL">${s}</button>`).join("")}</span></span><a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo (f)">Fomo</a></span></div>
+    </div>
+  </div>`;
+}
+
+function pulseRowOld(t, col) {
   const prog = t.progress != null ? Math.round(t.progress * 100) : null;
   const ring = col === "migrated" ? 100 : prog ?? 0;
   const tx = (t.buys || 0) + (t.sells || 0);
@@ -952,25 +1009,41 @@ function pulseRow(t, col) {
     : t.tri?.why && col === "new" ? `<div class="pr-verdict tri-why tri-${esc(t.tri.label)}">${esc(t.tri.why)}${t.desc ? ` · <span class="dim">${esc(t.desc)}</span>` : ""}</div>`
     : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
   const vol = t.vol ?? t.liveVol;
-  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""} ${t.tri?.label === "slop" && !a ? "slop" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
+  // Holder figures: the live ledger (built from the trade feed) for coins on the curve, RugCheck for bonded ones.
+  // Every chip is rendered, hidden when unknown, so the 200ms live push can fill it in without a redraw.
+  const H = t.hl || {}, curve = !t.graduated && col !== "migrated";
+  const holders = curve ? (H.h ?? t.holders ?? null) : (t.holders ?? H.h ?? null);
+  const top10 = curve ? (H.t10 ?? t.top10 ?? null) : (t.top10 ?? H.t10 ?? null);
+  const dev = curve ? (H.dev ?? t.dev ?? null) : (t.dev ?? H.dev ?? null);
+  const hl = (k, label, v, fmt, bad, title) => `<span class="hl lv-${k}w ${bad ? "down" : ""}" title="${esc(title)}" ${v == null ? "hidden" : ""}>${label}<b class="lv-${k}">${v == null ? "" : fmt(v)}</b>${k === "h" ? "" : "%"}</span>`;
+  const sizes = pulseState.sizes, main = sizes[1] ?? sizes[0];
+  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""} ${t.tri?.label === "slop" && !a ? "slop" : ""} ${pulseState.sel === t.mint ? "sel" : ""} ${pulseState.watch.has(t.mint) ? "watched" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
     <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
     <div class="pr-main">
-      <div class="pr-l1"><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span><span class="pr-ca mono" title="Contract ${esc(t.mint)}">${esc(t.mint.slice(0, 4))}…${esc(t.mint.slice(-4))}</span>
+      <div class="pr-l1"><button class="star ${pulseState.watch.has(t.mint) ? "on" : ""}" data-pwatch="${esc(t.mint)}" title="Watchlist (hotkey w)">${ICON.star}</button><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span>${protoChips(t)}<span class="pr-ca mono" title="Contract ${esc(t.mint)}">${esc(t.mint.slice(0, 4))}…${esc(t.mint.slice(-4))}</span>
         <span class="pr-links">${extLink(t.x, ICON.x, "") && `<span title="X">${extLink(t.x, ICON.x, "")}</span>`}${extLink(t.web, ICON.web, "untrusted") && `<span title="Website set by the coin's creator (unverified)">${extLink(t.web, ICON.web, "untrusted")}</span>`}${extLink(t.tg, ICON.tg, "") && `<span title="Telegram">${extLink(t.tg, ICON.tg, "")}</span>`}</span></div>
       <div class="pr-l2"><span class="pr-age">${ageStr(t.age)}</span>
-        ${t.holders != null ? `<span title="Holders">${ICON.users}${t.holders}</span>` : t.traders != null ? `<span title="Traders seen live">${ICON.users}<b class="lv-tr">${t.traders}</b></span>` : ""}
-        ${t.top10 != null ? `<span class="${t.top10 > 45 ? "down" : ""}" title="Top 10 holders">${ICON.crown}${Math.round(t.top10)}%</span>` : ""}
-        ${t.dev != null ? `<span class="${t.dev > 8 ? "down" : ""}" title="Dev holds">${ICON.chef}${t.dev.toFixed(1)}%</span>` : t.devSol != null ? `<span title="Dev bought at launch">${ICON.chef}${(+t.devSol).toFixed(2)} SOL</span>` : ""}
+        ${hl("h", ICON.users, holders, (v) => String(v), false, curve ? "Holders: wallets holding it right now, from the live trade feed" : "Holders (RugCheck)")}
+        ${holders == null && t.traders != null ? `<span class="lv-trw" title="Traders seen live">${ICON.users}<b class="lv-tr">${t.traders}</b></span>` : ""}
+        ${hl("t10", ICON.crown, top10, (v) => String(Math.round(v)), top10 > 45, "Top 10 holders' share of the supply")}
+        ${hl("dev", ICON.chef, dev, (v) => (+v).toFixed(1), dev > 8, "Dev wallet's share of the supply")}
+        ${dev == null && t.devSol != null ? `<span class="lv-devsol" title="Dev bought at launch">${ICON.chef}${(+t.devSol).toFixed(2)} SOL</span>` : ""}
+        <i class="hl-tag ds lv-ds" ${H.ds ? "" : "hidden"} title="The dev wallet has sold ${H.ds === "all" ? "everything" : "more than half of"} what it held">${H.ds === "all" ? "DEV SOLD" : "DEV SELLING"}</i>
+        ${hl("sn", "SN ", H.snN ? H.sn : null, (v) => String(v), H.sn > 20, `Snipers: ${H.snN ?? "?"} wallets that bought within 2 blocks of the first trade${H.snOut != null ? `, ${H.snOut} already out` : ""}; this is the share of supply they still hold`)}
+        ${hl("bd", "BD ", H.bdN ? H.bd : null, (v) => String(v), H.bd > 15, `Bundle: ${H.bdN ?? "?"} other wallets bought in the launch block itself; this is the share of supply they still hold`)}
         ${t.devCount >= 4 ? `<span class="${t.devCount >= 10 ? "down" : "dim"}" title="Coins this dev wallet launched in the last 6h">dev ×${t.devCount}</span>` : ""}
         <span title="Buys / sells" class="lv-txw" ${tx ? "" : "hidden"}>TX <b class="lv-tx">${tx}</b><i class="bs"><i class="lv-bs" style="width:${Math.round((buyShare ?? 0.5) * 100)}%"></i></i></span>
+        ${t.win ? `<span class="hl win ${t.win.netSol < 0 ? "down" : ""}" title="The last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, ${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol} SOL net buying${t.win.chg != null ? `, ${t.win.chg >= 0 ? "+" : ""}${t.win.chg}% price` : ""}">5m <b>${t.win.traders}</b>w <b>${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}</b> SOL${t.win.chg != null ? ` <b class="${cls(t.win.chg)}">${t.win.chg >= 0 ? "+" : ""}${t.win.chg}%</b>` : ""}</span>` : ""}
       </div>
       ${verdict}
     </div>
     <div class="pr-side">
       <div class="pr-mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></div>
-      <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
-      <div class="pr-act">${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch${t.early.top ? ". Top 5% of launches" : t.early.strong ? ". Top 10% of launches" : ""}">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${t.tr != null ? `<span class="trc ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live traction, 0-100: how much real demand it shows this second. 60+ is the pick line.">▲${t.tr}</span>` : ""}${aiChip(t)}<a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo">Fomo</a></div>
+      <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num lv-c5 ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
     </div>
+    <div class="pr-act">${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch${t.early.top ? ". Top 5% of launches" : t.early.strong ? ". Top 10% of launches" : ""}">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${t.tr != null ? `<span class="trc ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live traction, 0-100: how much real demand it shows this second. 60+ is the pick line.">▲${t.tr}</span>` : ""}${aiChip(t)}
+      <span class="pr-quick"><button class="qb main" data-pbuy="${esc(t.mint)}" data-sol="${main}" title="Paper buy ${main} SOL at the price this second (hotkey b). Nothing is really bought.">B ${main}</button><span class="qb-more">${sizes.filter((s) => s !== main).map((s) => `<button class="qb" data-pbuy="${esc(t.mint)}" data-sol="${s}" title="Paper buy ${s} SOL">${s}</button>`).join("")}</span></span>
+      <a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo (hotkey f)">Fomo</a></div>
   </div>`;
 }
 
@@ -979,16 +1052,17 @@ function pulseRow(t, col) {
 //
 // Pulse Filters: the same layout Axiom and GMGN use. Each column (New Pairs, Final Stretch, Migrated) has
 // its own set: keywords, launchpads, an Audit tab, a $ Metrics tab and a Socials tab, with three saved
-// slots (1 / 2 / 3). Fields those sites fill from their own private indexers (snipers, bundles, X follower
-// counts, fees) are listed but switched off: the radar has no free source for them and does not guess.
-const PF_COLS = [["new", "New Pairs"], ["stretch", "Final Stretch"], ["migrated", "Migrated"]];
+// slots (1 / 2 / 3). Holders, top 10, dev holding, snipers and bundles come from the radar's own ledger of
+// the live trade feed (t.hl). Fields with no free source left (X follower counts, fees, pro traders) are
+// listed but switched off: the radar does not guess.
+const PF_COLS = [["new", "New Pairs"], ["running", "Running Now"], ["stretch", "Final Stretch"], ["migrated", "Migrated"]];
 const PF_PROTOCOLS = ["Pump", "Bonk", "Bags", "Moonshot", "Jupiter Studio", "Believe", "LaunchLab", "Dynamic BC", "PumpSwap", "Raydium", "Meteora AMM", "Orca", "Other"];
 const PF_NO_SOURCE = ["Mayhem", "Bonkers", "Rise Rich", "Stonkfun", "Printr", "Liquid", "Surge", "Soar", "Heaven", "Daos.fun", "Candle", "Sugar", "Moonit", "Boop"];
 // [key, label, unit, value(t)]; a null value function = no data source.
 const PF_AUDIT = [
-  ["age", "Age", "m", (t) => t.age / 60_000], ["top10", "Top 10 Holders %", "%", (t) => t.top10], ["dev", "Dev Holding %", "%", (t) => t.dev],
-  ["snipers", "Snipers %", "%", null], ["insiders", "Insiders %", "%", (t) => t.insiders], ["bundle", "Bundle %", "%", null],
-  ["holders", "Holders", "", (t) => t.holders ?? t.traders], ["pro", "Pro Traders", "", null], ["devMig", "Dev Migrations", "", null],
+  ["age", "Age", "m", (t) => t.age / 60_000], ["top10", "Top 10 Holders %", "%", (t) => t.hl?.t10 ?? t.top10 ?? null], ["dev", "Dev Holding %", "%", (t) => t.hl?.dev ?? t.dev ?? null],
+  ["snipers", "Snipers %", "%", (t) => t.hl?.sn ?? null], ["insiders", "Insiders %", "%", (t) => t.insiders], ["bundle", "Bundle %", "%", (t) => t.hl?.bd ?? null],
+  ["holders", "Holders", "", (t) => t.hl?.h ?? t.holders ?? t.traders], ["pro", "Pro Traders", "", null], ["devMig", "Dev Migrations", "", null],
   ["devPairs", "Dev Pairs Created", "", (t) => t.devCount ?? null], ["safety", "Safety Score", "", (t) => t.safety], ["ai", "AI Score", "", (t) => t.ai?.rated ? t.ai.score : null],
 ];
 const PF_METRICS = [
@@ -1010,7 +1084,7 @@ const PF_TOGGLES = [
 ];
 // GMGN's checkbox row, kept under Audit.
 const PF_FLAGS = [
-  ["devSold", "Dev Sell All", (t) => t.dev != null && t.dev <= 0.01], ["devHolds", "Dev Still Holding", (t) => t.dev != null && t.dev > 0.01], ["noSlop", "Exclude Slop", (t) => t.tri?.label !== "slop" || Boolean(t.ai?.rated)],
+  ["devSold", "Dev Sell All", (t) => t.hl?.ds === "all" || (t.hl?.dev == null && t.dev != null && t.dev <= 0.01)], ["devHolds", "Dev Still Holding", (t) => t.hl?.dev != null ? t.hl.dev > 0.01 && t.hl.ds !== "all" : t.dev != null && t.dev > 0.01], ["noSlop", "Exclude Slop", (t) => t.tri?.label !== "slop" || Boolean(t.ai?.rated)],
   ["rated", "AI Rated Only", (t) => Boolean(t.ai?.rated)], ["safe", "Passed Safety Only", (t) => t.safety != null && !t.danger], ["origAvatar", "Original Avatar", null], ["origSocials", "Original Socials", null], ["noWash", "Exclude Wash Trading", null], ["devBurnt", "Dev Burnt", null],
 ];
 const PF_RANGES = [...PF_AUDIT, ...PF_METRICS, ...PF_SOCIAL_RANGES];
@@ -1018,7 +1092,8 @@ const PF_BOOLS = [...PF_TOGGLES, ...PF_FLAGS];
 // Where a coin was launched and where it trades now.
 function protoOf(t) {
   const m = t.mint || "", d = String(t.dex || "").toLowerCase(), out = new Set();
-  if (/pump$/.test(m) || t.pool === "pump" || d === "pumpfun") out.add("Pump");
+  // The live trade feed decodes the pump.fun program only, so anything it has priced is a pump.fun coin.
+  if (/pump$/.test(m) || t.pool === "pump" || d === "pumpfun" || d === "pumpswap" || t.live || t.lastTrade || (!t.pool && (t.startMcapSol != null || t.devSol != null))) out.add("Pump");
   if (/bonk$/.test(m) || t.pool === "bonk") out.add("Bonk");
   if (/BAGS$/.test(m) || d === "bags") out.add("Bags");
   if (/moon$/.test(m) || d === "moonshot") out.add("Moonshot");
@@ -1033,8 +1108,44 @@ function protoOf(t) {
   if (!out.size) out.add("Other");
   return out;
 }
-const pfBlank = () => ({ new: {}, stretch: {}, migrated: {} });
-const pf = { slot: store.get("pulse:pf:slot", 0), slots: store.get("pulse:pf:slots", null) || [pfBlank(), pfBlank(), pfBlank()], col: "new", tab: "protocols", draft: null, more: false, io: false };
+// Where a coin was launched, where it trades now, and the chain: the labels on every row and sheet.
+const PROTO_META = { Pump: ["pump", "PUMP", "pump.fun"], Bonk: ["bonk", "BONK", "letsbonk.fun (Raydium LaunchLab)"], Bags: ["bags", "BAGS", "Bags"], Moonshot: ["moon", "MOON", "Moonshot"], "Jupiter Studio": ["jup", "JUP", "Jupiter Studio"], Believe: ["blv", "BLV", "Believe"], LaunchLab: ["llab", "LLAB", "Raydium LaunchLab"], "Dynamic BC": ["dbc", "DBC", "Meteora dynamic bonding curve"] };
+const VENUE_META = { pumpswap: ["pumpswap", "PumpSwap", "PSWAP"], raydium: ["raydium", "Raydium", "RAY"], meteora: ["meteora", "Meteora", "MET"], orca: ["orca", "Orca", "ORCA"] };
+function protoInfo(t) {
+  const set = protoOf(t), launch = [...set].find((p) => PROTO_META[p]) || null;
+  const [slug, tag, full] = PROTO_META[launch] || ["other", "?", "unknown launchpad"];
+  const d = String(t.dex || "").toLowerCase();
+  const venue = t.graduated || VENUE_META[d] ? (VENUE_META[d] || [d || "amm", DEX_NAME[d] || d || "an AMM", (DEX_NAME[d] || d || "AMM").slice(0, 6).toUpperCase()]) : null;
+  return { launch, slug, tag, full, venue, where: venue ? venue[1] : launch ? `the ${full} bonding curve` : DEX_NAME[d] || "its bonding curve", chain: "Solana" };
+}
+function protoChips(t) {
+  const i = protoInfo(t);
+  return `<span class="proto p-${i.slug}" title="Launched on ${esc(i.full)} · trades on ${esc(i.where)} · ${i.chain}">${i.tag}</span>${i.venue ? `<span class="proto v-${i.venue[0]}" title="Bonded: now trades on ${esc(i.venue[1])}">${esc(i.venue[2] || i.venue[1])}</span>` : ""}<span class="proto chain" title="${i.chain}">SOL</span>`;
+}
+const pfBlank = () => ({ new: {}, running: {}, stretch: {}, migrated: {} });
+// The three saved sets start from what pump.fun traders actually run on Axiom and GMGN (see the
+// guides linked in design.md): P1 Clean = the common "skip the farmed coins" set (Pump/Bonk only, snipers
+// under 10%, dev under 10%, bundle under 20%, a social, a $5k floor; 80+ holders and top-10 under 30% near
+// bonding; top-10 under 20% after it). P2 Degen loosens every line; P3 Strict tightens them and wants
+// an X link. Any slot can be rewritten; the Recommended button in the filter window puts these back.
+const PF_RECOMMENDED = [
+  { new: { protocols: ["Pump", "Bonk"], snipersMax: 10, devMax: 10, bundleMax: 20, mcapMin: 5000, volMin: 500, anySocial: true, devPairsMax: 3, noSlop: true },
+    running: { snipersMax: 15, devMax: 10, bundleMax: 25, top10Max: 30, holdersMin: 20, noSlop: true },
+    stretch: { holdersMin: 80, top10Max: 30, devMax: 5, snipersMax: 15, curveMin: 70, noSlop: true },
+    migrated: { top10Max: 20, holdersMin: 100, devMax: 5, liqMin: 10000, ageMax: 60, noSlop: true } },
+  { new: { protocols: ["Pump", "Bonk"], snipersMax: 20, devMax: 15, bundleMax: 35, mcapMin: 4000 },
+    running: { top10Max: 40 },
+    stretch: { holdersMin: 40, top10Max: 40, curveMin: 60 },
+    migrated: { top10Max: 30, holdersMin: 50 } },
+  { new: { protocols: ["Pump"], snipersMax: 5, devMax: 5, bundleMax: 10, mcapMin: 8000, volMin: 2000, anySocial: true, twitter: true, devPairsMax: 1, holdersMin: 15, noSlop: true },
+    running: { snipersMax: 10, devMax: 5, bundleMax: 15, top10Max: 25, holdersMin: 40, noSlop: true },
+    stretch: { holdersMin: 150, top10Max: 25, devMax: 3, snipersMax: 10, bundleMax: 15, curveMin: 80, volMin: 20000, noSlop: true },
+    migrated: { top10Max: 18, holdersMin: 200, devMax: 2, liqMin: 20000, volMin: 50000, ageMax: 45, noSlop: true } },
+];
+const PF_SLOT_NAMES = ["Clean", "Degen", "Strict"];
+const pfStored = store.get("pulse:pf:slots", null);
+const pfAllBlank = !pfStored || pfStored.every((s) => Object.values(s || {}).every((c) => !Object.keys(c || {}).length));
+const pf = { slot: store.get("pulse:pf:slot", 0), slots: (pfAllBlank ? structuredClone(PF_RECOMMENDED) : pfStored).map((s) => ({ ...pfBlank(), ...s })), col: "new", tab: "protocols", draft: null, more: false, io: false };
 const pfSet = (col) => pf.slots[pf.slot][col] || {};
 const pfSave = () => { store.set("pulse:pf:slots", pf.slots); store.set("pulse:pf:slot", pf.slot); };
 const pfHas = (v) => v !== undefined && v !== "" && v != null;
@@ -1075,6 +1186,7 @@ function pulseFilter(list, col = "new") {
     if (!pfPass(t, f)) return false;
     // "Rated" means a finished grade. A coin that is only waiting in the queue has not been rated.
     const done = Boolean(t.ai?.rated), g = done ? GRADE_RANK[t.ai.grade] || 0 : 0;
+    if (pulseState.min === "watch") return pulseState.watch.has(t.mint);
     if (pulseState.min === "noslop") return t.tri?.label !== "slop" || done;
     if (pulseState.min === "rated") return done;
     if (pulseState.min === "queue") return ["queued", "running"].includes(t.ai?.status) || (t.ai?.status === "deep");
@@ -1133,7 +1245,7 @@ function pfRender() {
       <div class="pf-tabs">${[["protocols", "Protocols"], ["audit", "Audit"], ["metrics", "$ Metrics"], ["socials", "Socials"]].map(([k, l]) => `<button class="${pf.tab === k ? "on" : ""}" data-pftab="${k}">${l}${badge(pfCount(f, k))}</button>`).join("")}</div>
       <div class="pf-body">${pfBody(f)}</div>
     </div>
-    <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source.</span><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
+    <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source.</span><button class="btn sm-btn" data-pfrec title="Put back the researched ${PF_SLOT_NAMES[pf.slot]} set in this slot (Axiom and GMGN guide settings for pump.fun)">Recommended: ${PF_SLOT_NAMES[pf.slot]}</button><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
   host.querySelector(".pf-scroll").scrollTop = keep;
   if (pf.origin) host.querySelector(".pf-win").style.transformOrigin = pf.origin;
 }
@@ -1174,11 +1286,12 @@ document.addEventListener("click", (e) => {
   else if (d.pfcol) pf.col = d.pfcol;
   else if (d.pftab) pf.tab = d.pftab;
   else if ("pfreset" in d) pf.draft[pf.col] = {};
+  else if ("pfrec" in d) { pf.draft = structuredClone(PF_RECOMMENDED[pf.slot] || PF_RECOMMENDED[0]); toast(`${PF_SLOT_NAMES[pf.slot]} set loaded. Press Apply All to use it.`); }
   else if ("pfmore" in d) pf.more = !pf.more;
   else if ("pfio" in d) pf.io = !pf.io;
   else if ("pfcopy" in d) { navigator.clipboard?.writeText(JSON.stringify(pf.draft)); toast("Filters copied"); return; }
   else if ("pfload" in d) {
-    try { const j = JSON.parse($("#pfio").value); pf.draft = { new: j.new || {}, stretch: j.stretch || {}, migrated: j.migrated || {} }; toast("Filters loaded. Press Apply All to use them."); }
+    try { const j = JSON.parse($("#pfio").value); pf.draft = { new: j.new || {}, running: j.running || {}, stretch: j.stretch || {}, migrated: j.migrated || {} }; toast("Filters loaded. Press Apply All to use them."); }
     catch { return toast("That is not a filter export"); }
   }
   else if ("pfall" in d) { if (f.protocols) delete f.protocols; else f.protocols = []; }
@@ -1210,35 +1323,58 @@ document.addEventListener("keydown", (e) => {
 });
 
 // Patch a column in place: new rows slide in, changed rows flash, order follows the data.
+// Cheap by design: a row's template is only rebuilt when something other than its live numbers changed
+// (those arrive every 200ms through the stream and are written straight into the row); rows are found
+// through pulseState.rows, never by searching the DOM.
+const VOLATILE = new Set(["mcap", "buys", "sells", "liveVol", "traders", "progress", "chg1m", "side", "lastTrade", "age", "hl", "live", "priceT", "chg5", "chg1h", "vol", "vol5m", "peak", "tr", "win"]);
+function rowSig(t) {
+  let s = "";
+  for (const k in t) if (!VOLATILE.has(k)) { const v = t[k]; s += k + "=" + (v && typeof v === "object" ? JSON.stringify(v) : v) + ";"; }
+  return s;
+}
+// The parts of a row that move with the data but are not in the live stream: rank, the 5-minute window,
+// volume and the market cap of coins the stream does not price.
+function softUpdate(el, t) {
+  const rk = el.querySelector(".rk");
+  if (rk && t.tr != null) { const txt = String(t.tr); if (rk.textContent !== txt) rk.textContent = txt; rk.className = `rk ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}`; }
+  if (!t.live) {
+    const mc = el.querySelector(".lv-mc"), mcTxt = t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—";
+    if (mc && mc.textContent !== mcTxt && !mc.dataset.v) mc.textContent = mcTxt;
+    const v = el.querySelector(".lv-v"), vTxt = compact(t.vol ?? t.liveVol);
+    if (v && v.textContent !== vTxt) v.textContent = vTxt;
+    const c5 = el.querySelector(".lv-c5");
+    if (c5 && t.chg5 != null) { const txt = pct(t.chg5); if (c5.textContent !== txt) { c5.textContent = txt; c5.className = `num lv-c5 ${cls(t.chg5)}`; } }
+  }
+  const w = el.querySelector(".sc.win");
+  if (w && t.win) { const txt = `5m${t.win.traders}w${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}SOL${t.win.chg != null ? `${t.win.chg >= 0 ? "+" : ""}${t.win.chg}%` : ""}`; if (w.dataset.k !== txt) { w.dataset.k = txt; w.innerHTML = `5m<b>${t.win.traders}w</b><b>${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}</b>SOL${t.win.chg != null ? `<b class="${cls(t.win.chg)}">${t.win.chg >= 0 ? "+" : ""}${t.win.chg}%</b>` : ""}`; w.classList.toggle("bad", t.win.netSol < 0); } }
+}
 function patchColumn(el, list, col) {
   const seen = new Set();
   let prev = null;
   for (const t of list) {
     seen.add(t.mint);
-    const html = pulseRow(t, col);
     const key = `${col}:${t.mint}`;
-    let node = el.querySelector(`[data-mint="${CSS.escape(t.mint)}"]`);
     const old = pulseState.rows.get(key);
+    let node = old?.el?.isConnected ? old.el : null;
+    const sig = rowSig(t);
     if (!node) {
       const wrap = document.createElement("div");
-      wrap.innerHTML = html;
+      wrap.innerHTML = pulseRow(t, col);
       node = wrap.firstElementChild;
-      if (!pulseState.first) node.classList.add("enter");
-    } else if (old && old.html !== html) {
-      const up = (t.mcap || 0) > (old.mcap || 0), down = (t.mcap || 0) < (old.mcap || 0);
+      if (!pulseState.first) { node.classList.add("enter"); const n = node; setTimeout(() => n.classList.remove("enter"), 700); }
+    } else if (old.sig !== sig) {
       const graded = old.status !== t.ai?.status && ["done", "deep"].includes(t.ai?.status);
       const wrap = document.createElement("div");
-      wrap.innerHTML = html;
+      wrap.innerHTML = pulseRow(t, col);
       const fresh = wrap.firstElementChild;
       // Keep the already-loaded picture instead of reloading it on every update.
       const oldAv = node.querySelector(".pr-av img"), newAv = fresh.querySelector(".pr-av img");
       if (oldAv && newAv) newAv.replaceWith(oldAv);
-      if (graded) fresh.classList.add("graded");
-      else if (up || down) flash(fresh.querySelector(".lv-mc"), up);
+      if (graded) { fresh.classList.add("graded"); if (t.ai?.action === "buy") beep("buy"); }
       node.replaceWith(fresh);
       node = fresh;
-    }
-    pulseState.rows.set(key, { html, mcap: t.mcap, status: t.ai?.status });
+    } else softUpdate(node, t);
+    pulseState.rows.set(key, { sig, el: node, status: t.ai?.status, born: Date.now() - (t.age || 0), ageTxt: null });
     if (prev ? prev.nextElementSibling !== node : el.firstElementChild !== node) {
       if (prev) prev.after(node); else el.prepend(node);
     }
@@ -1247,6 +1383,12 @@ function patchColumn(el, list, col) {
   for (const n of [...el.children]) if (!seen.has(n.dataset.mint)) { n.remove(); pulseState.rows.delete(`${col}:${n.dataset.mint}`); }
   if (!list.length && !el.querySelector(".empty")) el.innerHTML = empty("Nothing here", col === "new" ? "Launches stream in every second." : "Updates live.");
 }
+// Every row element currently showing a coin, from the index (no DOM search).
+function rowsFor(mint) {
+  const out = [];
+  for (const col of COLS) { const r = pulseState.rows.get(`${col}:${mint}`); if (r?.el?.isConnected) out.push(r.el); }
+  return out;
+}
 
 async function pulseTick() {
   if (route() !== "" ) { clearInterval(pulseState.timer); pulseState.timer = null; return; }
@@ -1254,12 +1396,13 @@ async function pulseTick() {
   const d = await api("pulse").catch(() => null);
   if (!d || !$("#pcol-new")) return;
   pulseState.ai = d.live.ai;
-  const cols = { new: d.newPairs, stretch: d.stretch, migrated: d.migrated };
+  const cols = { new: d.newPairs, stretch: d.stretch, migrated: d.migrated, running: d.running || [] };
   for (const [k, list] of Object.entries(cols)) {
-    const f = pulseFilter(list, k);
+    const f = sortRows(pulseFilter(list, k), k);
     const colEl = $(`#pcol-${k}`);
+    if (!colEl) continue;
     if (colEl.querySelector(".empty") && f.length) colEl.innerHTML = "";
-    patchColumn(colEl, f, k);
+    patchColumn(colEl, f, k === "running" ? "stretch" : k);
     $(`#pcount-${k}`).textContent = f.length === list.length ? f.length : `${f.length} of ${list.length}`;
     const reading = list.filter((t) => t.ai?.status === "running").length;
     $(`#prating-${k}`).innerHTML = reading ? `<i></i>${reading}` : "";
@@ -1268,6 +1411,7 @@ async function pulseTick() {
   pulseState.first = false;
   const L = d.live;
   pulseState.sol = L.solUsd;
+  deskTick();
   const T = L.triage || {};
   const warn = $("#pulseWarn");
   const A = L.ai || {}, Q = L.queue || {};
@@ -1281,17 +1425,24 @@ async function pulseTick() {
   $("#pulseLive").innerHTML = `<span class="${L.feed ? "feed-on" : ""}"><i class="dot"></i><b class="num">${L.tradesPerSec}</b> trades/s</span><span><b class="num">${L.launchesPerMin}</b> launches/min</span><span title="${esc(T.lastError || "")}"><b class="num">${T.coins || 0}</b> ranked by ${ranker}${T.lastMs ? ` · ${(T.lastMs / 1000).toFixed(1)}s/batch` : ""} · <b class="num">${T.escalated || 0}</b> sent to research</span><span class="${L.running ? "hot" : ""}"><b class="num">${L.running}</b> ${esc(reader)} reading now</span><span title="Coins waiting for a first read. The queue is capped at ${Q.cap ?? "?"}; older and weaker ones are dropped."><b class="num">${Q.size ?? L.queued}</b> queued${Q.size ? ` · oldest ${Q.oldestMin}m` : ""}</span><span><b class="num">${L.ratedHour}</b> rated this hour</span>`;
 }
 
+// A price flash through the Web Animations API: no class juggling and no forced reflow per tick.
+const FLASH = { up: null, down: null };
 function flash(el, up) {
-  if (!el) return;
-  el.classList.remove("fl-up", "fl-down");
-  void el.offsetWidth;
-  el.classList.add(up ? "fl-up" : "fl-down");
+  if (!el || !el.animate) return;
+  if (!FLASH.up) {
+    const cs = getComputedStyle(document.documentElement);
+    FLASH.up = [{ background: `color-mix(in oklch, ${cs.getPropertyValue("--color-up").trim()} 45%, transparent)`, color: cs.getPropertyValue("--color-ink").trim() }, { background: "transparent" }];
+    FLASH.down = [{ background: `color-mix(in oklch, ${cs.getPropertyValue("--color-down").trim()} 45%, transparent)`, color: cs.getPropertyValue("--color-ink").trim() }, { background: "transparent" }];
+  }
+  for (const a of el.getAnimations()) a.cancel();
+  el.animate(up ? FLASH.up : FLASH.down, { duration: 600, easing: "ease-out" });
 }
 
-// Live trade numbers pushed by the server every 400ms.
+// Live trade numbers pushed by the server every 200ms, with the holder ledger's figures after them.
 function applyLive(u) {
-  for (const [mint, mc, buys, sells, vol, traders, prog, side, chg] of u) {
-    for (const row of document.querySelectorAll(`.pcol-body [data-mint="${CSS.escape(mint)}"]`)) {
+  for (const [mint, mc, buys, sells, vol, traders, prog, side, chg, h, t10, dev, ds, sn, bd] of u) {
+    for (const row of rowsFor(mint)) {
+      if (!row.closest("#pcol-migrated")) applyHolders(row, h, t10, dev, ds, sn, bd);
       const mcEl = row.querySelector(".lv-mc");
       if (mcEl) {
         const txt = compact(mc);
@@ -1325,30 +1476,227 @@ function applyLive(u) {
   }
 }
 
+// Migrated coins: fresh prices every few seconds while the page is open.
+function applyMig(u) {
+  for (const [mint, mc] of u) {
+    const row = pulseState.rows.get(`migrated:${mint}`)?.el;
+    const mcEl = row?.isConnected ? row.querySelector(".lv-mc") : null;
+    if (!mcEl) continue;
+    const txt = compact(mc), prev = Number(mcEl.dataset.v || 0);
+    if (mcEl.textContent !== txt) { mcEl.textContent = txt; if (prev) flash(mcEl, mc >= prev); }
+    mcEl.dataset.v = mc;
+    row.classList.toggle("buying", prev > 0 && mc > prev);
+    row.classList.toggle("selling", prev > 0 && mc < prev);
+    row.classList.add("is-live");
+  }
+}
+
+// The holder chips on one row: shown the moment the ledger has a figure, flagged when it crosses a line.
+function applyHolders(row, h, t10, dev, ds, sn, bd) {
+  const set = (k, v, fmt, bad) => {
+    if (v == null) return;
+    const w = row.querySelector(`.lv-${k}w`); if (!w) return;
+    w.hidden = false; w.classList.toggle("down", Boolean(bad));
+    const b = w.querySelector(`.lv-${k}`), txt = fmt(v);
+    if (b && b.textContent !== txt) b.textContent = txt;
+  };
+  set("h", h, String, false);
+  if (h != null) { const tr = row.querySelector(".lv-trw"); if (tr) tr.hidden = true; }
+  set("t10", t10, (v) => String(Math.round(v)), t10 > 45);
+  set("dev", dev, (v) => (+v).toFixed(1), dev > 8);
+  if (dev != null) { const d = row.querySelector(".lv-devsol"); if (d) d.hidden = true; }
+  // No snipers or no bundle is the normal case: those chips only appear once there is something to show.
+  set("sn", sn > 0 || !row.querySelector(".lv-snw")?.hidden ? sn : null, String, sn > 20);
+  set("bd", bd > 0 || !row.querySelector(".lv-bdw")?.hidden ? bd : null, String, bd > 15);
+  const dsEl = row.querySelector(".lv-ds");
+  if (dsEl && ds != null) { dsEl.hidden = !ds; dsEl.textContent = ds === 2 ? "DEV SOLD" : "DEV SELLING"; }
+}
+
 // A brand-new coin: show it the instant it's created.
 function applyLaunch(l) {
   const colEl = $("#pcol-new");
-  if (!colEl || pulseState.tab !== "new" || pulseState.q || pulseState.cq.new || pulseState.min !== "all" || pfCount(pfSet("new"))) return;
-  if (colEl.querySelector(`[data-mint="${CSS.escape(l.mint)}"]`)) return;
+  if (!colEl || pulseState.tab !== "new" || pulseState.q || pulseState.cq.new || pulseState.min !== "all" || pfCount(pfSet("new")) || pulseState.sort.new) return;
+  if (pulseState.rows.get(`new:${l.mint}`)?.el?.isConnected) return;
   colEl.querySelector(".empty")?.remove();
   pulseState.sol = l.solUsd || pulseState.sol;
+  const t = { ...l, age: 0, state: "watching", startMcapSol: l.mcapSol };
   const wrap = document.createElement("div");
-  wrap.innerHTML = pulseRow({ ...l, age: 0, state: "watching", startMcapSol: l.mcapSol }, "new");
+  wrap.innerHTML = pulseRow(t, "new");
   const node = wrap.firstElementChild;
   node.classList.add("enter");
+  setTimeout(() => node.classList.remove("enter"), 700);
   colEl.prepend(node);
-  while (colEl.children.length > 70) colEl.lastElementChild.remove();
+  pulseState.rows.set(`new:${l.mint}`, { sig: rowSig(t), el: node, status: null, born: Date.now(), ageTxt: "0s" });
+  while (colEl.children.length > 160) { const last = colEl.lastElementChild; pulseState.rows.delete(`new:${last.dataset.mint}`); last.remove(); }
   const n = $("#pcount-new"); if (n) n.textContent = colEl.children.length;
 }
 
-// Ages tick every second.
+// Ages tick every second, written only when the text actually changes (most rows change once a minute).
 setInterval(() => {
-  if (route() !== "") return;
-  for (const el of document.querySelectorAll(".pr[data-born]")) {
-    const a = el.querySelector(".pr-age");
-    if (a) a.textContent = ageStr(Date.now() - Number(el.dataset.born));
+  if (route() !== "" || document.hidden) return;
+  const now = Date.now();
+  for (const r of pulseState.rows.values()) {
+    if (!r.el?.isConnected) continue;
+    const txt = ageStr(now - r.born);
+    if (txt === r.ageTxt) continue;
+    const a = r.el.querySelector(".pr-age");
+    if (a) { a.textContent = txt; r.ageTxt = txt; }
   }
 }, 1000);
+
+// ---------- terminal: sort, selection, watchlist, sound, the paper desk ----------
+const SORTS = [["", "Sort: feed"], ["age", "Newest"], ["mcap", "Mcap"], ["vol", "Volume"], ["traders", "Traders"], ["holders", "Holders"], ["chg", "1m %"], ["prog", "Bond %"], ["ai", "AI %"]];
+const sortVal = {
+  age: (t) => -(t.age || 0), mcap: (t) => t.mcap ?? (t.startMcapSol ? t.startMcapSol * (pulseState.sol || 150) : -1), vol: (t) => t.vol ?? t.liveVol ?? -1, traders: (t) => t.traders ?? t.holders ?? -1,
+  holders: (t) => t.hl?.h ?? t.holders ?? t.traders ?? -1, chg: (t) => t.chg1m ?? t.chg5 ?? -1e9, prog: (t) => t.graduated ? 1 : t.progress ?? -1, ai: (t) => t.ai?.rated ? (t.ai.pwin ?? t.ai.score ?? 0) : -1,
+};
+function sortRows(list, col) {
+  const k = pulseState.sort[col], f = sortVal[k];
+  return f ? [...list].sort((a, b) => f(b) - f(a)) : list;
+}
+
+// Keyboard selection: one row at a time, kept by mint so it survives the 2-second redraw.
+const COLS = ["new", "running", "stretch", "migrated"];
+const selRow = () => pulseState.sel ? document.querySelector(".pcol-body .pr.sel") : null;
+function setSel(node) {
+  document.querySelectorAll(".pcol-body .pr.sel").forEach((n) => n.classList.remove("sel"));
+  pulseState.sel = node?.dataset.mint || null;
+  if (node) { node.classList.add("sel"); node.scrollIntoView({ block: "nearest" }); }
+}
+function moveSel(n) {
+  const cur = selRow();
+  if (!cur) return setSel(document.querySelector("#pcol-new .pr") || document.querySelector(".pcol-body .pr"));
+  const next = n > 0 ? cur.nextElementSibling : cur.previousElementSibling;
+  if (next?.classList.contains("pr")) setSel(next);
+}
+function moveCol(n) {
+  const cur = selRow(), colEl = cur?.closest(".pcol-body");
+  const i = Math.max(0, COLS.indexOf(colEl?.id.replace("pcol-", "")));
+  const target = COLS[Math.max(0, Math.min(COLS.length - 1, i + n))];
+  const idx = cur ? [...colEl.children].indexOf(cur) : 0;
+  const rows = $(`#pcol-${target}`)?.querySelectorAll(".pr");
+  if (rows?.length) setSel(rows[Math.min(Math.max(0, idx), rows.length - 1)]);
+}
+
+function toggleWatch(mint) {
+  if (pulseState.watch.has(mint)) pulseState.watch.delete(mint); else pulseState.watch.add(mint);
+  store.set("pulse:watch", [...pulseState.watch]);
+  const on = pulseState.watch.has(mint);
+  document.querySelectorAll(`.star[data-pwatch="${CSS.escape(mint)}"]`).forEach((b) => b.classList.toggle("on", on));
+  document.querySelectorAll(`.pr[data-mint="${CSS.escape(mint)}"]`).forEach((r) => r.classList.toggle("watched", on));
+  if (pulseState.min === "watch") { pulseState.first = true; pulseTick(); }
+}
+
+// A short tone for a buy call, a pick, or a paper exit; off unless the Sound chip is on.
+let audioCtx = null;
+function beep(kind = "buy") {
+  if (!pulseState.sound) return;
+  try {
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+    o.type = "sine"; o.frequency.value = kind === "buy" ? 880 : kind === "sell" ? 440 : 660;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.2);
+  } catch {}
+}
+
+const usdSigned = (n) => n == null ? "—" : `${n >= 0 ? "+" : "−"}$${Math.abs(n) >= 1000 ? (Math.abs(n) / 1000).toFixed(1) + "k" : Math.abs(n).toFixed(0)}`;
+const srcName = { live: "live feed", jupiter: "Jupiter", dex: "DexScreener", radar: "radar", rule: "rule" };
+async function paperBuy(mint, sol) {
+  try {
+    const r = await post("paper", { mint, sol });
+    const p = r.position;
+    toast(`Paper buy $${p.symbol || shortAddr(mint)} · ${p.sol} SOL at ${compact(p.mcap0)} mcap (${srcName[p.src] || p.src})`);
+    beep("buy");
+    pulseState.desk = r.desk; renderDesk();
+  } catch (e) { toast(e.message); }
+}
+async function paperSell(id, pct, why = "sold") {
+  try {
+    const r = await post(`paper/${id}/sell`, { pct, why });
+    const p = r.position;
+    toast(`Paper sell $${p.symbol || ""} ${pct}% at ${mult(p.status === "open" ? p.mult : (p.exit_mcap / p.mcap0))}`);
+    beep("sell");
+    pulseState.desk = r.desk; renderDesk();
+  } catch (e) { toast(e.message); }
+}
+async function deskTick(force) {
+  // The desk strip only needs a fresh read every few seconds unless the desk is open or positions are live.
+  const live = $("#deskBody") || pulseState.desk?.summary?.open;
+  if (!force && !live && Date.now() - (deskTick.last || 0) < 8000) return;
+  deskTick.last = Date.now();
+  const d = await api("paper").catch(() => null);
+  if (!d) return;
+  pulseState.desk = d;
+  if (d.sizes?.length) pulseState.sizes = d.sizes;
+  renderDesk();
+}
+function renderDesk() {
+  const d = pulseState.desk; if (!d) return;
+  const s = d.summary, el = $("#deskStrip");
+  if (el) el.innerHTML = `<button class="desk-strip" data-pdesk title="The paper desk: open positions, P&L, exits (hotkey d)"><b>Desk</b><span class="num">${s.open} open</span><span class="num ${s.open ? cls(s.openPnl) : "dim"}">${s.open ? usdSigned(s.openPnl) : "—"}</span><span class="dim">today</span><span class="num ${s.todayN ? cls(s.todayPnl) : "dim"}">${s.todayN ? usdSigned(s.todayPnl) : "—"}</span>${s.todayN ? `<span class="dim">${s.todayWins}/${s.todayN}</span>` : ""}</button>`;
+  const body = $("#deskBody");
+  if (body) { const top = $("#panel").scrollTop; body.outerHTML = deskHtml(d); $("#panel").scrollTop = top; }
+}
+function posRow(p) {
+  const open = p.status === "open";
+  const x = open ? p.mult : p.exit_mcap && p.mcap0 ? (p.exit_mcap / p.mcap0) * ((100 - (pulseState.desk?.cost ?? 3)) / (100 + (pulseState.desk?.cost ?? 3))) : null;
+  return `<div class="pos ${open ? "" : "closed"} ${x != null ? xCls(x) : ""}">
+    <div class="pos-top"><span class="pos-coin" data-mint="${esc(p.mint)}">${av(p, "sm")}<b>$${esc(p.symbol || shortAddr(p.mint))}</b><small class="dim">${esc(p.name || "")}</small></span>
+      <span class="num">${p.sol} SOL <small class="dim">$${Math.round(p.usd)}</small></span>
+      <span class="num"><small class="dim">in</small> ${compact(p.mcap0)} <small class="dim">→</small> ${compact(p.mcapNow)}${open ? `<small class="dim ${p.stale ? "down" : ""}">${p.stale ? " no live price" : ` ${srcName[p.src] || p.src}`}</small>` : ""}</span>
+      <b class="num pos-x ${x != null ? xCls(x) : ""}">${x != null ? mult(x) : "—"}</b><span class="num ${p.pnl != null ? cls(p.pnl) : ""}">${usdSigned(p.pnl)}</span>
+      <small class="dim">${open ? `${ago(p.t)} · peak ${mult(p.peakX)} · low ${mult(p.lowX)}` : `${esc(p.exit_why || "")} · ${ago(p.exit_t)} ago`}</small></div>
+    ${open ? `<div class="pos-acts"><label>TP <input class="input num" type="number" step="any" placeholder="x" value="${p.tp ?? ""}" data-prule-tp="${p.id}"></label><label>SL <input class="input num" type="number" step="any" placeholder="%" value="${p.sl ?? ""}" data-prule-sl="${p.id}"></label><label>Trail <input class="input num" type="number" step="any" placeholder="%" value="${p.trail ?? ""}" data-prule-trail="${p.id}"></label><button class="btn sm-btn" data-prule="${p.id}">Set rule</button>
+      <span class="grow"></span><button class="btn sm-btn" data-psell="${p.id}" data-pct="50">Sell 50%</button><button class="btn sm-btn primary" data-psell="${p.id}" data-pct="100">Sell all</button></div>`
+      : `<div class="pos-acts"><span class="grow"></span><button class="btn sm-btn" data-pdrop="${p.id}" title="Forget this closed position">Remove</button></div>`}
+  </div>`;
+}
+function deskHtml(d) {
+  const s = d.summary;
+  return `<div id="deskBody">
+    <div class="p-sec"><div class="facts">
+      <div class="fact"><b>Open</b><span>${s.open} <small class="dim">· $${Math.round(s.openUsd)}</small></span></div>
+      <div class="fact"><b>Open P&amp;L</b><span class="${s.open ? cls(s.openPnl) : ""}">${s.open ? usdSigned(s.openPnl) : "—"}</span></div>
+      <div class="fact"><b>Today</b><span class="${s.todayN ? cls(s.todayPnl) : ""}">${s.todayN ? usdSigned(s.todayPnl) : "—"} <small class="dim">· ${s.todayWins}/${s.todayN} won</small></span></div>
+      <div class="fact"><b>All time</b><span class="${s.allN ? cls(s.allPnl) : ""}">${s.allN ? usdSigned(s.allPnl) : "—"} <small class="dim">· ${s.allN} closed</small></span></div>
+    </div><p class="note" style="margin:10px 0 0">Paper only: nothing is sent to the chain. Entries and exits take the market cap of that second (live trade feed on the curve, Jupiter or DexScreener after bonding) less ${d.cost}% each way. Sizes come from Settings (${d.sizes.join(" / ")} SOL); a new position starts with the exit rule set there${d.rule.tp || d.rule.sl || d.rule.trail ? ` (${[d.rule.tp && `TP ${d.rule.tp}x`, d.rule.sl && `SL −${d.rule.sl}%`, d.rule.trail && `trail ${d.rule.trail}%`].filter(Boolean).join(", ")})` : " (none)"}. Rule exits are checked every second.</p></div>
+    <div class="p-sec"><h3>Open positions <span class="dim">· ${d.open.length}</span></h3>${d.open.length ? d.open.map(posRow).join("") : `<p class="note">None. Press <b>B</b> on any Pulse row, or the size buttons that appear when you hover one.</p>`}</div>
+    <div class="p-sec"><h3>Closed <span class="dim">· last ${d.closed.length}</span></h3>${d.closed.length ? d.closed.map(posRow).join("") : `<p class="note">Nothing closed yet.</p>`}</div>
+  </div>`;
+}
+async function openDesk() {
+  const p = $("#panel");
+  sheetOpen();
+  p.innerHTML = `<div class="p-head"><h2>Paper desk</h2><button class="close" data-close aria-label="Close">✕</button></div><div id="deskBody"><div class="skel" style="margin:16px 24px"></div></div>`;
+  await deskTick(true);
+  p.scrollTop = 0;
+}
+
+// The live holder ledger on the coin page: who holds what, tagged dev / sniper / bundle.
+function ledgerSection(h) {
+  if (!h) return "";
+  const flag = (bad, text) => `<span class="${bad ? "down" : ""}">${text}</span>`;
+  const tagPill = (t) => t ? `<span class="pill tag-${t}">${t}</span>` : "";
+  return `<div class="p-sec"><h3>Holders, live <span class="dim">· from the trade feed since ${ago(h.since)} ago · ${h.trades.toLocaleString()} trades</span></h3>
+    <div class="facts">
+      <div class="fact"><b>Holders</b><span>${h.holders.toLocaleString()}</span></div>
+      <div class="fact"><b>Top 10 hold</b><span>${flag(h.top10 > 45, h.top10.toFixed(1) + "%")}</span></div>
+      <div class="fact"><b>Dev holds</b><span>${h.dev ? `${flag(h.dev.pct > 8, h.dev.pct.toFixed(2) + "%")}${h.dev.sold ? ` <i class="hl-tag ds">${h.dev.sold === "all" ? "SOLD" : "SELLING"}</i>` : ""}` : "—"}</span><small class="dim">${h.dev?.seen ? `net ${h.dev.sol >= 0 ? "" : "−"}${Math.abs(h.dev.sol).toFixed(2)} SOL in` : h.dev ? "no trade seen" : "dev unknown"}</small></div>
+      <div class="fact"><b>Snipers</b><span>${h.snipers ? `${flag(h.snipers.pct > 20, h.snipers.pct.toFixed(1) + "%")} <small class="dim">· ${h.snipers.n} wallets, ${h.snipers.sold} out</small>` : "—"}</span></div>
+      <div class="fact"><b>Bundle</b><span>${h.bundle ? `${flag(h.bundle.pct > 15, h.bundle.pct.toFixed(1) + "%")} <small class="dim">· ${h.bundle.n} wallets in the launch block</small>` : "—"}</span></div>
+    </div>
+    ${h.partial ? `<p class="note" style="margin:10px 0 0">${h.genesis ? "Some sells were of tokens the radar never saw bought, so the figures are approximate." : "The radar joined this coin after its first trade, so holders are partial and sniper/bundle figures are not shown."}</p>` : ""}
+    ${h.top.length ? `<div class="leaders" style="margin-top:10px">${h.top.map((w, i) => `<div class="leader" data-wallet="${esc(w.wallet)}"><span class="num dim" style="width:22px">${i + 1}</span>${wav(w.wallet, {}, "xs")}<span class="grow num">${shortAddr(w.wallet)} ${tagPill(w.tag)}</span><span class="num dim">${w.sol >= 0 ? "" : "−"}${Math.abs(w.sol).toFixed(2)} SOL</span><span class="num" style="width:62px;text-align:right">${w.pct.toFixed(2)}%</span></div>`).join("")}</div>` : ""}
+  </div>`;
+}
+// Paper buys from the coin page, and what is already open or closed in this coin.
+function paperSection(t, list) {
+  return `<div class="p-sec"><h3>Paper desk</h3>
+    <div class="chips">${pulseState.sizes.map((s) => `<button class="btn sm-btn" data-pbuy="${esc(t.mint)}" data-sol="${s}">Buy ${s} SOL</button>`).join("")}<button class="btn sm-btn" data-pdesk>Open the desk</button></div>
+    ${list?.length ? list.map(posRow).join("") : `<p class="note" style="margin:8px 0 0">No paper position in this coin. Paper only: nothing is really bought.</p>`}
+  </div>`;
+}
 
 // ---------- the bot: four tabs ----------
 // 1 New pairs (everything, live) → 2 Anti-slop (the decent ones, being read by the AI) → 3 AI picks
@@ -1457,6 +1805,8 @@ function botToday(d) {
 
 async function botTick() {
   if (route() !== "") return;
+  // On the live tab the bot data is only needed for the tab counts: ask every 20 seconds, not every 2.
+  if (pulseState.tab === "new") { if (Date.now() - (botTick.last || 0) < 20_000) return; botTick.last = Date.now(); }
   const d = await api("bot").catch(() => null);
   if (!d) return;
   botData = d;
@@ -1475,30 +1825,57 @@ async function viewPulse(main) {
   pulseState.rows.clear(); pulseState.first = true;
   // Column header, as on Axiom and GMGN: its own search, the three saved filter sets, and its filter button.
   const col = (k, title, sub) => `<section class="pcol"><header><h2>${title}</h2><span class="pcount num" id="pcount-${k}">…</span><span class="prating" id="prating-${k}"></span>
-    <span class="pcol-tools"><input class="input pcol-q" data-pcq="${k}" placeholder="Search" value="${esc(pulseState.cq[k] || "")}" title="${sub}">
-    <span class="pslots">${[0, 1, 2].map((i) => `<button class="${pf.slot === i ? "on" : ""}" data-pslot="${i}" title="Saved filter set ${i + 1}">P${i + 1}</button>`).join("")}</span>
+    <span class="pcol-tools"><input class="input pcol-q" data-pcq="${k}" placeholder="Find" value="${esc(pulseState.cq[k] || "")}" title="${sub}">
+    <select class="input psort ${pulseState.sort[k] ? "on" : ""}" data-psort="${k}" title="Sort this column">${SORTS.map(([v, l]) => `<option value="${v}" ${(pulseState.sort[k] || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    <span class="pslots">${[0, 1, 2].map((i) => `<button class="${pf.slot === i ? "on" : ""}" data-pslot="${i}" title="Filter set ${i + 1}: ${PF_SLOT_NAMES[i]}">P${i + 1}</button>`).join("")}</span>
     <button class="pfbtn" id="pfbtn-${k}" data-pfopen="${k}" title="Filters for ${title}">${PF_ICON}</button></span></header><div class="pcol-body" id="pcol-${k}"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div></section>`;
   main.innerHTML = `<div class="pulse-head">
       <div class="pulse-title"><h1>Pulse</h1><svg class="beat" viewBox="0 0 120 24"><path d="M0 12h30l6-9 8 18 7-14 5 5h64"/></svg></div>
       <div class="btabs" id="botTabs">${botTabs()}</div>
       <div class="pulse-live" id="pulseLive"></div>
-      <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA" value="${esc(pulseState.q)}">
-        <div class="chips">${[["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["queue", "In queue"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div></div>
+      <div class="desk-wrap" id="deskStrip"></div>
+      <div class="pulse-tools"><input class="input" id="pq" placeholder="Search ticker, name or CA  ( / )" value="${esc(pulseState.q)}">
+        <div class="chips">${[["all", "All"], ["watch", "★ Watchlist"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["queue", "In queue"], ["c", "C+ and up"], ["b", "B and up"], ["buy", "Buy calls"]].map(([k, l]) => `<button class="chip ${pulseState.min === k ? "on" : ""}" data-pmin="${k}">${l}</button>`).join("")}</div>
+        <div class="chips tog"><button class="chip ${pulseState.compact ? "on" : ""}" data-ptog="compact" title="Denser rows">Compact</button><button class="chip ${pulseState.sound ? "on" : ""}" data-ptog="sound" title="A tone on buy calls, picks and paper exits">Sound</button><button class="chip" data-pkeys title="Keyboard: j/k rows · h/l columns · Enter open · b paper buy · f Fomo · w watch · r read · d desk · / search · Esc">Keys ?</button></div></div>
     </div>
     <div id="pulseWarn"></div>
-    <div id="tabNew" ${pulseState.tab === "new" ? "" : "hidden"}><div class="pulse">${col("new", "New pairs", "pump.fun, live")}${col("stretch", "Final stretch", "60%+ bonded")}${col("migrated", "Migrated", "last 3h")}</div></div>
+    <div id="tabNew" ${pulseState.tab === "new" ? "" : "hidden"}><div class="pulse four">${col("new", "New pairs", "pump.fun, live")}${col("running", "Running now", "moving in the last 5 min, any age, not in the other columns")}${col("stretch", "Final stretch", "50%+ bonded, trading now")}${col("migrated", "Migrated", "last 6h")}</div></div>
     <div id="botView" ${pulseState.tab === "new" ? "hidden" : ""}><div class="skel"></div><div class="skel"></div></div>`;
   main.querySelector(".pulse-tools").hidden = pulseState.tab !== "new";
+  document.body.classList.toggle("pulse-compact", pulseState.compact);
+  renderDesk();
   pfHeads();
   clearInterval(pulseState.timer); clearInterval(pulseState.botTimer);
-  pulseState.timer = setInterval(pulseTick, 2500);
+  pulseState.timer = setInterval(pulseTick, 2000);
   pulseState.botTimer = setInterval(botTick, 2000);
   setTimeout(pulseTick, 0); setTimeout(botTick, 0);
 }
 
+// Bursts: several different people launching on the same word or the same post within minutes.
+let narTimer = null;
+function burstTable(d) {
+  const rows = d.clusters;
+  if (!rows.length) return empty("Nothing bursting right now", `Every launch is compared with the last three hours. A burst shows here within seconds of the third or fourth matching launch; ${d.stats.launches.toLocaleString()} launches compared since the radar started.`);
+  return `<div class="table-wrap"><table><thead><tr><th>Shared by the launches</th><th title="Launches in the last 10 minutes / the last hour">Launches 10m / 1h</th><th title="How many times its normal rate over the last three hours">vs normal</th><th title="Different wallets that launched one in the last 10 minutes">Launchers</th><th title="Different wallets trading these coins">Buyers</th><th>Lead coin</th><th>Status</th></tr></thead><tbody>${rows.map((c) => `<tr>
+    <td><div class="kw">${c.keys.slice(0, 4).map((k) => `<span>${esc(k)}</span>`).join("")}</div>${c.name ? `<div class="small"><b>${esc(c.name)}</b> ${stageBadge(c.stage)}</div>` : c.looking ? `<div class="dim small">Grok is looking it up on X…</div>` : ""}</td>
+    <td class="num">${c.n10}<span class="dim"> / ${c.n60}</span></td><td class="num">${c.lift >= 20 ? "20x+" : `${c.lift}x`}</td><td class="num">${c.devs}</td><td class="num">${c.traders.toLocaleString()}</td>
+    <td>${c.lead ? `<span class="linkish" data-mint="${esc(c.lead.mint)}"><b>$${esc(c.lead.symbol)}</b></span> <span class="dim small">${money(c.lead.mcap)} · ${c.lead.traders} traders · ${mins(c.lead.age)} old</span>${c.best && c.best.mint !== c.lead.mint ? `<div class="dim small">best so far <span class="linkish" data-mint="${esc(c.best.mint)}">$${esc(c.best.symbol)}</span> ${c.best.mult}x</div>` : ""}` : `<span class="dim">nobody buying yet</span>`}</td>
+    <td>${c.state === "forming" ? `<span class="st top" title="Enough separate launchers, well above its normal rate, with real buyers in at least one coin">forming${c.since ? ` · ${mins(Date.now() - c.since)}` : ""}</span>` : `<span class="st old" title="Many launches but no real buying in any of them: launch spam until someone buys. Not looked up.">launches only</span>`}</td></tr>`).join("")}</tbody></table></div>`;
+}
 async function viewNarratives(main) {
-  const nar = await api("narratives");
-  main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>What coins are being launched around, and where the money is going. Heat mixes trading volume, coins that survive, and share of all new launches. Lift compares the last hour with the hours before.</p></div></div>
+  const [nar, live] = await Promise.all([api("narratives"), api("clusters")]);
+  const calls = live.calls.calls, rec = live.calls.record, cur = calls.filter((n) => n.review !== "expired"), old = calls.filter((n) => n.review === "expired" && (n.best_mult || n.best_peak)).slice(0, 9);
+  const recLine = (r, what) => r.n ? `${what}: ${r.n} scored, the best coin ran 3x+ in ${r.bestRan3x}${r.typicalCoin != null ? `, the typical coin peaked at ${mult(r.typicalCoin)}` : ""}${r.leadN ? `, the coin named as lead peaked at ${mult(r.leadCoin)} (${r.leadN})` : ""}${r.detectSecs != null ? `, named a median ${r.detectSecs}s after the burst began` : ""}.` : `${what}: none scored yet (each call is scored after 24 hours).`;
+  main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>A narrative shows up on-chain as a burst: several different people launching on the same word or the same post within minutes, with real buyers arriving. The radar catches the burst in seconds and asks Grok, which can search X, what the story is. An hourly scout looks for catalysts that have no coins yet.</p></div></div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Bursting right now</h2><small>refreshes every few seconds · ${live.armed.length} narrative${live.armed.length === 1 ? "" : "s"} armed, ${live.stats.armedHits} matching launches caught</small></div>
+      ${live.grok ? "" : `<div class="warn-box" style="margin:0 16px 12px"><b>Grok is not available right now.</b> Bursts are still caught and recorded, but they are not being looked up on X, so they have no story or stage. See Health for why.</div>`}
+      <div id="narLive">${burstTable(live)}</div></div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Narratives called</h2><small>${cur.length} current · last 12 hours</small></div>
+      ${cur.length ? `<div class="scouts">${cur.map(narCard).join("")}</div>` : empty("No current narratives", live.calls.scout.why || "A narrative appears here when a burst gets real buyers, or when the hourly scout finds a live catalyst.")}
+      ${old.length ? `<h4 class="sub">Earlier calls and how they did</h4><div class="scouts">${old.map(narCard).join("")}</div>` : ""}
+      <div class="status-list" style="margin-top:12px">${statusLine(rec.burst.n ? "ok" : "wait", recLine(rec.burst, "Bursts"))}${statusLine(rec.scout.n ? "ok" : "wait", recLine(rec.scout, "Scout calls"))}</div>
+      <p class="note pad">"Best coin" is the best move among coins matching a narrative after it was called: nobody knew in advance which coin that would be, so it flatters the call. The typical coin and the named lead coin are the honest measures. Market-cap moves from sellable prices, not trades.</p></div>
+    <h2 class="sub" style="margin:8px 0 12px">Standing themes</h2><p class="note" style="margin:0 0 12px">What coins are being launched around in general. Heat mixes trading volume, coins that survive, and share of all new launches. Lift compares the last hour with the hours before.</p>
     ${nar.emerging.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Emerging words</h2><small>showing up far more in the last hour</small></div>
       <div class="words">${nar.emerging.map((e) => `<span class="word">${esc(e.word)}<em>${e.count}× · ${e.lift.toFixed(1)}x</em></span>`).join("")}</div></div>` : ""}
     <div class="nar-grid">${nar.themes.map((n) => `<div class="card nar">
@@ -1511,6 +1888,14 @@ async function viewNarratives(main) {
       </div>
       <div class="leaders">${n.top.length ? n.top.map((t) => `<div class="leader" data-mint="${esc(t.mint)}">${av(t, "sm")}<span class="grow"><b>$${esc(t.symbol)}</b> <span class="dim">${esc(t.name)}</span></span><span class="num">${money(t.mcap)}</span><span class="num ${cls(t.chg_h1)}" style="width:62px;text-align:right">${pct(t.chg_h1)}</span></div>`).join("") : `<span class="note">No tracked coins yet, only launches.</span>`}</div>
     </div>`).join("") || empty("Warming up", "Narratives need a few minutes of launches to show up.")}</div>`;
+  // Only the burst table is redrawn, so the cards below keep their place while it updates.
+  clearInterval(narTimer);
+  narTimer = setInterval(async () => {
+    if (route() !== "narratives") return clearInterval(narTimer);
+    const box = $("#narLive");
+    if (!box || document.hidden) return;
+    try { box.innerHTML = burstTable(await api("clusters")); } catch {}
+  }, 4000);
 }
 
 async function viewBriefs(main) {
@@ -1625,7 +2010,7 @@ async function viewSettings(main) {
         <div class="field"><label for="s-fastProvider">Fast lane</label><div style="display:flex;gap:8px"><select class="input" id="s-fastProvider" name="fastProvider" style="flex:1"><option value="claude" ${s.fastProvider === "claude" ? "selected" : ""}>Claude Haiku (this PC's Claude login)</option><option value="grok" ${s.fastProvider === "grok" || !["claude", "groq"].includes(s.fastProvider) ? "selected" : ""}>Grok (SuperGrok login, searches X live)</option><option value="groq" ${s.fastProvider === "groq" ? "selected" : ""}>Groq (free key)</option></select><button class="btn" type="button" id="testK">Test Grok</button></div><small>Right now: <b>${esc(pv.fast.actualName || "none available")}</b>${pv.fast.fallback ? ` (${esc(pv.fast.reason || "")})` : ""}. Grok uses this PC's Grok CLI login, no key.</small></div>
         <div class="field"><label for="s-grokModel">Grok model</label><select class="input" id="s-grokModel" name="grokModel">${["grok-4.7-build-fast", "grok-4.7", "grok-4.6"].map((m) => `<option ${s.grokModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>build-fast is the quick one. grok-4.7 thinks harder but takes much longer.</small></div>
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="grokSearch" ${s.grokSearch ? "checked" : ""}> Grok searches X live</label><small>Grok looks the coin up on X by contract and ticker: who's posting, real engagement, organic or botted. About 8s per coin, and each search uses subscription credits.</small></div>
-        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="triageOn" ${s.triageOn ? "checked" : ""}> Rank every new launch</label><small>Instant rules plus a fast AI label every new coin slop / meh / maybe / hot; only maybe+ go on to research.</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="triageOn" ${s.triageOn ? "checked" : ""}> A fast AI labels every new launch</label><small>Off by default. The instant rules already label every coin slop / meh / maybe / hot for free; the AI's labels cost about 120 calls an hour and barely separated winners (1.8% of its "slop" reached $30k, against 2.2% of its "maybe"). Coins are sent for a read when real buyers show up, not on their looks.</small></div>
         <div class="field"><label for="s-triageProvider">Triage AI</label><select class="input" id="s-triageProvider" name="triageProvider">${[["auto", "Auto (Groq if keyed, else Grok fast)"], ["groq", "Groq"], ["grok", "Grok fast"]].map(([v, l]) => `<option value="${v}" ${s.triageProvider === v ? "selected" : ""}>${l}</option>`).join("")}</select><small>Groq is the fastest and free; it needs the key below.</small></div>
         ${num("triageEscalate", "Send to research at triage score", "Coins the fast AI scores this high (maybe/hot) get researched. Live traction also escalates.")}
         ${secret("groqKey", "Groq API key (free, fastest triage)", "gsk_…", "Free at console.groq.com/keys (no card). Keeps fast reads and triage running when Grok is out of credits.", `<button class="btn" type="button" id="testG" title="Tests the key typed here, or the saved one if blank. Nothing is saved.">Test</button>`, true)}
@@ -1637,8 +2022,9 @@ async function viewSettings(main) {
         <div class="field"><label for="s-deepModel">Deep Grok model</label><select class="input" id="s-deepModel" name="deepModel">${["grok-4.7", "grok-4.6", "grok-4.7-build-fast"].map((m) => `<option ${s.deepModel === m ? "selected" : ""}>${m}</option>`).join("")}</select><small>grok-4.7 is the smartest; about 30-60s a read.</small></div>
         ${num("deepPerHour", "Max Grok deep reads per hour", "Runs 2 at a time.")}
         ${num("deepSearches", "Searches per deep read", "How many X/web searches Grok may run on one coin.")}
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="aiInGate" ${s.aiInGate ? "checked" : ""}> Let the AI's buy / avoid call decide picks</label><small>Off by default. Over 126 picks its "buy" picks won 6% and the picks it called "avoid" won 44%, so picks are decided by live demand and the launch model instead. Its call is still shown on every coin and scored on the Picks page; switch this on if it starts to beat them.</small></div>
         ${num("pickMinTraction", "Pick rule: minimum traction", "Live demand, 0-100. On past reads, coins under 40 won 7-9% of the time and coins at 65+ won about half. This is the main gate.")}
-        ${num("pickMinPwin", "Pick rule: minimum AI chance (%)", "The chance the AI gives a coin of reaching 2x before falling 40%. A coin it calls a buy passes regardless; one it calls avoid never does.")}
+        ${num("pickMinPwin", "Pick rule: minimum AI chance (%)", "Only used when the AI's call decides picks. The chance the AI gives a coin of reaching 2x before falling 40%. A coin it calls a buy passes regardless; one it calls avoid never does.")}
         ${num("pickMinMcap", "Pick rule: smallest market cap ($)", "Below this the early rule applies instead.")}
         ${num("earlyMinTraders", "Early rule: minimum traders", "A coin in its first minutes is picked on its first buyers: this many different wallets, more buying than selling, and an AI that would trade it.")}
         ${num("earlyMinPwin", "Early rule: minimum AI chance (%)", "For a coin the AI calls watch. A buy call passes regardless.")}
@@ -1660,8 +2046,23 @@ async function viewSettings(main) {
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="claudeFast" ${s.claudeFast ? "checked" : ""}> Claude Haiku does fast reads when Grok and Groq are out</label><small>Seconds per coin on your Claude login, capped by “Max fast reads per hour”. No live X search.</small></div>
         ${num("buyConviction", "Buy call at conviction", "Starting point; the self-review tunes it from results (55-90).")}
         ${num("scoutEveryMin", "Scout narratives every (minutes)", "Needs Grok: it searches X and the web for narratives starting to run. 0 = off.")}
+        <div class="field"><label for="s-grokDailyBudget">Grok daily budget ($)</label><input class="input num" id="s-grokDailyBudget" name="grokDailyBudget" type="number" step="0.5" min="0" value="${esc(s.grokDailyBudget)}"><small>The most Grok subscription credit the radar may spend in a day; 0 means no limit. Naming a live burst costs about 7 cents and may use all of it, the hourly scout up to 60%, deep reads 50%, the one-second quick calls 25%. When a share is used up that job moves to Claude. Today's spend is on the Health page.</small></div>
+        ${num("narrativeCardsPerHour", "Bursts looked up per hour", "How many live bursts Grok may look up on X in an hour, at about 7 cents each.")}
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="quickGrok" ${s.quickGrok ? "checked" : ""}> Grok's fastest model makes the first call on each coin</label><small>About one second a coin against three to four for Claude Haiku, with no X search. Uses its 25% share of the daily budget, spread through the day; Haiku takes the rest.</small></div>
         ${num("reviewMinNew", "Self-review after N new results", "The playbook is rewritten once this many graded coins have played out 6h+.")}
         ${num("researchPerHour", "Max Claude reads per hour", "Each uses your Claude subscription (about one normal Claude message). Lower this if you hit your Claude limits.")}
+      </div></div>
+    <div class="card"><div class="card-head"><h2>Remote access</h2><small>blixvip.com/trade → this PC through a Cloudflare Tunnel</small></div>
+      <div class="form">
+        <div class="field"><label for="s-publicHost">Public hostname</label><input class="input" id="s-publicHost" name="publicHost" value="${esc(s.publicHost || "")}"><small>The hostname the tunnel points at this PC. Blank switches remote access off.</small></div>
+        <div class="field"><label>Your link</label><div id="remoteLink" class="dim small">loading…</div><small>Open it once on any device; the key is then kept in that browser. Anyone with the link can use the terminal, so treat it like a password.</small></div>
+      </div></div>
+    <div class="card"><div class="card-head"><h2>Paper desk</h2><small>the buy buttons on every Pulse row · nothing is really traded</small></div>
+      <div class="form">
+        <div class="field"><label for="s-quickSizes">Quick-buy sizes (SOL)</label><input class="input" id="s-quickSizes" name="quickSizes" value="${esc([].concat(s.quickSizes || []).join(", "))}"><small>Comma separated, up to 6. The second one is the default for the <b>B</b> button and the <b>b</b> key.</small></div>
+        ${num("paperTake", "New position: take profit at (x)", "Sell everything at this multiple. 0 = no take profit.")}
+        ${num("paperStop", "New position: stop loss (%)", "Sell everything this far below the entry. 0 = no stop.")}
+        ${num("paperTrail", "New position: trailing stop (%)", "Once above the entry, sell everything this far below its high. 0 = none. Each open position's rule can be changed on the desk.")}
       </div></div>
     <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
       <div class="form">
@@ -1729,6 +2130,9 @@ async function viewSettings(main) {
     try { const r = await post("import", JSON.parse(await file.text())); toast(`Imported ${r.wallets} wallets, ${r.rules} rules, ${r.settings} settings`); render(); }
     catch (err) { toast(`Import failed: ${err.message}`); }
   };
+  // The remote link holds the access key, so the server only hands it to a local page.
+  api("remote-link").then((r) => { const el = $("#remoteLink"); if (!el) return; el.innerHTML = r.link ? `<a class="linkish" href="${esc(r.link)}" target="_blank" rel="noreferrer">${esc(r.link)}</a> <button class="btn sm-btn" data-copy="${esc(r.link)}">Copy</button>` : "Remote access is off (no public hostname)."; })
+    .catch(() => { const el = $("#remoteLink"); if (el) el.textContent = "Only shown on the local copy (localhost:4420)."; });
 }
 
 // ---------- health ----------
@@ -1930,7 +2334,7 @@ async function openCoin(mint) {
       <div class="hero-body">
         <div class="hero-av">${av(t, "xl")}</div>
         <div class="hero-id"><h2>$${esc(t.symbol || "?")}</h2>
-          <div class="sub">${esc(t.name || "")}${t.dex ? " · " + esc(DEX_NAME[t.dex] || t.dex) : ""}${t.graduated ? " · graduated" : ""} · ${ago(t.pair_created || t.first_seen)} old</div>
+          <div class="sub">${esc(t.name || "")} · ${(() => { const i = protoInfo(t); return `launched on ${esc(i.full)}${i.venue ? ` · bonded, trades on ${esc(i.venue[1])}` : t.dex ? ` · ${esc(DEX_NAME[t.dex] || t.dex)}` : ""} · Solana`; })()} · ${ago(t.pair_created || t.first_seen)} old</div>
           <div class="chips">${r.untracked ? '<span class="pill">Safety unchecked</span>' : safetyChip(t.safety_score)}${stateTags(f)}${(t.themes || []).map((x) => `<span class="pill">${esc(x)}</span>`).join("")}${r.triage ? `<span class="pill" title="${esc(r.triage.why || "")}">triage: ${esc(r.triage.label)} ${r.triage.score}</span>` : ""}</div></div>
         <div class="hero-price ${f.exitable || r.untracked ? "" : "unreliable"}"><span class="big num">${price(t.price)}</span><span class="chg ${cls(t.chg_h1)}">${t.chg_h1 != null ? `${pct(t.chg_h1)} <small>1h</small>` : L?.chg1m != null ? `${pct(L.chg1m)} <small>1m</small>` : ""}</span><small class="dim">${money(t.mcap)} mcap</small><small class="fresh ${f.stale ? "old" : ""}">${fresh}</small>${r.progress != null && !t.graduated ? `<div class="bond hero-bond"><div class="bond-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></div><span class="num">${Math.round(r.progress * 100)}% bonded</span></div>` : ""}</div>
       </div>
@@ -1946,6 +2350,8 @@ async function openCoin(mint) {
       ${r.untracked ? "" : `<button class="btn ${r.rule === "always" ? "on" : ""}" data-rule="coin" data-target="${esc(t.mint)}" data-effect="${r.rule === "always" ? "" : "always"}" title="Always push this coin's alerts, whatever the cooldown or quiet hours">${r.rule === "always" ? "★ Watching" : "☆ Watch"}</button>
       <button class="btn ${r.rule === "mute" ? "on" : ""}" data-rule="coin" data-target="${esc(t.mint)}" data-effect="${r.rule === "mute" ? "" : "mute"}">${r.rule === "mute" ? "Muted · unmute" : "Mute alerts"}</button>`}
     </div>
+    <div class="p-sec"><h3>Chart <span class="dim">· market cap, real trades</span></h3><div id="tradeChart"></div></div>
+    <div class="p-sec"><h3>Trade <span class="dim">· paper, filled at real quotes</span></h3><div id="tradePanel"></div></div>
     <div class="p-sec"><div class="mint-row"><span class="mint">${esc(t.mint)}</span><span class="dim small">${t.dex ? esc(DEX_NAME[t.dex] || t.dex) : "no market yet"} · first seen ${ago(t.first_seen)} ago</span></div>
       ${r.sameTicker.length ? `<div class="warn-box w-old" style="margin-top:10px"><b>${r.sameTicker.length} other coin${r.sameTicker.length > 1 ? "s use" : " uses"} the ticker $${esc(t.symbol)}.</b> A shared name means nothing: check the contract above. ${r.sameTicker[0].mcap > (t.mcap || 0) ? "This one is not the largest." : "This one is the largest the radar tracks."}
         <div class="leaders" style="margin-top:8px">${r.sameTicker.slice(0, 5).map((x) => `<div class="leader" data-mint="${esc(x.mint)}">${av(x, "xs")}<span class="grow"><span class="mono">${shortAddr(x.mint)}</span> <span class="dim">${esc(DEX_NAME[x.dex] || x.dex || "")} · ${ago(x.born)} old${x.status === "dead" ? " · dead" : ""}</span></span><span class="num">${money(x.mcap)}</span></div>`).join("")}</div></div>` : ""}</div>
@@ -1960,11 +2366,12 @@ async function openCoin(mint) {
       ${fact("LP locked", s?.lpLockedPct != null ? Math.round(s.lpLockedPct) + "%" : "—")}${fact(L ? "Traders (live)" : "Age", L ? L.traders : ago(t.pair_created || t.first_seen))}
     </div><p class="note" style="margin:8px 0 0">“—” means the radar has no reading for that field yet, not zero.</p></div>
     ${researchSection(r.research, t.mint)}
+    ${paperSection(t, r.paper)}
+    ${ledgerSection(r.holders)}
     ${holdersSection(t, s)}
     ${r.wallets?.length ? `<div class="p-sec"><h3>Wallets you follow in this coin</h3>${r.wallets.map((w) => `<div class="leader" data-wallet="${esc(w.wallet)}">${wav(w.wallet, w, "sm")}<span class="grow"><b>${esc(w.label || shortAddr(w.wallet))}</b> <span class="dim">first in ${ago(w.first)} ago</span></span><span class="num up">${w.bought ? "+" + money(w.bought) : ""}</span><span class="num down" style="width:70px;text-align:right">${w.sold ? "−" + money(w.sold) : ""}</span></div>`).join("")}</div>` : ""}
     ${fomoFlowSection(r.fomo)}
     <div class="p-sec"><h3>Safety check</h3>${s ? (s.risks.length ? `<div class="risks">${s.risks.map((x) => `<div class="risk"><i style="background:${x.level === "danger" ? "var(--down)" : x.level === "warn" ? "var(--warn)" : "var(--info)"}"></i><div><b>${esc(x.name)}</b>${x.value ? ` <span class="dim">${esc(x.value)}</span>` : ""}<small>${esc(x.description || "")}</small></div></div>`).join("")}</div>` : `<p class="up">RugCheck found no risks.</p>`) : `<p class="note">Not checked yet. Coins are checked when they first show real trading.</p>`}</div>
-    <div class="p-sec"><h3>Price, volume and activity</h3><div id="coinChart">${coinChart(r)}</div></div>
     ${r.signals.length ? `<div class="p-sec"><h3>Signals</h3>${r.signals.map((x) => `<div class="risk"><i style="background:${x.safe === 0 ? "var(--muted)" : kindOf(x.kind)[1]}"></i><div><b>${esc(x.title)}</b> <span class="dim">${ago(x.t)} ago</span>${x.safe === 0 ? ' <span class="st bad">not safety-screened</span>' : ""}<small>${esc(x.detail)}${x.p1h != null ? ` · 1h later: ${x.illiq && x.p1h === 0 ? "unsellable" : mult(x.p1h)}` : ""}${x.peak != null ? ` · price peak ${mult(x.peak)}` : ""}</small></div></div>`).join("")}</div>` : ""}
     ${t.description ? `<div class="p-sec"><h3>About <span class="dim">· written by the coin's creator</span></h3><p style="margin:0;color:var(--ink-2)">${esc(t.description)}</p></div>` : ""}
     ${r.untracked ? "" : `<div class="p-sec"><details class="fix"><summary>Wrong category? Fix it</summary>
@@ -1974,6 +2381,8 @@ async function openCoin(mint) {
         <button class="btn primary" data-fix="${esc(t.mint)}">Save category</button>${t.themes_user || t.class_user ? `<button class="btn" data-fix-reset="${esc(t.mint)}">Back to automatic</button>` : ""}</div></details></div>`}
     ${t.pair ? `<div class="p-sec"><h3>Full chart <span class="dim">· DexScreener</span></h3><iframe class="embed" src="https://dexscreener.com/solana/${esc(t.pair)}?embed=1&theme=dark&trades=0&info=0" title="DexScreener chart" loading="lazy"></iframe></div>` : ""}`;
   p.scrollTop = 0;
+  mountChart($("#tradeChart"), r);
+  mountPanel($("#tradePanel"), r, { onTrade: (side, pos, desk) => { pulseState.desk = desk; renderDesk(); beep(side); toast(side === "buy" ? `Paper buy $${pos.symbol || ""}: ${pos.sol} SOL for ${Math.round(pos.tokens || 0).toLocaleString()} tokens (${pos.fill?.src || ""})` : `Paper sell $${pos.symbol || ""}`); } });
 }
 // Refresh the open coin page (or the desk) when its research finishes.
 function pollResearch(mint, tries = 0) {
@@ -2134,10 +2543,35 @@ document.addEventListener("click", async (e) => {
     else { coinState.sort = th.dataset.sort; coinState.dir = "desc"; }
     return loadCoins();
   }
+  // The terminal controls: paper buys and sells, the desk, the watchlist star, density and sound.
+  const pb = el.closest("[data-pbuy]");
+  if (pb) { pb.disabled = true; setTimeout(() => { pb.disabled = false; }, 800); return paperBuy(pb.dataset.pbuy, +pb.dataset.sol); }
+  const ps = el.closest("[data-psell]");
+  if (ps) { ps.disabled = true; return paperSell(+ps.dataset.psell, +ps.dataset.pct); }
+  const pr = el.closest("[data-prule]");
+  if (pr) {
+    const id = pr.dataset.prule, v = (k) => $(`[data-prule-${k}="${id}"]`)?.value;
+    try { const r = await post(`paper/${id}/rule`, { tp: v("tp"), sl: v("sl"), trail: v("trail") }); pulseState.desk = r.desk; renderDesk(); toast("Exit rule set"); } catch (e) { toast(e.message); }
+    return;
+  }
+  const pd = el.closest("[data-pdrop]");
+  if (pd) { try { pulseState.desk = await api(`paper/${pd.dataset.pdrop}`, { method: "DELETE" }); renderDesk(); } catch (e) { toast(e.message); } return; }
+  if (el.closest("[data-pdesk]")) return openDesk();
+  const pw = el.closest("[data-pwatch]");
+  if (pw) return toggleWatch(pw.dataset.pwatch);
+  const ptg = el.closest("[data-ptog]");
+  if (ptg) {
+    const k = ptg.dataset.ptog;
+    pulseState[k] = !pulseState[k]; store.set(`pulse:${k}`, pulseState[k]); ptg.classList.toggle("on", pulseState[k]);
+    if (k === "compact") document.body.classList.toggle("pulse-compact", pulseState.compact);
+    if (k === "sound" && pulseState.sound) beep("buy");
+    return;
+  }
+  if (el.closest("[data-pkeys]")) return toast("j/k rows · h/l columns · Enter open · b paper buy · f Fomo · w watch · r read · d desk · / search · Esc close");
   const pt = el.closest("[data-ptab]");
   if (pt) { pulseState.tab = pt.dataset.ptab; store.set("pulse:tab", pulseState.tab); return render(); }
   const pm = el.closest("[data-pmin]");
-  if (pm) { pulseState.min = pm.dataset.pmin; document.querySelectorAll("[data-pmin]").forEach((b) => b.classList.toggle("on", b === pm)); pulseState.first = true; return pulseTick(); }
+  if (pm) { pulseState.min = pm.dataset.pmin; store.set("pulse:min", pulseState.min); document.querySelectorAll("[data-pmin]").forEach((b) => b.classList.toggle("on", b === pm)); pulseState.first = true; return pulseTick(); }
   const m = el.closest("[data-mint]");
   if (m && !el.closest("a")) openCoin(m.dataset.mint);
 });
@@ -2156,12 +2590,40 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.psort != null) {
+    pulseState.sort[e.target.dataset.psort] = e.target.value; store.set("pulse:sort", pulseState.sort);
+    e.target.classList.toggle("on", Boolean(e.target.value)); pulseState.first = true; pulseTick();
+  }
   if (e.target.id === "cgrad") { coinState.grad = e.target.value; loadCoins(); }
   if (e.target.id === "ccls") { coinState.cls = e.target.value; loadCoins(); }
   if (e.target.id === "cunrel") { coinState.unreliable = e.target.checked; loadCoins(); }
   if (e.target.id === "sgroup") { sigState.grouped = e.target.checked; render(); }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawerOpen()) closeCoin(); });
+// Terminal keys on the Pulse page. Nothing fires while typing in a field, and the filter window has its own keys.
+document.addEventListener("keydown", (e) => {
+  if (route() !== "" || pulseState.tab !== "new" || e.ctrlKey || e.metaKey || e.altKey) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+  if (e.key === "/" && !typing) { e.preventDefault(); $("#pq")?.focus(); return; }
+  if (typing) { if (e.key === "Escape") e.target.blur(); return; }
+  if (pf.draft) return;
+  const k = e.key, s = selRow(), mint = s?.dataset.mint;
+  if (k === "1" || k === "2" || k === "3" || k === "4") { const rows = $(`#pcol-${COLS[+k - 1]}`)?.querySelectorAll(".pr"); if (rows?.length) setSel(rows[0]); }
+  else if (k === "j" || k === "ArrowDown") moveSel(1);
+  else if (k === "k" || k === "ArrowUp") moveSel(-1);
+  else if (k === "h" || k === "ArrowLeft") moveCol(-1);
+  else if (k === "l" || k === "ArrowRight") moveCol(1);
+  else if (k === "Enter") { if (mint) openCoin(mint); else moveSel(1); }
+  else if (k === "b") { if (mint) paperBuy(mint, pulseState.sizes[1] ?? pulseState.sizes[0]); }
+  else if (k === "f") { if (mint) window.open(fomoUrl(mint), "_blank", "noopener"); }
+  else if (k === "w") { if (mint) toggleWatch(mint); }
+  else if (k === "r") { const b = s?.querySelector("[data-research]"); if (b) b.click(); }
+  else if (k === "d") openDesk();
+  else if (k === "Escape") { if (drawerOpen()) closeCoin(); else setSel(null); }
+  else if (k === "?") toast("j/k rows · h/l columns · Enter open · b paper buy · f Fomo · w watch · r read · d desk · / search · Esc close");
+  else return;
+  e.preventDefault();
+});
 
 // ---------- live stream ----------
 function connect() {
@@ -2200,6 +2662,14 @@ function connect() {
   });
   es.addEventListener("live", (ev) => { if (route() === "" && !document.hidden) applyLive(JSON.parse(ev.data).u); });
   es.addEventListener("launch", (ev) => { if (route() === "" && !document.hidden) applyLaunch(JSON.parse(ev.data)); });
+  es.addEventListener("pic", (ev) => applyPic(JSON.parse(ev.data).mint));
+  es.addEventListener("mig", (ev) => { if (route() === "" && !document.hidden) applyMig(JSON.parse(ev.data).u); });
+  // A paper position closed by its own rule.
+  es.addEventListener("paper", (ev) => {
+    const p = JSON.parse(ev.data).pos;
+    if (p) { toast(`Paper desk: $${p.symbol || shortAddr(p.mint)} closed, ${p.exit_why} · ${usdSigned(p.pnl)}`); beep("sell"); }
+    if (route() === "") deskTick();
+  });
   es.addEventListener("brief", (ev) => { const b = JSON.parse(ev.data); const c = $("#briefCard"); if (c) c.innerHTML = briefCard(b); toast("New AI brief"); });
   es.onerror = () => { live.classList.remove("on"); live.querySelector("span").textContent = "reconnecting"; };
 }

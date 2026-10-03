@@ -1,0 +1,11 @@
+{
+  // trade.blixvip.com: a small Worker that forwards every request to the live Blix terminal on Kai's PC.
+  // Blix opens a Cloudflare quick tunnel at startup (server/tunnel.js) and registers its current
+  // trycloudflare.com address here with the REG_KEY secret; the Worker keeps it in KV.
+  "name": "blix-trade",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "trade.blixvip.com", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "REG", "id": "950148872f48449692d579f4bd71339d" }],
+  "observability": { "enabled": true }
+}

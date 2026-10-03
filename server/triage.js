@@ -12,14 +12,14 @@ import { recentLaunches, devLaunches, launchLog, adoptLaunch } from "./engine.js
 import { getMeta } from "./pulse.js";
 import { liveStats } from "./livetrades.js";
 import { askFast, fastReady as groqReady } from "./fast.js";
-import { askGrok, grokInstalled, grokBlocked } from "./grok.js";
+import { askGrok, grokReady } from "./grok.js";
 import { ask, claudeStatus, FAST_MODEL } from "./ai.js";
 
 // Which model can label launches right now: Groq, else Grok, else Claude Haiku on this PC's Claude login.
 const llmFor = () => {
   if (!settings.triageOn) return null;
   if (groqReady() && settings.triageProvider !== "grok") return "groq";
-  if (grokInstalled() && !grokBlocked() && settings.triageProvider !== "groq" && settings.fastProvider !== "claude") return "grok";
+  if (grokReady("triage") && settings.triageProvider !== "groq" && settings.fastProvider !== "claude") return "grok";
   return settings.claudeFast && claudeStatus().ready ? "claude" : null;
 };
 
@@ -92,7 +92,7 @@ async function batch() {
   try {
     const r = useGroq
       ? await askFast(SYSTEM, prompt, 1600, { models: [settings.triageModel, "openai/gpt-oss-20b", "llama-3.1-8b-instant"] })
-      : llm === "grok" ? await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000 })
+      : llm === "grok" ? await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000, lane: "triage" })
       : await ask(SYSTEM, prompt, 1600, { model: FAST_MODEL });
     const out = JSON.parse(r.text.match(/\{[\s\S]*\}/)?.[0] || "{}");
     const ms = now() - t0;
@@ -126,9 +126,10 @@ function escalate() {
     const t = mem.get(l.mint);
     if (!t || t.escalated) continue;
     const ls = liveStats(l.mint);
-    // While a model is labelling launches, the instant rules alone do not send a coin for a full read:
-    // they pass anything with an X link. The rules only decide if the model has not answered in 45 seconds.
-    const strong = ["maybe", "promising"].includes(t.label) && t.score >= settings.triageEscalate && (t.model || !llmFor() || now() - l.seen > 45_000);
+    // Only a model's label sends a coin for a read on its looks alone. The instant rules never do: they
+    // pass anything with an X link, and a read of a coin nobody has bought yet is a read wasted (measured
+    // over a day: 1.8% of "slop" reached $30k, against 2.2% of "maybe").
+    const strong = t.model && t.model !== "failed" && ["maybe", "promising"].includes(t.label) && t.score >= settings.triageEscalate;
     // Traction overrides a harsh label: real buyers showing up means it's worth a proper look.
     // Real, different buyers in the first seconds matter more than size: 20 traders with more buying than selling is enough.
     const traction = ls && ls.traders >= 20 && ls.buys > ls.sells && (t.label !== "slop" || ls.traders >= 40);

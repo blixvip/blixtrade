@@ -1,0 +1,50 @@
+/* The coin page's trading terminal: candle chart + buy/sell panel (trade.js). Tokens only, per design.md. */
+.tc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.tc-tfs { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-control, 6px); overflow: hidden; }
+.tc-tf { padding: 4px 10px; font: 600 11.5px var(--font-body); color: var(--muted); background: transparent; border: 0; border-right: 1px solid var(--line); cursor: pointer; }
+.tc-tf:last-child { border-right: 0; }
+.tc-tf:hover { color: var(--ink); }
+.tc-tf.on { color: var(--ink); background: color-mix(in oklch, var(--color-accent) 18%, transparent); }
+.tc-ohlc { font-size: 11.5px; color: var(--muted); }
+.tc-ohlc b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+.tc-ohlc b.up { color: var(--up); } .tc-ohlc b.down { color: var(--color-down); }
+.tc-src { margin-left: auto; font-size: 11px; color: var(--muted); }
+.tc-canvas { height: 320px; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-control, 6px); overflow: hidden; }
+.tc-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.tc-note:empty { display: none; }
+
+.tp { display: grid; gap: 10px; }
+.tp-tabs { display: flex; align-items: center; gap: 6px; }
+.tp-tab { flex: 0 0 auto; padding: 7px 18px; border-radius: var(--radius-control, 6px); border: 1px solid var(--line); background: transparent; color: var(--muted); font: 700 13px var(--font-body); cursor: pointer; }
+.tp-tab.buy.on { color: var(--color-on-fill, #fff); background: var(--color-up); border-color: var(--color-up); }
+.tp-tab.sell.on { color: var(--color-on-fill, #fff); background: var(--color-down); border-color: var(--color-down); }
+.tp-tab:disabled { opacity: .4; cursor: not-allowed; }
+.tp-paper { margin-left: auto; font: 700 10.5px var(--font-body); letter-spacing: .08em; color: var(--color-warn); border: 1px solid color-mix(in oklch, var(--color-warn) 50%, transparent); border-radius: 4px; padding: 2px 6px; }
+.tp-amts { display: flex; gap: 6px; flex-wrap: wrap; align-items: stretch; }
+.tp-amt { min-width: 52px; padding: 7px 10px; border-radius: var(--radius-control, 6px); border: 1px solid var(--line); background: transparent; color: var(--ink-2); font: 600 12.5px var(--font-body); font-variant-numeric: tabular-nums; cursor: pointer; }
+.tp-amt:hover { border-color: var(--line-2, var(--line)); color: var(--ink); }
+.tp-amt.on { color: var(--ink); border-color: var(--color-accent); background: color-mix(in oklch, var(--color-accent) 14%, transparent); }
+.tp-custom { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: var(--radius-control, 6px); padding: 0 10px; flex: 1 1 120px; }
+.tp-custom input { width: 100%; min-width: 0; background: transparent; border: 0; color: var(--ink); font: 600 13px var(--font-body); padding: 7px 0; outline: none; }
+.tp-custom span { color: var(--muted); font-size: 12px; }
+.tp-custom:focus-within { border-color: var(--color-focus, var(--color-accent)); }
+.tp-slip { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.tp-slip span { margin-right: 4px; }
+.tp-sl { padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 11.5px var(--font-body); cursor: pointer; }
+.tp-sl.on { color: var(--ink); border-color: var(--color-accent); }
+.tp-quote { border: 1px solid var(--line); border-radius: var(--radius-control, 6px); padding: 10px 12px; font-size: 12.5px; min-height: 64px; }
+.tq-main { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.tq-main b { font-size: 16px; color: var(--ink); }
+.tq-grid { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 12px; color: var(--muted); }
+.tq-grid b { color: var(--ink-2); font-weight: 600; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tq-grid b.down { color: var(--color-down); } .tq-grid b.up { color: var(--up); }
+.tp-go { padding: 11px 14px; border-radius: var(--radius-control, 6px); border: 0; font: 700 14px var(--font-body); color: var(--color-on-fill, #fff); cursor: pointer; }
+.tp-go.buy { background: var(--color-up); } .tp-go.sell { background: var(--color-down); }
+.tp-go:disabled { opacity: .45; cursor: not-allowed; }
+.tp-go:not(:disabled):active { transform: scale(.99); }
+.tp-pos { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.tp-pos div { display: flex; gap: 10px; align-items: center; }
+.tp-pos div span:first-child { flex: 1; }
+.tp-pos .up { color: var(--up); } .tp-pos .down { color: var(--color-down); }
+.tp-mini { margin: 0; font-size: 11.5px; color: var(--muted); }
+@media (max-width: 560px) { .tq-grid { grid-template-columns: auto 1fr; } .tc-canvas { height: 260px; } }

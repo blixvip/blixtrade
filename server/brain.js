@@ -8,10 +8,12 @@
 // Alert-only: it never trades. Calls are paper trades.
 import { db, json, logEvent, meta } from "./db.js";
 import { settings } from "./settings.js";
-import { askGrok, grokInstalled as grokPresent, grokBlocked, grokStatus } from "./grok.js";
+import { askGrok, grokInstalled as grokPresent, grokBlocked, grokStatus, grokOver } from "./grok.js";
 const grokInstalled = () => grokPresent() && !grokBlocked();
 import { dexTokens } from "./sources.js";
-import { liveStats, feed } from "./livetrades.js";
+import { liveStats, feed, onLiveTrade } from "./livetrades.js";
+import { tapeNote } from "./tape.js";
+import { upsertNarrative, clusterBoard } from "./clusters.js";
 import { computeNarratives } from "./narratives.js";
 import { ask, extractJson, claudeStatus } from "./ai.js";
 import { verdict, vet } from "./engine.js";
@@ -62,7 +64,7 @@ const MIN = 60_000, H = 60 * MIN;
 const now = () => Date.now();
 let raiseFn = null, enqueueFn = null;
 
-for (const c of ["grade TEXT", "score INTEGER", "tier TEXT", "stage TEXT", "theme TEXT", "tag TEXT", "verdict TEXT", "organic TEXT", "symbol TEXT", "action TEXT", "illiq INTEGER DEFAULT 0", "sim TEXT", "exit_mult REAL", "exit_reason TEXT", "exit_t INTEGER", "rated_mcap REAL", "entry_ms INTEGER", "entry_note TEXT", "pwin INTEGER", "traction INTEGER"])
+for (const c of ["grade TEXT", "score INTEGER", "tier TEXT", "stage TEXT", "theme TEXT", "tag TEXT", "verdict TEXT", "organic TEXT", "symbol TEXT", "action TEXT", "illiq INTEGER DEFAULT 0", "sim TEXT", "exit_mult REAL", "exit_reason TEXT", "exit_t INTEGER", "rated_mcap REAL", "entry_ms INTEGER", "entry_note TEXT", "pwin INTEGER", "traction INTEGER", "via TEXT"])
   try { db.exec(`ALTER TABLE outcomes ADD COLUMN ${c}`); } catch {}
 
 // ---------- playbook ----------
@@ -142,7 +144,7 @@ export function considerPick(t, r, stage) {
     db.prepare("UPDATE outcomes SET grade = ?, score = ?, tier = CASE WHEN tier = 'early' THEN tier ELSE ? END, verdict = ?, action = COALESCE(?, action) WHERE kind = 'pick' AND ref = ?").run(r.grade, r.score, r.tier, r.verdict || null, r.trade?.action || null, had.ref);
     // The deeper read turning against a coin already entered is a sell. Not for an early-signal entry: the
     // launch model is tested on launches it never saw, and the AI's "avoid" on a seconds-old coin is not.
-    if (r.trade?.action === "avoid" && r.tier === "deep" && had.tier !== "early") closePick(had.ref, "the deeper read said avoid");
+    if (settings.aiInGate && r.trade?.action === "avoid" && r.tier === "deep" && had.tier !== "early") closePick(had.ref, "the deeper read said avoid");
     return null;
   }
   const action = r.trade?.action || null;
@@ -161,7 +163,9 @@ export function considerPick(t, r, stage) {
   const unchecked = !v.ok && v.unknown && v.reasons.length === 1;
   if (unchecked) checkSafety(t.mint);
   if (!v.ok && !unchecked) { logEvent("research", `$${t.symbol} rated ${r.grade} (${r.score}) but not picked: ${v.reasons.join("; ")}`); return null; }
-  const slim = JSON.stringify({ pwin: r.trade?.pWin ?? null, traction: r.traction ?? null, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict || null, action, theme: r.narrative?.theme || "Other", tag: r.narrative?.tag || null, organic: r.xBuzz?.organic || null, summary: (r.narrative?.summary || "").slice(0, 300) });
+  // via: what made it a pick (the launch model, live demand, or the AI's call), so each can be scored on its own.
+  const slim = JSON.stringify({ pwin: r.trade?.pWin ?? null, traction: r.traction ?? null, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict || null, action, theme: r.narrative?.theme || "Other", tag: r.narrative?.tag || null, organic: r.xBuzz?.organic || null, summary: (r.narrative?.summary || "").slice(0, 300),
+    via: r.early?.strong ? "model" : settings.aiInGate ? "ai" : "demand" });
   if (waiting) { db.prepare("UPDATE entry_watch SET r = ? WHERE mint = ?").run(slim, t.mint); return null; }
   // Dropped moments ago for falling or running away: a second read of the same coin does not get to try again at once.
   const prev = db.prepare("SELECT done_t FROM entry_watch WHERE mint = ?").get(t.mint);
@@ -182,6 +186,18 @@ export function considerPick(t, r, stage) {
 //   - the AI calls it a buy, or gives it at least pickMinPwin chance of 2x before -40%
 export function pickGate(r, mcap, P = settings) {
   const a = r.trade?.action || null, pw = r.trade?.pWin, tr = r.traction;
+  // Measured on 126 picks: the AI's "buy" picks won 6% (0.55x) and the picks it called "avoid" won 44%
+  // (1.45x). Its call is slow and, so far, wrong, so by default it no longer decides anything: a pick is a
+  // launch the model ranks in its top tenth, or a coin with strong live demand at a sensible size.
+  if (!P.aiInGate) {
+    if (r.early?.strong) return null;
+    if (tr == null) return "no live demand score for it yet";
+    if (tr < P.pickMinTraction) return `traction ${tr}, below ${P.pickMinTraction}`;
+    if (!(mcap > 0)) return "no price for it yet";
+    if (mcap < P.pickMinMcap) return `market cap ${fmt$(mcap)}, below ${fmt$(P.pickMinMcap)}`;
+    if (mcap > P.pickMaxMcap) return `market cap ${fmt$(mcap)}, above ${fmt$(P.pickMaxMcap)}`;
+    return null;
+  }
   if (a === "avoid") return "the AI said avoid";
   // A launch the early model puts in its top tenth is a pick at any size: that is the point of finding it early.
   if (r.early?.strong) return null;
@@ -205,7 +221,7 @@ export function earlyPick(l, e) {
   if (db.prepare("SELECT 1 FROM entry_watch WHERE mint = ?").get(l.mint)) return false;
   const pct = Math.round(e.p * 100), ref = priceNow(l.mint)?.mcap || 0;
   checkSafety(l.mint);
-  const r = { early: true, tier: "early", pwin: pct, traction: null, grade: null, score: null, action: "buy", theme: "Other", tag: "Early signal", organic: null,
+  const r = { early: true, via: "model", tier: "early", pwin: pct, traction: null, grade: null, score: null, action: "buy", theme: "Other", tag: "Early signal", organic: null,
     verdict: `Early signal ${e.cp}s after launch: the launch model gives it a ${pct}% chance of doubling before it falls 40%. No AI read yet.`, summary: "" };
   db.prepare("INSERT OR REPLACE INTO entry_watch (mint, t, ref_mcap, hi, stage, symbol, r, status, why, done_t, mcap) VALUES (?, ?, ?, ?, 'new', ?, ?, 'waiting', 'watching the first seconds', NULL, ?)")
     .run(l.mint, now(), ref, ref, l.symbol == null ? "?" : String(l.symbol), JSON.stringify(r), ref);
@@ -263,6 +279,7 @@ async function pollDex(mints) {
       if (!raw) continue;
       const bad = readingProblem({ dex: p.dexId, liquidity: p.liquidity?.usd, mcap: raw }, settings.minExitLiq);
       dexPx.set(m, { mcap: bad ? 0 : raw, t: now(), chg: p.priceChange?.m5 ?? null });
+      if (!bad) tapeNote(m, raw);
     }
     if (dexPx.size > 500) for (const [m, d] of dexPx) if (now() - d.t > 5 * 60_000) dexPx.delete(m);
   } catch (e) { watchStats.dexErrors++; dexNext = now() + (e.status === 429 ? 15_000 : 3_000); } finally { dexBusy = false; }
@@ -339,11 +356,31 @@ function enterPick(w, tok, mcap, src) {
   db.prepare(`INSERT OR IGNORE INTO outcomes (${PICK_COLS}, rated_mcap, entry_ms, entry_note, pwin, traction) VALUES ('pick', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(`${w.mint}:${dayKey()}`, w.mint, now(), mcap, mcap, now(), mcap, mcap, now(), r.grade, r.score, r.tier, w.stage,
       r.theme || "Other", r.tag || null, r.verdict || null, r.organic || null, w.symbol, r.action || null, w.ref_mcap, waited, note, r.pwin ?? null, r.traction ?? null);
+  db.prepare("UPDATE outcomes SET via = ? WHERE kind = 'pick' AND ref = ?").run(r.via || (r.early ? "model" : "ai"), `${w.mint}:${dayKey()}`);
   endWatch(w, "entered", note, mcap);
   watchStats.entered++;
   logEvent("research", `PICK $${w.symbol} ${r.grade} (${r.score}) at ${fmt$(mcap)}: ${note}`);
   raiseFn?.({ ...tok, mcap }, "pick", r.early ? `Buy now: $${w.symbol} early signal (${r.pwin}% chance of a 2x), entry ${fmt$(mcap)}` : `Buy now: $${w.symbol} rated ${r.grade} (${r.score}/100), entry ${fmt$(mcap)}`,
     `${r.verdict || ""} ${r.summary || ""}`.trim().slice(0, 400) + ` It ${note} (${src === "live" ? "live trade feed" : "DexScreener"} price). Passed safety (${tok.safety_score}/100). Paper only: nothing is bought.`);
+}
+// Move one open pick to a new price and run its exit rule.
+const openPicks = new Map();      // mint -> the open pick's row, refreshed by fastTick every second
+function stepOpen(o, mcap) {
+  const peak = Math.max(o.peak_mcap || 0, mcap), low = Math.min(o.low_mcap ?? mcap, mcap);
+  if (peak > (o.peak_mcap || 0)) o.peak_t = now();
+  db.prepare("UPDATE outcomes SET peak_mcap = ?, peak_t = ?, low_mcap = ?, last_mcap = ?, last_t = ?, illiq = MAX(COALESCE(illiq, 0), ?) WHERE kind = 'pick' AND ref = ?")
+    .run(peak, o.peak_t, low, mcap, now(), mcap ? 0 : 1, o.ref);
+  o.peak_mcap = peak; o.low_mcap = low; o.last_mcap = mcap;
+  advancePick(o, mcap);
+}
+// Coins on the bonding curve are also checked on every trade as it lands, not just once a second: these
+// coins fall 50% inside a few seconds, and a stop that waits for the next tick fills that much lower.
+function onPickTrade(mint, s) {
+  const o = openPicks.get(mint);
+  if (!o || (s.progress ?? 0) >= 0.995) return;
+  const mcap = s.mc * feed.solUsd;
+  if (!(mcap > 0) || !(o.last_mcap > 0) || Math.abs(mcap / o.last_mcap - 1) < 0.004) return;
+  try { stepOpen(o, mcap); watchStats.onTrade = (watchStats.onTrade || 0) + 1; } catch {}
 }
 // One pass a second: every coin waiting for an entry, and every open pick against its exit rule.
 function fastTick() {
@@ -358,15 +395,14 @@ function fastTick() {
     watchStats.live = mints.length - need.length; watchStats.dex = need.length;
     pollDex(need);
     for (const w of waiting) stepEntry(w);
+    openPicks.clear();
     for (const o of open) {
+      openPicks.set(o.mint, o);
       const px = priceNow(o.mint);
       if (!px) continue;
       const mcap = px.mcap;
       if (mcap === o.last_mcap && (now() - o.t0) / H < settings.pickMaxHours) continue;
-      const peak = Math.max(o.peak_mcap || 0, mcap);
-      db.prepare("UPDATE outcomes SET peak_mcap = ?, peak_t = ?, low_mcap = ?, last_mcap = ?, last_t = ?, illiq = MAX(COALESCE(illiq, 0), ?) WHERE kind = 'pick' AND ref = ?")
-        .run(peak, peak > (o.peak_mcap || 0) ? now() : o.peak_t, Math.min(o.low_mcap ?? mcap, mcap), mcap, now(), mcap ? 0 : 1, o.ref);
-      advancePick({ ...o, peak_mcap: peak }, mcap);
+      stepOpen(o, mcap);
     }
   } catch (e) {
     if (now() - tickErrT > 60_000) { tickErrT = now(); logEvent("error", `entry watcher: ${e.message}`); }
@@ -480,6 +516,7 @@ function shape(o) {
   const t = db.prepare("SELECT name, image, mcap, status, safety_score FROM tokens WHERE mint = ?").get(o.mint) || {};
   const peak = o.peak_mcap / o.mcap0, nowX = o.illiq ? 0 : o.last_mcap / o.mcap0, sim = json(o.sim, null);
   return { mint: o.mint, symbol: o.symbol, name: t.name || null, image: t.image || null, t: o.t0, grade: o.grade, score: o.score, tier: o.tier, action: o.action, verdict: o.verdict, tag: o.tag, stage: o.stage,
+    via: o.via || (o.tier === "early" ? "model" : "ai"),
     // What the exit rule has made of it: banked sales plus whatever is still held, at the price now.
     ruleX: o.exit_mult ?? (sim ? sim.realized + sim.left * nowX * COST : nowX * COST), ruleClosed: o.exit_mult != null, ruleWhy: o.exit_reason || (sim?.log.length ? `${sim.log.map((x) => x.why).join(", then ")}; still holding ${Math.round(sim.left * 100)}%` : "still holding all of it"), sold: sim?.log || [],
     ratedAt: o.rated_mcap ?? null, entryMs: o.entry_ms ?? null, entryNote: o.entry_note || null, pwin: o.pwin ?? null, traction: o.traction ?? null,
@@ -517,7 +554,7 @@ export function allPicks(limit = 1500) {
       avg: xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(2) : null, median: median(xs), pnl: +rows.reduce((a, p) => a + (p.ruleX - 1) * 100, 0).toFixed(0),
       best: best && { symbol: best.symbol, mint: best.mint, x: +best.ruleX.toFixed(2) }, worst: worst && { symbol: worst.symbol, mint: worst.mint, x: +worst.ruleX.toFixed(2) },
       stops: closed.filter((p) => /stop loss/.test(p.ruleWhy || "")).length, unsellable: rows.filter((p) => p.unsellable).length, replayed: rows.filter((p) => p.replayed).length },
-    byStage: by("stage"), byAction: by("action"), guard: riskGuard(), guardRule: { losses: settings.guardLosses, pauseMin: settings.guardPauseMin, dayLoss: settings.guardDayLoss },
+    byStage: by("stage"), byAction: by("action"), byVia: by("via"), aiInGate: Boolean(settings.aiInGate), guard: riskGuard(), guardRule: { losses: settings.guardLosses, pauseMin: settings.guardPauseMin, dayLoss: settings.guardDayLoss },
     rule: { takeProfit: settings.pickTakeProfit, sellPct: settings.pickSellPct, trailPct: settings.pickTrailPct, stopPct: settings.pickStopPct, maxHours: settings.pickMaxHours }, paper: PAPER,
   };
 }
@@ -737,7 +774,7 @@ export async function review(force = false) {
       scorecard: sc, bestRunners: byPeak.slice(0, 12).map(brief), worstDumps: [...rows].sort((a, b) => a.low - b.low).slice(0, 10).map(brief),
       highGradesThatFailed: rows.filter((x) => x.score >= 65 && x.peak < 1.3).slice(0, 10).map(brief), missedRunners, calls,
       narrativeScoutResults: db.prepare("SELECT name, stage, confidence, best_mult, best_peak, launches_after FROM narrative_calls WHERE status = 'scored' ORDER BY t DESC LIMIT 20").all() };
-    const r = await askSmart(REVIEW_SYSTEM, `Track record (JSON):\n${JSON.stringify(input)}`, { model: settings.deepModel, search: false, maxTokens: 4000, effort: "high", timeout: 300_000 });
+    const r = await askSmart(REVIEW_SYSTEM, `Track record (JSON):\n${JSON.stringify(input)}`, { model: settings.deepModel, search: false, maxTokens: 4000, effort: "high", timeout: 300_000, lane: "review" });
     const out = extractJson(r.text);
     if (!Array.isArray(out.rules) || !out.rules.length) throw new Error("the review came back without any rules");
     const tuning = {
@@ -759,7 +796,9 @@ export async function review(force = false) {
 
 // ---------- narrative scout ----------
 const SCOUT_SYSTEM = `You are a narrative scout for a Solana memecoin trader. Your job: find narratives that are about to run
-or are running RIGHT NOW. A narrative can be anything: a news story, a viral video, a celebrity moment, an AI/tech release,
+or are running RIGHT NOW. The radar itself catches bursts of same-named launches within a minute (listed under
+"burstsTheRadarAlreadyCaught"): do not repeat those. Look for what it cannot see: a catalyst that is live on X or in the news
+and has few or no coins yet. A narrative can be anything: a news story, a viral video, a celebrity moment, an AI/tech release,
 a political event, a meme format, a cultural trend, an animal going viral, a CT in-joke. What matters is whether it will
 pull attention and money into memecoins named after it in the next hours.
 Use x_search heavily: what is going viral on X right now, what memecoin traders and KOLs are rotating into, which tickers
@@ -782,14 +821,15 @@ const noteScout = (outcome, detail) => meta.set("scout_last", JSON.stringify({ t
 // How old a scouted thesis can get before it stops being presented as current.
 export const NARRATIVE_FRESH = 3 * H, NARRATIVE_EXPIRES = 8 * H;
 export function scoutStatus() {
-  const lastOk = db.prepare("SELECT MAX(t) t FROM narrative_calls").get().t || null;
-  const g = grokStatus();
-  const available = grokInstalled();
+  const lastOk = +meta.get("scout_t", 0) || db.prepare("SELECT MAX(t) t FROM narrative_calls WHERE COALESCE(source, 'scout') = 'scout'").get().t || null;
+  const g = grokStatus(), over = grokOver("scout");
+  const available = grokInstalled() && !over;
   return {
     every: settings.scoutEveryMin, lastOk, last: json(meta.get("scout_last"), null), available, scouting,
     overdue: Boolean(settings.scoutEveryMin > 0 && lastOk && now() - lastOk > settings.scoutEveryMin * MIN * 1.5),
     why: settings.scoutEveryMin <= 0 ? "Narrative scouting is switched off in Settings."
       : available ? null
+      : over ? `${over}. Scouting starts again at midnight, or raise the daily Grok budget in Settings.`
       : `Scouting needs live X and web search, which only Grok has. ${g.installed ? `${g.blocked || "Grok is unavailable"}; the radar re-checks every 30 minutes.` : "Grok is not logged in on this PC."} No new narratives are being found until it is back.`,
   };
 }
@@ -806,12 +846,15 @@ export async function scout() {
     const rated = db.prepare(`SELECT t.symbol, r.grade, r.report FROM research r JOIN tokens t ON t.mint = r.mint WHERE r.t > ? AND r.score >= 55 ORDER BY r.score DESC LIMIT 15`).all(now() - 12 * H)
       .map((x) => `$${x.symbol} ${x.grade}: ${json(x.report)?.narrative?.tag || ""}`);
     const prior = db.prepare("SELECT name, stage, confidence, t FROM narrative_calls WHERE t > ? ORDER BY t DESC LIMIT 15").all(now() - 12 * H);
+    // What the radar already sees forming on-chain. The scout's job is what it cannot see: catalysts with no coins yet.
+    const bursts = clusterBoard().clusters.filter((c) => c.state === "forming").slice(0, 8).map((c) => ({ sharedBy: c.keys, name: c.name || undefined, launchesLast10Min: c.n10, buyers: c.traders, lead: c.lead?.symbol }));
     const data = { themes: nar.themes.slice(0, 10).map((x) => ({ theme: x.name, heat: x.heat, launchSharePct: +(x.launchShare * 100).toFixed(1), lift: x.launchLift })),
-      emergingWords: nar.emerging.slice(0, 15).map((e) => e.word), busiestNewCoins: hot, bestRatedCoins: rated, yourRecentNarrativeCalls: prior };
+      emergingWords: nar.emerging.slice(0, 15).map((e) => e.word), busiestNewCoins: hot, bestRatedCoins: rated, yourRecentNarrativeCalls: prior,
+      burstsTheRadarAlreadyCaught: bursts };
     const r = await askGrok(SCOUT_SYSTEM + playbookPrompt(), `Radar data (JSON):\n${JSON.stringify(data)}`,
-      { model: settings.deepModel, search: true, maxSearches: settings.scoutSearches, maxTokens: 5000, effort: "medium", timeout: 300_000 });
+      { model: settings.deepModel, search: true, maxSearches: settings.scoutSearches, maxTokens: 5000, effort: settings.scoutEffort === "medium" ? "medium" : "low", timeout: 300_000, lane: "scout" });
     const out = extractJson(r.text);
-    const v = playbook().version;
+    meta.set("scout_t", now());
     let n = 0;
     for (const x of (out.narratives || []).slice(0, 10)) {
       const kw = (x.keywords || []).map((k) => String(k).toLowerCase().trim()).filter((k) => k.length >= 3).slice(0, 8);
@@ -820,9 +863,9 @@ export async function scout() {
       // Evidence the claims can be checked against: real web links only, with when they were seen.
       const sources = (Array.isArray(x.sources) ? x.sources : []).map((s) => ({ url: safeUrl(s?.url), what: String(s?.what || "").slice(0, 160), when: String(s?.when || "").slice(0, 40) })).filter((s) => s.url).slice(0, 6);
       const examples = (Array.isArray(x.examples) ? x.examples : []).map((e) => ({ ticker: String(e?.ticker || "").slice(0, 20), mint: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(e?.mint || "") ? e.mint : null })).filter((e) => e.ticker || e.mint).slice(0, 6);
-      db.prepare(`INSERT INTO narrative_calls (t, name, stage, thesis, catalysts, keywords, confidence, playbook, model, examples, matches, checked_t) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(now(), x.name, x.stage, x.thesis, JSON.stringify({ catalysts: x.catalysts || [], risk: x.risk || null, sources, searches: r.searches || 0 }), JSON.stringify(kw), clamp(x.confidence, 0, 100), v, r.model,
-          JSON.stringify(examples), JSON.stringify(matches.map((m) => ({ mint: m.mint, symbol: m.symbol, mcap: m.mcap }))), now());
+      // A story the radar already has (from an earlier scout or a live burst) is updated, not listed twice.
+      upsertNarrative({ name: x.name, stage: x.stage, thesis: x.thesis, catalysts: { catalysts: x.catalysts || [], risk: x.risk || null, sources, searches: r.searches || 0 }, keywords: kw, confidence: clamp(x.confidence, 0, 100),
+        model: r.model, examples, matches: matches.map((m) => ({ mint: m.mint, symbol: m.symbol, mcap: m.mcap })), source: "scout", ms: r.ms });
       // Research the radar's coins that fit a live narrative first.
       // Only the lead coin per ticker (copies of the same ticker are usually late clones).
       const lead = [...new Map(matches.map((m) => [m.symbol.toLowerCase(), m])).values()].sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
@@ -867,20 +910,44 @@ function scoreNarratives() {
     // The market cap each coin had when the call was made; kept from the first match onward.
     const before = new Map(json(c.matches, []).map((m) => [m.mint, "base" in m ? m.base : m.mcap]));
     let bestMult = 0, bestPeak = 0, after = 0;
+    const mults = [];
     for (const t of coins) {
       if (t.first_seen > c.t) after++;
       const base = before.get(t.mint);
       // Only what the coin did after the call counts, from readings a holder could have sold into.
       t.peak_mcap = db.prepare("SELECT MAX(mcap) m FROM snapshots WHERE mint = ? AND t >= ? AND COALESCE(ok, 1) = 1").get(t.mint, c.t).m || 0;
       // Multiples off a near-zero base are noise, not a run.
-      if (base >= 5000) bestMult = Math.max(bestMult, t.peak_mcap / base);
+      if (base >= 5000) { bestMult = Math.max(bestMult, t.peak_mcap / base); mults.push(t.peak_mcap / base); }
       bestPeak = Math.max(bestPeak, t.peak_mcap);
     }
+    // "The best coin ran" flatters a call: nobody knew which coin that would be. The typical coin on the
+    // narrative, and the one named as its lead when the call was made, are the honest measures.
+    let leadMult = null;
+    if (c.lead_mint) {
+      const s = db.prepare("SELECT (SELECT mcap FROM snapshots WHERE mint = ? AND t >= ? AND mcap > 0 AND COALESCE(ok, 1) = 1 ORDER BY t LIMIT 1) base, (SELECT MAX(mcap) FROM snapshots WHERE mint = ? AND t >= ? AND COALESCE(ok, 1) = 1) peak").get(c.lead_mint, c.t, c.lead_mint, c.t);
+      if (s.base > 0 && s.peak > 0) leadMult = s.peak / s.base;
+    }
     const final = now() - c.t > 24 * H;
+    db.prepare("UPDATE narrative_calls SET med_mult = ?, lead_mult = ? WHERE id = ?").run(median(mults), leadMult, c.id);
     db.prepare("UPDATE narrative_calls SET best_mult = ?, best_peak = ?, launches_after = ?, checked_t = ?, status = ?, matches = ? WHERE id = ?")
       .run(bestMult || null, bestPeak || null, after, now(), final ? "scored" : "open",
         JSON.stringify(coins.slice(0, 12).map((t) => ({ mint: t.mint, symbol: t.symbol, image: t.image, mcap: t.mcap, peak: t.peak_mcap, base: before.get(t.mint) ?? (t.first_seen > c.t ? null : t.mcap), dead: t.status === "dead", late: t.first_seen > c.t }))), c.id);
   }
+}
+
+// The narratives page: every narrative called in the last 12 hours (by a live burst or by the scout),
+// newest first, and how past calls turned out by each honest measure.
+// One narrative as the pages show it. The research is as old as the last time it was looked up (by a
+// burst or by the scout); only the coin prices underneath it are refreshed in between.
+const narShape = (n) => { const seen = n.updated_t || n.t; return { ...n, source: n.source || "scout", keywords: json(n.keywords, []), catalysts: json(n.catalysts, {}), matches: json(n.matches, []), examples: json(n.examples, []),
+  researchAge: now() - seen, pricesAge: n.checked_t ? now() - n.checked_t : null, review: now() - seen < NARRATIVE_FRESH ? "fresh" : now() - seen < NARRATIVE_EXPIRES ? "aging" : "expired" }; };
+export function narrativeBoard() {
+  const calls = db.prepare("SELECT * FROM narrative_calls WHERE COALESCE(updated_t, t) > ? ORDER BY COALESCE(updated_t, t) DESC LIMIT 60").all(now() - 12 * H).map(narShape);
+  const scored = db.prepare("SELECT source, best_mult, med_mult, lead_mult, detect_ms FROM narrative_calls WHERE status = 'scored' AND t > ?").all(now() - 14 * 24 * H);
+  const rec = (list) => ({ n: list.length, bestRan3x: list.filter((x) => (x.best_mult || 0) >= 3).length, typicalCoin: median(list.filter((x) => x.med_mult != null).map((x) => x.med_mult)),
+    leadCoin: median(list.filter((x) => x.lead_mult != null).map((x) => x.lead_mult)), leadN: list.filter((x) => x.lead_mult != null).length,
+    detectSecs: (() => { const d = median(list.filter((x) => x.detect_ms != null).map((x) => x.detect_ms)); return d == null ? null : Math.round(d / 1000); })() });
+  return { calls, record: { all: rec(scored), burst: rec(scored.filter((x) => x.source === "cluster")), scout: rec(scored.filter((x) => (x.source || "scout") === "scout")) }, scout: scoutStatus() };
 }
 
 // ---------- API ----------
@@ -895,11 +962,7 @@ export function picksData() {
   const watch = db.prepare(`SELECT r.mint, r.grade, r.score, r.verdict, r.report, r.t, r.tier, t.symbol, t.name, t.image, t.mcap FROM research r JOIN tokens t ON t.mint = r.mint
     WHERE r.t > ? AND r.tier = 'deep' ORDER BY r.score DESC LIMIT 12`).all(dayStart.getTime())
     .map((x) => { const rep = json(x.report, {}); return { ...x, report: undefined, trade: rep.trade || null, tag: rep.narrative?.tag }; });
-  const narratives = db.prepare("SELECT * FROM narrative_calls WHERE t > ? ORDER BY t DESC LIMIT 40").all(now() - 48 * H)
-    .map((n) => ({ ...n, keywords: json(n.keywords, []), catalysts: json(n.catalysts, {}), matches: json(n.matches, []), examples: json(n.examples, []),
-      // The research is as old as the scout; only the coin prices underneath it are refreshed.
-      researchAge: now() - n.t, pricesAge: n.checked_t ? now() - n.checked_t : null,
-      review: now() - n.t < NARRATIVE_FRESH ? "fresh" : now() - n.t < NARRATIVE_EXPIRES ? "aging" : "expired" }));
+  const narratives = db.prepare("SELECT * FROM narrative_calls WHERE t > ? ORDER BY COALESCE(updated_t, t) DESC LIMIT 40").all(now() - 48 * H).map(narShape);
   const pb = playbook();
   const history = db.prepare("SELECT version, t, notes, changes, tuning FROM playbook ORDER BY version DESC LIMIT 10").all().map((p) => ({ ...p, changes: json(p.changes, []), tuning: json(p.tuning, {}) }));
   // Why there are (or are not) buy calls: what the deep reads actually said.
@@ -937,6 +1000,7 @@ function backfill() {
 export function startBrain(raise, enqueue) {
   raiseFn = raise; enqueueFn = enqueue;
   try { backfill(); backfillPicks(); replayPicks(); } catch (e) { logEvent("error", `backfill: ${e.message}`); }
+  onLiveTrade(onPickTrade);
   const timers = [
     setInterval(() => trackTick(), 60_000),
     setInterval(() => fastTick(), 1000),
@@ -946,7 +1010,7 @@ export function startBrain(raise, enqueue) {
   ];
   setTimeout(() => trackTick(), 20_000);
   // First scout a few minutes after start, unless one ran recently (restarts shouldn't re-scout).
-  const lastScout = db.prepare("SELECT MAX(t) t FROM narrative_calls").get().t || 0;
+  const lastScout = scoutStatus().lastOk || 0;
   setTimeout(() => { if (settings.scoutEveryMin > 0 && now() - lastScout > settings.scoutEveryMin * MIN) scout(); }, 3 * MIN);
   return () => timers.forEach(clearInterval);
 }

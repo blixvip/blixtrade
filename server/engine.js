@@ -8,6 +8,8 @@ import { startWallets, walletSignals, revalidateWinners } from "./wallets.js";
 import { CURVE_DEX, readingProblem, exitState, classifyAsset, safetyVerdict, cleanLinks, safeUrl } from "./quality.js";
 import * as health from "./health.js";
 import { meta } from "./db.js";
+import { onLiveCreate } from "./livetrades.js";
+import { startCoverage } from "./coverage.js";
 
 export const bus = new EventEmitter();
 export const stats = { launchesSeen: 0, nursery: 0, graduated: 0, tracked: 0, signals: 0, pump: "connecting", pumpLast: 0, lastCycle: 0, errors: 0, quarantined: 0, startedAt: Date.now() };
@@ -22,22 +24,29 @@ const nursery = new Map(); // mint -> { seen, symbol, name, source }
 export const launchLog = [];
 // The newest launches with full detail, for the Pulse view's "New pairs" column.
 export const recentLaunches = [];
+// The last couple of hours of launches by mint (name, ticker, metadata link, dev), so a coin that turns up
+// close to bonding on the live trade feed can be shown with its name before the radar tracks it.
+export const launchIndex = new Map();
 // How many coins each dev wallet launched in the last 6h (serial launchers are mostly rugs).
 export const devLaunches = new Map();
 
 // The launch log is kept in SQLite too, so a restart doesn't wipe 6 hours of narrative history.
 db.exec("CREATE TABLE IF NOT EXISTS launches (t INTEGER, name TEXT, symbol TEXT, creator TEXT)");
 db.exec("CREATE INDEX IF NOT EXISTS launches_t ON launches(t)");
-for (const l of db.prepare("SELECT t, name, symbol, creator FROM launches WHERE t > ? ORDER BY t").all(Date.now() - 6 * 3600e3)) {
-  launchLog.push(l);
+// The mint and metadata link are kept too, so a restart does not forget the name of every coin launched in
+// the last 6 hours (a coin that wakes up later would otherwise show up nameless, or not at all).
+for (const col of ["mint TEXT", "uri TEXT"]) { try { db.exec(`ALTER TABLE launches ADD COLUMN ${col}`); } catch {} }
+for (const l of db.prepare("SELECT t, name, symbol, creator, mint, uri FROM launches WHERE t > ? ORDER BY t").all(Date.now() - 6 * 3600e3)) {
+  launchLog.push({ t: l.t, name: l.name, symbol: l.symbol, creator: l.creator });
   if (l.creator) devLaunches.set(l.creator, (devLaunches.get(l.creator) || 0) + 1);
+  if (l.mint) launchIndex.set(l.mint, { mint: l.mint, name: l.name, symbol: l.symbol, creator: l.creator, uri: l.uri, pool: "pump", seen: l.t, restored: true });
 }
 let unsaved = [];
 function saveLaunches() {
   if (!unsaved.length) return;
-  const ins = db.prepare("INSERT INTO launches (t, name, symbol, creator) VALUES (?, ?, ?, ?)");
+  const ins = db.prepare("INSERT INTO launches (t, name, symbol, creator, mint, uri) VALUES (?, ?, ?, ?, ?, ?)");
   db.exec("BEGIN");
-  for (const l of unsaved) ins.run(l.t, l.name, l.symbol, l.creator || null);
+  for (const l of unsaved) ins.run(l.t, l.name, l.symbol, l.creator || null, l.mint || null, l.uri || null);
   db.exec("COMMIT");
   unsaved = [];
   db.prepare("DELETE FROM launches WHERE t < ?").run(Date.now() - 6 * 3600e3);
@@ -61,16 +70,8 @@ function startPump() {
   return src.pumpStream({
     onStatus: (s) => { stats.pump = s; s === "connected" ? health.ok("pumpportal") : health.fail("pumpportal", s); },
     onToken: (t) => {
-      stats.launchesSeen++;
       stats.pumpLast = now();
-      const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
-      launchLog.push(entry);
-      unsaved.push(entry);
-      if (t.creator) devLaunches.set(t.creator, (devLaunches.get(t.creator) || 0) + 1);
-      if (nursery.size < 20000) nursery.set(t.mint, { ...t, seen: now() });
-      recentLaunches.push({ ...t, seen: now(), devCount: t.creator ? devLaunches.get(t.creator) : 1 });
-      bus.emit("launch", { mint: t.mint, symbol: t.symbol, name: t.name, mcapSol: t.mcapSol, devSol: t.devSol, devCount: t.creator ? devLaunches.get(t.creator) : 1 });
-      if (recentLaunches.length > 200) recentLaunches.splice(0, recentLaunches.length - 200);
+      addLaunch(t);
     },
     onMigration: ({ mint }) => {
       stats.graduated++;
@@ -78,8 +79,36 @@ function startPump() {
       adopt({ mint, source: "pump-graduated" });
       db.prepare("UPDATE tokens SET graduated = 1 WHERE mint = ?").run(mint);
       pendingGraduations.add(mint);
+      bus.emit("migration", mint);
     },
   });
+}
+
+// One way in for a launch, whichever feed saw it first (PumpPortal, or the chain itself via the live feed).
+export const launchFeeds = { pumpportal: 0, chainOnly: 0 };
+function addLaunch(t) {
+  if (!t.mint || launchIndex.has(t.mint)) return false;
+  t.source === "pump-chain" ? launchFeeds.chainOnly++ : launchFeeds.pumpportal++;
+  stats.launchesSeen++;
+  const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
+  launchLog.push(entry);
+  unsaved.push({ ...entry, mint: t.mint, uri: t.uri });
+  if (t.creator) devLaunches.set(t.creator, (devLaunches.get(t.creator) || 0) + 1);
+  if (nursery.size < 20000) nursery.set(t.mint, { ...t, seen: now() });
+  const launch = { ...t, seen: now(), devCount: t.creator ? devLaunches.get(t.creator) : 1 };
+  recentLaunches.push(launch);
+  launchIndex.set(t.mint, launch);
+  if (launchIndex.size > 24000) for (const k of [...launchIndex.keys()].slice(0, 3000)) launchIndex.delete(k);
+  bus.emit("launch", { mint: t.mint, symbol: t.symbol, name: t.name, mcapSol: t.mcapSol, devSol: t.devSol, devCount: launch.devCount });
+  if (recentLaunches.length > 400) recentLaunches.splice(0, recentLaunches.length - 400);
+  return true;
+}
+// A coin created on chain that PumpPortal has not announced within 2 seconds (it is usually ~0.2s ahead)
+// is added from the chain: the gaps in PumpPortal's feed no longer become invisible coins.
+function fillLaunchGaps() {
+  onLiveCreate((c) => setTimeout(() => {
+    if (!launchIndex.has(c.mint)) addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.uri, creator: c.creator, pool: "pump", mcapSol: null, devSol: null, source: "pump-chain" });
+  }, 2000));
 }
 const pendingGraduations = new Set();
 
@@ -504,6 +533,8 @@ export function start() {
     try { rebuildFromSnapshots(); meta.set("repair", "2"); } catch (e) { try { db.exec("ROLLBACK"); } catch {} logEvent("error", `data repair: ${e.message}`); }
   }
   const pump = startPump();
+  fillLaunchGaps();
+  startCoverage();
   const stopWallets = startWallets((ev) => {
     bus.emit("walletTrade", ev);
     walletSignals(ev, raise, adoptMint, vet).catch((e) => logEvent("error", `wallet signal: ${e.message}`));

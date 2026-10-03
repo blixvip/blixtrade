@@ -196,9 +196,22 @@ test("traction: real demand scores high, a dead or run-away coin scores low", ()
   assert.equal(Q.tractionOfSources({}), null);
 });
 
-test("pick rule: needs demand, a sane size, and an AI that does not say avoid", async () => {
+test("pick rule by default: live demand or the launch model decides, the AI's call does not", async () => {
   const { pickGate } = await import("../server/brain.js");
-  const P = { pickMinScore: 40, pickMinTraction: 60, pickMinPwin: 25, pickMinMcap: 15000, pickMaxMcap: 250000 };
+  const P = { pickMinTraction: 65, pickMinMcap: 15000, pickMaxMcap: 250000 };
+  const r = (o) => ({ score: 20, traction: 70, trade: { action: "watch", pWin: 30 }, ...o });
+  assert.equal(pickGate(r(), 80000, P), null);
+  assert.equal(pickGate(r({ trade: { action: "avoid", pWin: 2 } }), 80000, P), null, "an AI avoid no longer blocks a coin with real demand");
+  assert.match(pickGate(r({ traction: 50, trade: { action: "buy", pWin: 90 } }), 80000, P), /traction/, "an AI buy no longer passes a coin without demand");
+  assert.match(pickGate(r(), 5000, P), /below/);
+  assert.match(pickGate(r(), 900000, P), /above/);
+  assert.match(pickGate(r({ traction: null }), 80000, P), /no live demand/);
+  assert.equal(pickGate(r({ traction: 5, early: { strong: true } }), 4000, P), null, "the launch model's top tenth is a pick at any size");
+});
+
+test("pick rule with the AI switched back in: needs demand, a sane size, and an AI that does not say avoid", async () => {
+  const { pickGate } = await import("../server/brain.js");
+  const P = { aiInGate: true, pickMinScore: 40, pickMinTraction: 60, pickMinPwin: 25, pickMinMcap: 15000, pickMaxMcap: 250000 };
   const r = (o) => ({ score: 20, traction: 70, trade: { action: "watch", pWin: 30 }, ...o });
   assert.equal(pickGate(r(), 80000, P), null);
   assert.match(pickGate(r({ trade: { action: "avoid", pWin: 60 } }), 80000, P), /avoid/);
@@ -265,7 +278,7 @@ test("the same SQL is compiled once and reused", async () => {
 test("early rule and launch model end to end", async () => {
   const { pickGate, earlyPick } = await import("../server/brain.js");
   const E = await import("../server/early.js");
-  const P = { pickMinScore: 40, pickMinTraction: 60, pickMinPwin: 25, pickMinMcap: 15000, pickMaxMcap: 250000, earlyMinTraders: 25, earlyMinPwin: 20 };
+  const P = { aiInGate: true, pickMinScore: 40, pickMinTraction: 60, pickMinPwin: 25, pickMinMcap: 15000, pickMaxMcap: 250000, earlyMinTraders: 25, earlyMinPwin: 20 };
   const fresh = (o) => ({ score: 50, traction: 30, stage: "new", trade: { action: "watch", pWin: 25 }, live: { traders: 40, buys: 30, sells: 12 }, ...o });
   assert.equal(pickGate(fresh(), 6000, P), null);                                              // small, new, real buyers, AI would trade it
   assert.match(pickGate(fresh({ live: { traders: 8, buys: 30, sells: 12 } }), 6000, P), /traction/);   // too few wallets
@@ -303,4 +316,181 @@ test("risk guard: a run of losing exits pauses new picks", async () => {
   assert.match(g.why, /losing exits in a row/);
   assert.ok(g.until > t);
   db.prepare("DELETE FROM outcomes WHERE ref LIKE 'guard%'").run();
+});
+
+test("exit rules on a tape: targets fill at their level, stops fill where the price actually was", async () => {
+  const R = await import("../server/rules.js");
+  const bars = (ms) => ms.map((m, i) => [i * 10, 10000 * m]);
+  const cost = R.costOf(3);
+  // runs to 2.4x then gives it back: half out at 2x, the rest on the trail
+  const run = R.simExit(bars([1, 1.4, 2.4, 2.0, 1.5, 1.2]), 0);
+  assert.equal(run.why, "take-profit, then trail");
+  assert.ok(Math.abs(run.x - (0.5 * 2 + 0.5 * 1.5) * cost) < 1e-9);
+  // gaps straight through a -40% stop: the fill is the 0.3 it printed, not the 0.6 the rule names
+  const gap = R.simExit(bars([1, 0.95, 0.3, 0.2]), 0);
+  assert.equal(gap.why, "stop");
+  assert.ok(Math.abs(gap.x - 0.3 * cost) < 1e-9);
+  // no stop, but out after 3 minutes if it has gone nowhere
+  const flat = R.simExit(bars([1, ...Array(20).fill(0.9)]), 0, { stopPct: 0, flatMin: 3, flatX: 1 });
+  assert.equal(flat.why, "flat");
+  assert.equal(flat.secs, 180);
+  // a tape that ends with the position still open sells at the last price
+  assert.equal(R.simExit(bars([1, 1.1, 1.2]), 0).why, "end of tape");
+  // an order is filled on the first bar after the decision, never on one already past
+  assert.equal(R.entryBar(bars([1, 1, 1, 1]), 12, 1), 2);
+  assert.equal(R.entryBar(bars([1, 1]), 500), -1);
+  // walk-forward: on coins that all double then die, selling everything at the target beats trailing half
+  const entries = Array.from({ length: 40 }, () => ({ bars: bars([1, 1.6, 2.1, 0.4, 0.1]), i0: 0 }));
+  const wf = R.walkForward(entries);
+  assert.ok(wf.best.test.avg > wf.base.test.avg && wf.best.test.n === 12);
+});
+
+test("tapes: bars are saved in chunks and read back as one record", async () => {
+  const T = await import("../server/tape.js");
+  db.prepare("INSERT INTO tape (mint, t, t0, bars) VALUES ('TapeMint', 1, 1000, ?)").run(JSON.stringify([[0, 10000, 3, 1, 4], [2, 12000, 5, 1, 6]]));
+  db.prepare("INSERT INTO tape (mint, t, t0, bars) VALUES ('TapeMint', 2, 1000, ?)").run(JSON.stringify([[5, 9000, 5, 4, 7]]));
+  // a later recording of the same coin (after it bonded) started its own clock 60 seconds in
+  db.prepare("INSERT INTO tape (mint, t, t0, bars) VALUES ('TapeMint', 3, 61000, ?)").run(JSON.stringify([[1, 20000, null, null, null]]));
+  const tp = T.readTape("TapeMint");
+  assert.equal(tp.t0, 1000);
+  assert.deepEqual(tp.bars.map((b) => b[0]), [0, 2, 5, 61]);
+  assert.equal(T.readTape("NoSuchMint"), null);
+});
+
+test("narrative bursts: several launchers on one word or one post, with real buyers behind them", async () => {
+  const C = await import("../server/clusters.js");
+  assert.deepEqual([...C.textKeys({ symbol: "$BLOBBY", name: "Blobby the official VS Code pet" })].sort(), ["w:blobby", "w:code", "w:pet"]);
+  assert.deepEqual([...C.linkKeys({ twitter: "https://x.com/code/status/1234567890?s=20", website: "https://www.blobby.dev/" })].sort(), ["d:blobby.dev", "x:1234567890"]);
+  assert.deepEqual([...C.linkKeys({ twitter: "https://x.com/BlobbyPet", website: "https://x.com/home" })], ["h:blobbypet"]);
+  assert.deepEqual([...C.linkKeys({ website: "javascript:alert(1)" })], []);
+  const t = Date.now(), MIN = 60e3;
+  const member = (i, mins, dev) => ({ mint: `m${i}`, symbol: "BLOBBY", name: "Blobby", creator: dev, t: t - mins * MIN });
+  const stats = (rows) => (mint) => rows[mint] && { traders: { size: rows[mint][0] }, buys: rows[mint][1], sells: rows[mint][2], vol: 3, mc: 60, mc0: 30, ath: 90 };
+  const five = [member(1, 8, "a"), member(2, 6, "b"), member(3, 4, "c"), member(4, 2, "d"), member(5, 1, "e")];
+  // five launchers in ten minutes on a word that never appeared before, one coin with 45 real buyers
+  const hot = C.measure("w:blobby", five.map((m) => m.t), five, t, stats({ m1: [45, 60, 20], m3: [6, 5, 2] }));
+  assert.equal(hot.forming, true);
+  assert.equal(hot.lead.mint, "m1");
+  assert.ok(hot.lift > 10 && hot.devs === 5 && hot.traders === 51);
+  // the same burst with nobody buying is launch spam: recorded, never looked up
+  const spam = C.measure("w:blobby", five.map((m) => m.t), five, t, stats({ m1: [4, 3, 1] }));
+  assert.ok(spam.burst && !spam.money && !spam.forming);
+  // one person launching five copies is not a narrative
+  const farm = five.map((m) => ({ ...m, creator: "same" }));
+  assert.equal(C.measure("w:blobby", farm.map((m) => m.t), farm, t, stats({ m1: [45, 60, 20] })).forming, false);
+  // a word that shows up all day (a dog coin every few minutes) is not a burst at the same count
+  const always = Array.from({ length: 70 }, (_, i) => t - (170 - i * 2.4) * MIN);
+  assert.equal(C.measure("w:dog", [...always, ...five.map((m) => m.t)].sort((a, b) => a - b), five, t, stats({ m1: [45, 60, 20] })).burst, false);
+  // three launches linking the same post are enough
+  const three = five.slice(2);
+  assert.equal(C.measure("x:1234567890", three.map((m) => m.t), three, t, stats({ m3: [41, 50, 9] })).forming, true);
+});
+
+test("one story is one narrative row, however many times it is found", async () => {
+  const C = await import("../server/clusters.js");
+  await import("../server/brain.js");
+  const a = C.upsertNarrative({ name: "Blobby VS Code pet", stage: "early", thesis: "first", keywords: ["blobby", "vscode", "pet"], confidence: 55, source: "cluster", clusterKey: "w:blobby", detectMs: 21000 });
+  assert.equal(a.updated, false);
+  // the scout finds the same story under a slightly different name an hour later
+  const b = C.upsertNarrative({ name: "VS Code's Blobby", stage: "running", thesis: "second", keywords: ["blobby", "pet", "code"], confidence: 70, source: "scout" });
+  assert.deepEqual([b.id, b.updated], [a.id, true]);
+  const row = db.prepare("SELECT * FROM narrative_calls WHERE id = ?").get(a.id);
+  assert.deepEqual([row.stage, row.confidence, row.seen, row.source, row.detect_ms], ["running", 70, 2, "cluster", 21000]);
+  assert.equal(C.upsertNarrative({ name: "Something else entirely", stage: "early", keywords: ["moose", "troy"], confidence: 40 }).updated, false);
+});
+
+test("Grok budget: each job stops at its share of the day, narrative work last", async () => {
+  const G = await import("../server/grok.js");
+  const S = await import("../server/settings.js");
+  const was = S.settings.grokDailyBudget;
+  S.settings.grokDailyBudget = 2;
+  for (const lane of ["narrative", "scout", "deep", "quick"]) assert.equal(G.grokOver(lane), null);
+  // a searched scout that cost $1.30 (the API reports cost in ticks, ten billion to the dollar)
+  assert.equal(G.record("scout", "grok-4.7", 9000, { cost_in_usd_ticks: 1.3e10, total_tokens: 9000, num_server_side_tools_used: 3 }), 1.3);
+  assert.equal(db.prepare("SELECT cost FROM ai_spend WHERE lane = 'scout'").get().cost, 1.3);
+  assert.match(G.grokOver("scout"), /scout calls stop at \$1\.20/);
+  assert.equal(G.grokOver("narrative"), null, "narrative cards may still use what is left");
+  assert.equal(G.grokOver("quick"), null, "quick calls have spent nothing of their own share");
+  G.record("quick", "grok-4-fast-non-reasoning", 1000, { cost_in_usd_ticks: 0.5e10 });
+  assert.match(G.grokOver("quick"), /quick reads have used \$0\.50/);
+  G.record("narrative", "grok-4.7", 7000, { cost_in_usd_ticks: 0.3e10 });
+  assert.match(G.grokOver("narrative"), /daily budget of \$2\.00 is spent/);
+  assert.equal(G.grokOver("bench"), null, "the benchmark is never held back");
+  assert.equal(G.grokSpend().lanes.scout.calls, 1);
+  S.settings.grokDailyBudget = 0;
+  assert.equal(G.grokOver("quick"), null, "a budget of 0 means no limit");
+  S.settings.grokDailyBudget = was;
+});
+
+test("holder ledger: dev, snipers, bundle and top 10 come from the trade feed alone", async () => {
+  const H = await import("../server/holders.js");
+  const mint = "HOLDMINT";
+  E.launchIndex.set(mint, { mint, creator: "DEV", seen: Date.now() });
+  const s = { progress: 0 };
+  const trade = (user, tokens, buy, slot) => { s.progress = Math.max(0, Math.min(1, s.progress + (buy ? tokens : -tokens) / 793_100_000)); H._onTrade(mint, s, 1, buy, { user, tokens, slot }); };
+  trade("DEV", 50e6, true, 100);        // the curve's first trade, from zero sold: the ledger is complete from here
+  trade("B1", 20e6, true, 100);         // same block as the first trade: a bundle
+  trade("S1", 10e6, true, 101);         // next block: a sniper
+  trade("S2", 5e6, true, 102);          // two blocks later: still a sniper
+  trade("N1", 8e6, true, 110);          // an ordinary buyer
+  let h = H.holdersFor(mint);
+  assert.deepEqual([h.genesis, h.partial, h.holders, h.top10], [true, false, 5, 9.3]);
+  assert.deepEqual([h.dev.pct, h.dev.sold, h.top[0].tag], [5, null, "dev"]);
+  assert.deepEqual([h.bundle.n, h.bundle.pct, h.snipers.n, h.snipers.pct], [1, 2, 2, 1.5]);
+  trade("DEV", 49.5e6, false, 120);     // the dev dumps 99% of what it held
+  trade("S1", 10e6, false, 121);        // one sniper out
+  h = H.holdersFor(mint);
+  assert.deepEqual([h.dev.sold, h.snipers.sold, h.holders], ["all", 1, 4]);
+  assert.equal(H.liveHolders(mint)[3], 2, "the live push carries dev-sold as 2");
+  assert.equal(H.rowHolders(mint).ds, "all");
+  // A coin whose first trade the radar missed: holders are partial, and no sniper or bundle figure is claimed.
+  H._onTrade("LATEMINT", { progress: 0.4 }, 1, true, { user: "X", tokens: 1e6, slot: 5 });
+  const late = H.holdersFor("LATEMINT");
+  assert.deepEqual([late.partial, late.genesis, late.snipers, late.bundle, late.holders], [true, false, null, null, 1]);
+});
+
+test("paper desk: sizes parse, a buy needs a live price, and sells book 3% each way", async () => {
+  const P = await import("../server/paper.js");
+  S.settings.quickSizes = "1, 0.25,0.1, bad, 0.25";
+  assert.deepEqual(P.sizes(), [0.1, 0.25, 1]);
+  S.settings.quickSizes = ["0.1", "0.5"];
+  assert.deepEqual(P.sizes(), [0.1, 0.5]);
+  assert.throws(() => P.open("So11111111111111111111111111111111111111112", 0.5), /No live price/);
+  assert.throws(() => P.open("nope", 0.5), /not a Solana address/);
+  assert.throws(() => P.open("So11111111111111111111111111111111111111112", 0), /between 0 and 1000/);
+  // A position entered at $50k and sold at $100k: 2x less 3% each way = 1.88x on each half.
+  db.prepare("INSERT INTO paper (mint, symbol, t, sol, usd, mcap0, src, peak, low, last, last_t) VALUES ('M', 'M', ?, 1, 100, 50000, 'live', 50000, 50000, 50000, ?)").run(Date.now(), Date.now());
+  const id = db.prepare("SELECT id FROM paper WHERE mint = 'M'").get().id;
+  const half = P.sell(id, 50, { why: "test", mcap: 100000 });
+  assert.deepEqual([half.status, half.usd, half.sol], ["open", 50, 0.5]);
+  assert.equal(P.sell(id, 100, { why: "test", mcap: 100000 }).status, "closed");
+  const closed = db.prepare("SELECT pnl FROM paper WHERE mint = 'M' AND status = 'closed'").all();
+  assert.equal(closed.length, 2);
+  const mult = 2 * (0.97 / 1.03);
+  for (const c of closed) assert.ok(Math.abs(c.pnl - 50 * (mult - 1)) < 1e-6, `pnl ${c.pnl}`);
+  const d = P.desk();
+  assert.deepEqual([d.summary.allN, d.summary.open, Math.round(d.summary.allPnl)], [2, 0, 88]);
+  assert.throws(() => P.sell(id, 100, { mcap: 1 }), /No open paper position/);
+});
+
+test("paper desk: trade-panel fills use the real curve quote (fee + price impact), round trip loses both", async () => {
+  const P = await import("../server/paper.js");
+  const L = await import("../server/livetrades.js");
+  const mint = "QuoteTest" + "1".repeat(31) + "pump";
+  // A fresh pump.fun curve: 30 SOL / 1.073B virtual, 1.25% fee.
+  L.live.set(mint, { mint, mc: 28, progress: 0, vSol: 30, vTok: 1_073_000_000, feeBps: 125, resT: Date.now(), last: Date.now(), buys: 0, sells: 0, traders: new Set(), hist: [] });
+  L.feed.connected = true; L.feed.lastMsg = Date.now(); L.feed.solUsd = 100; L.feed.solKnown = true;
+  const pos = await P.openQuoted(mint, 1);
+  // 1 SOL gross -> 1/1.0125 net into the curve -> tokens = vTok - k/(vSol + net)
+  const net = 1 / 1.0125, tokens = 1_073_000_000 - (30 * 1_073_000_000) / (30 + net);
+  assert.ok(Math.abs(pos.tokens - tokens) < 1e-3, `tokens ${pos.tokens} vs ${tokens}`);
+  assert.equal(pos.fill.src, "curve");
+  assert.ok(pos.fill.impactPct > 3 && pos.fill.impactPct < 5, `impact ${pos.fill.impactPct}`);
+  // Selling right back (the reserves did not move: our paper buy is not on chain) returns less than 1 SOL.
+  const sold = await P.sellQuoted(pos.id, 100);
+  assert.equal(sold.status, "closed");
+  // Only the fee both ways: 1 / 1.0125 into the curve, back out less 1.25%.
+  assert.ok(Math.abs(sold.exit_sol - (1 / 1.0125) * 0.9875) < 1e-9, `exit ${sold.exit_sol}`);
+  assert.ok(Math.abs(sold.pnl - (sold.exit_sol - 1) * 100) < 1e-6);
+  L.live.delete(mint);
 });

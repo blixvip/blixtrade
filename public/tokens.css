@@ -53,7 +53,7 @@
 
   --z-sticky: 5; --z-sticky-nav: 12; --z-sheet: 30; --z-toast: 40; --z-modal: 50;
   --banner-height: 30px;
-  --side: 208px;
+  --side: 184px;
 
   /* names the older rules still use, pointed at the tokens above */
   --bg: var(--color-paper); --bg-2: var(--color-paper-2); --card: var(--color-paper-3); --card-2: var(--color-paper-4); --card-3: var(--color-paper-5);

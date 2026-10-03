@@ -5,25 +5,28 @@ import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { ask, extractJson, claudeStatus, FAST_MODEL } from "./ai.js";
 import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
-import { askGrok, grokInstalled, grokStatus, grokBlocked } from "./grok.js";
+import { askGrok, grokInstalled, grokStatus, grokBlocked, grokReady } from "./grok.js";
 import { trackGrade, considerCall, considerPick, playbookPrompt, playbook, evidence } from "./brain.js";
 import { liveStats, live } from "./livetrades.js";
 import { triageFor } from "./triage.js";
 import { earlyFor } from "./early.js";
 import { getMeta } from "./pulse.js";
-import { verdict, vet } from "./engine.js";
+import { verdict, vet, bus, enrichNow } from "./engine.js";
 import { safeUrl, publicUrl, traction, tractionOfSources } from "./quality.js";
-const grokDeep = () => settings.deepProvider !== "claude" && grokInstalled() && !grokBlocked();
+const grokDeep = () => settings.deepProvider !== "claude" && grokReady("deep");
 const deepMin = () => playbook().tuning.deepMinScore ?? settings.deepMinScore;
 
 // Fast lane: Grok on this PC's SuperGrok login (searches X live), Groq as the fallback when a key is set.
-const grokOn = () => settings.fastProvider !== "groq" && settings.fastProvider !== "claude" && grokInstalled() && !grokBlocked();
+const grokOn = () => settings.fastProvider !== "groq" && settings.fastProvider !== "claude" && grokReady("quick");
+// Quick calls go to Grok's fastest model (about a second, no search) whenever its daily share allows,
+// whatever the fast lane is set to: it is the one job where Grok is both the quickest and nearly free.
+const grokQuick = () => settings.quickGrok && settings.quickReads !== false && grokReady("quick");
 // Last resort for speed: Claude Haiku on this PC's Claude login. No live X search, but a read takes seconds.
 const claudeFast = () => settings.claudeFast && claudeStatus().ready;
-const fastReady = () => grokOn() || groqReady() || claudeFast();
+const fastReady = () => grokOn() || grokQuick() || groqReady() || claudeFast();
 const fastStatus = () => {
   const g = grokStatus(), q2 = groqStatus();
-  const provider = grokOn() ? "grok" : q2.ready ? "groq" : claudeFast() ? "claude" : null;
+  const provider = grokOn() || grokQuick() ? "grok" : q2.ready ? "groq" : claudeFast() ? "claude" : null;
   const cur = provider === "grok" ? g : q2;
   return { ready: Boolean(provider), provider, search: provider === "grok" && settings.grokSearch, avgMs: cur.avgMs, lastError: cur.lastError,
     limits: provider === "grok" ? g.limits : null, cooling: provider === "grok" ? (g.coolingSecs ? [{ model: "Grok", secs: g.coolingSecs }] : []) : q2.cooling, grok: g, groq: q2 };
@@ -153,17 +156,29 @@ async function copycats(t) {
     const byMint = new Map();
     for (const p of same) { const m = p.baseToken.address; if (!byMint.has(m) || (p.marketCap || 0) > (byMint.get(m).marketCap || 0)) byMint.set(m, p); }
     const list = [...byMint.values()].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
-    const rank = list.findIndex((p) => p.baseToken.address === t.mint);
     const oldest = [...list].sort((a, b) => (a.pairCreatedAt || 9e15) - (b.pairCreatedAt || 9e15))[0];
-    return { sameTicker: list.length, rankByMcap: rank >= 0 ? rank + 1 : null, isOldest: oldest?.baseToken.address === t.mint, biggest: list[0] ? { mcap: Math.round(list[0].marketCap || 0), isThis: list[0].baseToken.address === t.mint } : null };
+    // The answer is shared by every coin with this ticker, so it keeps the ranking itself; gather() reads this coin's place off it.
+    return { sameTicker: list.length, mints: list.map((p) => p.baseToken.address), oldest: oldest?.baseToken.address || null, biggest: list[0] ? { mcap: Math.round(list[0].marketCap || 0) } : null };
   } catch { return null; }
 }
 
 // A source that has not answered in time is left out rather than holding the whole read up.
 const within = (p, ms, fallback = null) => ms ? Promise.race([p, new Promise((ok) => setTimeout(ok, ms, fallback))]) : p;
+// Many launches point at the same X account, the same post, or share a ticker: an answer is reused for
+// ten minutes instead of asked for again for every copy. A lookup still in flight is shared too.
+const lookups = new Map();
+function remember(key, fn) {
+  const c = lookups.get(key);
+  if (c && now() - c.t < 10 * MIN) return c.p;
+  const p = Promise.resolve().then(fn).catch(() => null);
+  lookups.set(key, { t: now(), p });
+  if (lookups.size > 1500) for (const [k, v] of lookups) if (now() - v.t > 10 * MIN) lookups.delete(k);
+  return p;
+}
 // `budget`: the longest any one outside source may take (first reads use a short one; a slow website is
-// not worth ten seconds of a coin's first minute).
-export async function gather(t, stage, budget = 0) {
+// not worth ten seconds of a coin's first minute). `quick`: a first call does not open the coin's website
+// or search the news at all; the full report that follows for coins worth it does.
+export async function gather(t, stage, budget = 0, { quick = false } = {}) {
   const g0 = now();
   const meta = await within(metadata(t), budget);
   const links = json(t.links, []);
@@ -171,13 +186,15 @@ export async function gather(t, stage, budget = 0) {
   const site = safeUrl(meta?.website) || links.find((l) => l.type === "website")?.url;
   const xh = xHandle(xUrl);
   const statusLinks = [meta?.twitter, meta?.website, meta?.description, t.description].join(" ").match(/(?:x|twitter)\.com\/[A-Za-z0-9_]+\/status\/\d+/gi) || [];
-  const [profile, siteInfo, tweet, headlines, cats] = await Promise.all([
-    within(xh && !xh.status ? xProfile(xh.user) : null, budget),
-    within(website(site), budget, site ? { url: site, error: "site did not answer in time" } : null),
-    within(xh?.status ? xStatus(xh.user, xh.status) : statusLinks[0] ? xStatus(...statusLinks[0].split(/\.com\/|\/status\//).slice(1, 3)) : null, budget),
-    within(news(t.name && t.name.length > 3 ? t.name : t.symbol), budget, []),
-    within(copycats(t), budget),
+  const st = xh?.status ? [xh.user, xh.status] : statusLinks[0] ? statusLinks[0].split(/\.com\/|\/status\//).slice(1, 3) : null;
+  const [profile, siteInfo, tweet, headlines, same] = await Promise.all([
+    within(xh && !xh.status ? remember(`xp:${xh.user.toLowerCase()}`, () => xProfile(xh.user)) : null, budget),
+    quick ? null : within(website(site), budget, site ? { url: site, error: "site did not answer in time" } : null),
+    within(st ? remember(`xs:${st[1]}`, () => xStatus(st[0], st[1])) : null, budget),
+    quick ? [] : within(news(t.name && t.name.length > 3 ? t.name : t.symbol), budget, []),
+    within(remember(`cc:${String(t.symbol || t.name).toLowerCase()}`, () => copycats(t)), budget),
   ]);
+  const cats = same && { sameTicker: same.sameTicker, rankByMcap: same.mints.indexOf(t.mint) + 1 || null, isOldest: same.oldest === t.mint, biggest: same.biggest && { mcap: same.biggest.mcap, isThis: same.mints[0] === t.mint } };
   const s = json(t.safety) || {};
   const nar = computeNarratives({});
   const themes = themesFor({ ...t, description: meta?.description || t.description });
@@ -337,12 +354,37 @@ function fromQuick(r) {
   r.quick = true;
   return r;
 }
+// The quick call, from whichever model answers fastest: Grok's no-reasoning model (about a second) while
+// its daily share lasts, else Claude Haiku (three to four seconds). A slow or failed Grok answer costs
+// at most four seconds before Haiku takes the coin.
+async function quickCall(data) {
+  const prompt = `Research (JSON):\n${JSON.stringify(slimmer(data))}`, system = SYSTEM_QUICK + playbookPrompt();
+  const done = (text, model, ms) => {
+    const r = parse(text);
+    if (!r.trade?.action) throw new Error("the quick call had no decision in it");
+    return { ...fromQuick(r), model, ms, tier: "fast", searched: false };
+  };
+  if (grokQuick()) {
+    try {
+      const { text, model, ms } = await askGrok(system, prompt, { model: settings.quickGrokModel, search: false, maxTokens: 400, timeout: 4000, lane: "quick", fallback: false });
+      return done(text, model, ms);
+    } catch (e) { if (!claudeFast()) throw e; }
+  }
+  if (!claudeFast()) throw Object.assign(new Error("No fast AI is available right now"), { busy: true });
+  const t0 = Date.now();
+  const { text, model, truncated } = await ask(system, prompt, 400, { model: FAST_MODEL, room: 0 });
+  if (truncated) throw new Error("the answer was cut off");
+  return done(text, model, Date.now() - t0);
+}
+
 export async function gradeFast(data) {
+  // First reads are quick calls from every provider; the full report is the deep lane's job.
+  if (settings.quickReads !== false && (grokQuick() || claudeFast())) return quickCall(data);
   if (grokOn()) {
     try {
       const search = settings.grokSearch;
       const { text, model, ms, searches } = await askGrok((search ? SYSTEM_GROK : SYSTEM_FULL) + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`,
-        { model: settings.grokModel, search, maxTokens: search ? 3000 : 1700 });
+        { model: settings.grokModel, search, maxTokens: search ? 3000 : 1700, lane: "quick" });
       return { ...parse(text), model, ms, searches, tier: "fast" };
     } catch (e) {
       if (!groqReady() && !claudeFast()) throw e;
@@ -358,13 +400,6 @@ export async function gradeFast(data) {
   }
   if (!claudeFast()) throw Object.assign(new Error("No fast AI is available right now"), { busy: true });
   const t0 = Date.now();
-  if (settings.quickReads !== false) {
-    const { text, model, truncated } = await ask(SYSTEM_QUICK + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slimmer(data))}`, 400, { model: FAST_MODEL, room: 0 });
-    if (truncated) throw new Error("the answer was cut off");
-    const r = parse(text);
-    if (!r.trade?.action) throw new Error("the quick call had no decision in it");
-    return { ...fromQuick(r), model, ms: Date.now() - t0, tier: "fast", searched: false };
-  }
   const { text, model, truncated } = await ask(SYSTEM_FULL + playbookPrompt(), `Research (JSON):\n${JSON.stringify(slim(data))}`, 1600, { model: FAST_MODEL });
   if (truncated) throw new Error("the answer was cut off");
   return { ...parse(text), model, ms: Date.now() - t0, tier: "fast", searched: false };
@@ -376,7 +411,7 @@ async function gradeDeep(data, fast) {
   if (grokDeep()) {
     try {
       const { text, model, ms, searches } = await askGrok(SYSTEM_DEEP_GROK(), prompt,
-        { model: settings.deepModel, search: true, maxSearches: settings.deepSearches, effort: "high", maxTokens: 5000, timeout: 300_000 });
+        { model: settings.deepModel, search: true, maxSearches: settings.deepSearches, effort: "high", maxTokens: 5000, timeout: 300_000, lane: "deep" });
       return { ...parse(text), model, ms, searches, tier: "deep" };
     } catch (e) {
       // Out of credits or rate limited: Claude takes the read. Any other failure is reported as it is.
@@ -514,7 +549,7 @@ async function runFast(job) {
   // The safety check runs alongside the read, so a coin that rates well can be entered without waiting for it.
   if (!t.safety_checked) vet(job.mint).catch(() => {});
   try {
-    const data = await gather(t, job.stage, 1500);
+    const data = await gather(t, job.stage, 800, { quick: settings.quickReads !== false });
     const r = await gradeFast(data);
     // A coin seconds old may have no stored price yet: take the live one so its rating is still tracked.
     if (!t.mcap) t.mcap = liveStats(job.mint)?.mc || 0;
@@ -543,7 +578,8 @@ async function runDeep(job) {
   db.prepare("UPDATE research SET status = 'running' WHERE mint = ?").run(job.mint);
   try {
     // Fast read just gathered the sources; refresh them only if they're getting old.
-    const data = fast && job.t > now() - 10 * MIN ? json(job.sources) : await gather(t, job.stage);
+    // (A quick call skipped the website and the news, so its sources are gathered again in full.)
+    const data = fast && !fast.quick && job.t > now() - 10 * MIN ? json(job.sources) : await gather(t, job.stage);
     const r = await gradeDeep(data, fast);
     r.traction = tractionOfSources(data)?.score ?? null;
     if (fast) { r.fast = { grade: fast.grade, score: fast.score, verdict: fast.verdict, model: fast.model, ms: fast.ms }; r.xBuzz ||= fast.xBuzz; }
@@ -701,17 +737,18 @@ export function providers() {
   const g = grokStatus(), c = claudeStatus(), k = groqStatus();
   const name = { grok: "Grok", groq: "Groq", claude: "Claude", haiku: "Claude Haiku" };
   const fastWant = settings.fastProvider === "groq" ? "groq" : settings.fastProvider === "claude" ? "haiku" : "grok";
-  const fastNow = grokOn() ? "grok" : groqReady() && settings.fastProvider !== "claude" ? "groq" : claudeFast() ? "haiku" : null;
+  const fastNow = grokOn() || grokQuick() ? "grok" : groqReady() && settings.fastProvider !== "claude" ? "groq" : claudeFast() ? "haiku" : null;
   const deepWant = settings.deepProvider === "claude" ? "claude" : "grok";
   const deepNow = grokDeep() ? "grok" : c.ready ? "claude" : null;
   const grokWhy = !g.installed ? "Grok is not logged in on this PC (run `grok login`)" : g.blocked ? `${g.blocked}; re-checked ${g.blockedUntil ? `in ${Math.max(1, Math.round((g.blockedUntil - now()) / MIN))} min` : "soon"}` : g.coolingSecs ? `Grok is rate limited for ${g.coolingSecs}s` : null;
-  const lane = (want, cur, why) => ({ configured: want, configuredName: name[want], actual: cur, actualName: cur ? name[cur] : null, fallback: want !== cur, reason: want !== cur ? why : null });
+  // Grok taking the quick calls while the lane is set to Claude is the intended arrangement, not a fallback.
+  const lane = (want, cur, why) => { const fb = want !== cur && !(want === "haiku" && cur === "grok"); return { configured: want, configuredName: name[want], actual: cur, actualName: cur ? name[cur] : null, fallback: fb, reason: fb ? why : null }; };
   return {
-    fast: { ...lane(fastWant, fastNow, fastWant === "grok" ? grokWhy : "no Groq key is saved"), search: fastNow === "grok" && settings.grokSearch,
-      note: fastNow === "haiku" ? "Claude Haiku is doing the first reads: seconds per coin, but it only sees what the radar gathered and cannot search X live." : fastNow ? null : "No fast AI is available, so first reads go straight to the deep lane at its slower pace." },
+    fast: { ...lane(fastWant, fastNow, fastWant === "grok" ? grokWhy : "no Groq key is saved"), search: grokOn() && settings.grokSearch,
+      note: fastNow === "haiku" ? "Claude Haiku is doing the first reads: seconds per coin, but it only sees what the radar gathered and cannot search X live." : grokQuick() && !grokOn() ? "Grok's fastest model makes the first call in about a second (no X search); Claude Haiku takes over when Grok's daily share for quick calls is used." : fastNow ? null : "No fast AI is available, so first reads go straight to the deep lane at its slower pace." },
     deep: { ...lane(deepWant, deepNow, deepWant === "grok" ? grokWhy : c.loginError), search: deepNow === "grok",
       note: deepNow === "claude" ? "Claude reads only what the radar gathered (X profile, linked tweet, website, news). It does not search X live." : null },
-    grok: { installed: g.installed, ok: g.installed && !g.blocked && !g.coolingSecs, blocked: g.blocked, blockedUntil: g.blockedUntil, blockedSince: g.blockedSince, errors: g.errors, calls: g.calls, lastError: g.lastError, lastErrorAt: g.lastErrorAt, lastOk: g.lastOk, tier: g.tier, limits: g.limits },
+    grok: { installed: g.installed, ok: g.installed && !g.blocked && !g.coolingSecs, blocked: g.blocked, blockedUntil: g.blockedUntil, blockedSince: g.blockedSince, errors: g.errors, calls: g.calls, lastError: g.lastError, lastErrorAt: g.lastErrorAt, lastOk: g.lastOk, tier: g.tier, limits: g.limits, spend: g.spend, billing: g.billing },
     groq: { configured: k.ready, errors: k.errors, calls: k.calls, lastError: k.lastError, cooling: k.cooling },
     claude: { ok: c.ready, loginError: c.loginError, errors: c.errors, calls: c.calls, truncated: c.truncated, lastError: c.lastError, lastErrorAt: c.lastErrorAt, lastOk: c.lastOk, usedThisHour: grokDeep() ? 0 : inHour(deepHour), perHour: settings.researchPerHour },
     recovery: !g.installed ? "Run `grok login` once to use your SuperGrok subscription, or add a free Groq key in Settings."
@@ -719,8 +756,26 @@ export function providers() {
   };
 }
 
+// A coin that just left the bonding curve used to wait for the next scan to be noticed (about 80 seconds).
+// Its new pool takes a few seconds to be listed, so it is priced on a short schedule and queued the
+// moment it has a market, by the same bar the scout applies.
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+async function onMigration(mint) {
+  for (const wait of [2000, 5000, 10_000, 20_000]) {
+    await sleep(wait);
+    if (!settings.researchAuto || !fastReady()) return;
+    await enrichNow(mint).catch(() => {});
+    const t = q.getToken.get(mint);
+    if (!t?.pair) continue;
+    if (t.status === "active" && !t.quarantine && (t.asset_class || "meme") === "meme" && (t.mcap || 0) >= 25000 && (t.vol_h1 || 0) >= 5000 && !(json(t.safety)?.danger > 0))
+      enqueue(mint, "bonded", Math.round((t.vol_h1 || 0) / 1000));
+    return;
+  }
+}
+
 export function startResearch(raise) {
   raiseFn = raise;
+  bus.on("migration", (mint) => { onMigration(mint).catch(() => {}); });
   // Jobs that were mid-read when the radar stopped go back in the queue.
   db.prepare("UPDATE research SET status = CASE WHEN fast IS NOT NULL THEN 'deep' ELSE 'queued' END WHERE status = 'running'").run();
   try { trimQueue(); } catch (e) { logEvent("error", `queue: ${e.message}`); }

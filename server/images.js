@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, DATA } from "./db.js";
 import { publicUrl } from "./quality.js";
-import { getMeta } from "./pulse.js";
+import { getMeta, knownImage } from "./pulse.js";
 
 const DIR = path.join(DATA, "img");
 fs.mkdirSync(DIR, { recursive: true });
@@ -18,6 +18,10 @@ const now = () => Date.now();
 const TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif" };
 const BY_EXT = Object.fromEntries(Object.entries(TYPES).map(([t, e]) => [e, t]));
 export const imgStats = { served: 0, fetched: 0, missing: 0, cached: 0 };
+// Told the moment a coin's picture lands on disk, so the page can swap it in without asking again.
+let onPicture = null;
+export const onPictureReady = (fn) => { onPicture = fn; };
+export const hasPicture = (mint) => known.has(mint);
 
 const known = new Map();      // mint -> file name on disk
 for (const f of fs.readdirSync(DIR)) { const m = f.match(/^(.+)\.(\w+)$/); if (m && BY_EXT[m[2]]) known.set(m[1], f); }
@@ -43,9 +47,10 @@ function sniff(b) {
 // Every place a coin's picture might be, smallest and most reliable first.
 export function sources(mint) {
   const out = [];
-  if (/pump$/.test(mint)) out.push(`https://images.pump.fun/coin-image/${mint}?variant=200x200`);
+  // Everything launched on pump.fun is on its picture CDN, including the coins whose address does not end in "pump".
+  out.push(`https://images.pump.fun/coin-image/${mint}?variant=200x200`);
   const t = db.prepare("SELECT image FROM tokens WHERE mint = ?").get(mint);
-  for (const raw of [t?.image, getMeta(mint)?.image]) {
+  for (const raw of [t?.image, getMeta(mint)?.image, knownImage(mint)]) {
     if (!raw) continue;
     // DexScreener's CDN resizes on request: ask for a thumbnail rather than the 800px original.
     const u = /cdn\.dexscreener\.com\/cms\/images\//.test(raw) ? raw.replace(/\?.*$/, "") + "?width=128&height=128&fit=crop&quality=90&format=auto" : raw;
@@ -86,6 +91,7 @@ async function find(mint) {
         await fs.promises.rename(path.join(DIR, file + ".tmp"), path.join(DIR, file));
         known.set(mint, file); missing.delete(mint);
         imgStats.fetched++; imgStats.cached = known.size;
+        try { onPicture?.(mint); } catch {}
         return file;
       } catch {}
     }
@@ -99,7 +105,7 @@ async function find(mint) {
 
 // A coin with no picture yet is looked for again soon (new launches publish theirs within seconds),
 // then less and less often.
-const retryAfter = (n) => Math.min(10 * 60_000, 4000 * 2 ** Math.min(n - 1, 8));
+const retryAfter = (n) => Math.min(10 * 60_000, 1000 * 2 ** Math.min(n - 1, 10));
 
 // { file, type } for a coin's picture, or null when no source has one right now.
 export async function picture(mint) {
@@ -135,6 +141,22 @@ export async function serve(mint, res) {
 export function warm(mints) {
   for (const m of mints) if (!known.has(m) && !flying.has(m) && waiting.length < 40) picture(m).catch(() => {});
 }
+
+// A coin that was created this second: pump.fun's picture CDN has it about half a second later and the
+// metadata file a moment after that, so ask a few times in quick succession instead of waiting for the page.
+const EAGER = [350, 900, 1800, 3500, 7000, 14_000];
+export function eager(mint) {
+  let i = 0;
+  const go = () => {
+    if (known.has(mint)) return;
+    missing.delete(mint);
+    picture(mint).catch(() => null).then((p) => { if (!p && ++i < EAGER.length) setTimeout(go, EAGER[i] - EAGER[i - 1]); });
+  };
+  setTimeout(go, EAGER[0]);
+}
+
+// A new source for a coin's picture just turned up: look again now, whatever the earlier misses said.
+export function retry(mint) { if (known.has(mint)) return; missing.delete(mint); picture(mint).catch(() => {}); }
 
 // Pictures fetched more than three days ago go (a coin still on screen simply gets its picture again).
 export function prunePictures() {

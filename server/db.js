@@ -30,6 +30,7 @@ db.prepare = (sql) => {
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS tokens (
   mint TEXT PRIMARY KEY,
@@ -141,6 +142,9 @@ export function prune() {
   db.prepare("DELETE FROM tokens WHERE status = 'dead' AND updated < ? AND mint NOT IN (SELECT mint FROM signals)").run(now - 2 * 864e5);
   db.prepare("DELETE FROM events WHERE t < ?").run(now - 7 * 864e5);
   db.prepare("DELETE FROM deliveries WHERE t < ?").run(now - 14 * 864e5);
+  try { db.prepare("DELETE FROM ai_spend WHERE t < ?").run(now - 60 * 864e5); } catch {}
+  // Fold the write-ahead log back into the database so it does not grow without limit.
+  try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch {}
 }
 
 // A consistent copy of the database, safe to take while the radar runs. Keeps the newest `keep` copies.

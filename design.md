@@ -155,3 +155,12 @@ The live file is `public/tokens.css`. It is the source of truth.
   --radius: 6px;
 }
 ```
+
+## Pulse rows (v8, 2026-10-02)
+A row is four fixed lines beside a 44px picture with the bonding ring:
+1. ticker (650) · name (muted, ellipsis) … **market cap** (650)
+2. age (up colour, live dot) · launchpad (small coloured square + lowercase name) · venue after bonding · links · contract … volume · 1m change
+3. the stat strip: holders · top 10 % · dev % · DEV SOLD · snipers % · bundle % · dev ×N · TX · 5m window. Labels muted, values ink-2, a bad value in the down colour. No borders.
+4. **rank** (traction 0–100: a small filled square, up colour at 60+) · triage word · AI call (grade colour, no pill) · verdict (muted, one line) … actions: `B 0.25` (outlined, fills on hover), `read ›` (accent link), `Fomo` (muted link).
+
+Nothing in a row is a bordered chip; the only controls are the three actions. Compact mode drops the verdict text and the contract. Column headers are 32px, small capitals, hairline-separated; columns have no radius.

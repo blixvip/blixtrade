@@ -23,7 +23,7 @@ export const THEMES = [
   ["Countries & Cities", /\b(usa|america|china|japan|korea|india|russia|uk|canada|france|brazil|mexico|dubai|nyc|tokyo)\b/i],
 ];
 
-const STOP = new Set(("the a an and or of to in on for with is it this that be are was by from at as your you we our my i me " +
+export const STOP = new Set(("the a an and or of to in on for with is it this that be are was by from at as your you we our my i me " +
   "coin token sol solana crypto meme memecoin official community first new just only all will can get has have not " +
   "https http www com fun io xyz app pump pumpfun dev ca launch live " +
   "every its into more real what when where who why how than then them they their there here out over under about just also " +

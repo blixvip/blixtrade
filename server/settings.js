@@ -42,6 +42,7 @@ export const DEFAULTS = {
   fastProvider: "grok",      // "grok" = this PC's Grok CLI login (SuperGrok, searches X live); "groq" = free Groq key; "claude" = Claude Haiku on this PC's Claude login
   grokModel: "grok-4.7-build-fast",
   grokSearch: true,          // let Grok search X and the web for every coin it reads
+  grokDailyBudget: 3,        // dollars of Grok subscription credit the radar may spend per day (0 = no limit). Narrative work may use all of it; per-coin reads stop earlier.
   triageOn: true,           // rank every new launch: instant rules + a fast LLM (Groq if keyed, else Grok fast)
   triageProvider: "auto",    // auto | groq | grok
   triageModel: "openai/gpt-oss-20b",
@@ -83,14 +84,30 @@ export const DEFAULTS = {
   guardPauseMin: 45,         // for this long
   guardDayLoss: 600,         // and for the rest of the day once $100-a-pick is down this many dollars (0 = off)
   quickReads: true,          // first reads are quick calls (a few seconds); the full report follows for coins worth it
+  quickGrok: true,           // quick calls go to Grok's fastest model (about a second) while its daily share lasts, then Claude Haiku
+  quickGrokModel: "grok-4-fast-non-reasoning",
+  aiInGate: false,           // false = the AI's buy/avoid call does not decide picks (measured: its "buy" picks lost, its "avoid" picks won); it is still shown and scored
   buyConviction: 75,         // minimum conviction for a buy call (the self-review can tune this)
   scoutEveryMin: 120,        // Grok narrative scout: searches X/web for narratives starting to run
   scoutSearches: 12,
+  scoutEffort: "low",        // "low" = about 3 searches and 8 cents a scout; "medium" = about 7 searches and 20 cents
+  narrativeModel: "grok-4.7", // names a burst of same-named launches the moment it has buyers (about 7 seconds and 7 cents each)
+  narrativeCardsPerHour: 6,
   reviewMinNew: 25,          // self-review once this many new graded coins have played out (6h+)
   buyMigrated: false,
   // fomo (free, on-chain)
   fomoAutoFollow: true,      // follow the best Fomo traders the radar sees on-chain
   fomoFollowTop: 15,
+  // remote access: the public hostname a Cloudflare Tunnel points at this PC, and the key a browser must present once
+  // (as ?key=… ; it is then kept in a cookie). Blank key = generated on first start. Local pages never need it.
+  publicHost: "trade.blixvip.com",
+  remoteKey: "",
+  tunnelKey: "",             // shared with the Worker on the public hostname (its REG_KEY secret); blank = no tunnel
+  // paper desk: the one-click buy buttons on every Pulse row (SOL sizes) and the exit rule each new paper position starts with (0 = none)
+  quickSizes: ["0.1", "0.25", "0.5", "1"],
+  paperTake: 0,              // sell everything at this multiple
+  paperStop: 0,              // sell everything this % below the entry
+  paperTrail: 0,             // sell everything this % below its high, once it has been above the entry
 };
 
 function load() {
@@ -100,7 +117,7 @@ function load() {
 export const settings = load();
 
 // Never sent to the browser: the page only learns whether each one is set, and its last 4 characters.
-export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl"];
+export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "remoteKey", "tunnelKey"];
 
 function coerce(k, v) {
   const d = DEFAULTS[k];
