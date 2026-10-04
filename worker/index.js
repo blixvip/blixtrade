@@ -20,6 +20,8 @@ const timingSafeEqual = (a, b) => {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    // One address per page for search engines (and the key cookie is Secure anyway).
+    if (url.protocol === "http:") { url.protocol = "https:"; return Response.redirect(url.toString(), 301); }
     const page = await site(req, env, url);
     if (page) return page;
     if (url.pathname === "/__register") {
