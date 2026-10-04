@@ -37,6 +37,7 @@ export function responsiveness() {
   const worst = (rows) => rows.reduce((m, p) => Math.max(m, p.ms), 0);
   const day = within(24 * 3600e3);
   return { worst10m: worst(within(10 * 60_000)), worst24h: worst(day), over1s: day.filter((p) => p.ms >= 1000).length,
+    recent: pauses.slice(-15),     // when the latest pauses happened, to tell a start-up stall from a recurring one
     slow: [...slow.values()].filter((s) => now - s.lastT < 24 * 3600e3).sort((a, b) => b.worstMs - a.worstMs).slice(0, 8) };
 }
 

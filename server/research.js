@@ -44,7 +44,7 @@ try { db.exec("ALTER TABLE tokens ADD COLUMN uri TEXT"); } catch {}
 // enq_t: when the coin really joined the queue (`queued` is a sort key: now minus priority).
 for (const c of ["tier TEXT", "model TEXT", "ms INTEGER", "fast TEXT", "enq_t INTEGER", "reads INTEGER DEFAULT 1", "enq_mcap REAL"]) try { db.exec(`ALTER TABLE research ADD COLUMN ${c}`); } catch {}
 // The queue is asked "what is waiting?" every second. Without these, each ask walked every stored report.
-db.exec("CREATE INDEX IF NOT EXISTS research_status ON research(status, queued); CREATE INDEX IF NOT EXISTS research_t ON research(t);");
+db.exec("CREATE INDEX IF NOT EXISTS research_status ON research(status, queued); CREATE INDEX IF NOT EXISTS research_t ON research(t); CREATE INDEX IF NOT EXISTS research_status_t ON research(status, t);");
 
 const MIN = 60_000;
 const now = () => Date.now();
@@ -638,8 +638,10 @@ function scout() {
   const t0 = now();
   try { scoutOnce(); } finally { scoutStats.runs++; scoutStats.lastMs = now() - t0; scoutStats.maxMs = Math.max(scoutStats.maxMs * 0.99, scoutStats.lastMs); }
 }
+const nearChecked = new Map();   // mint -> when the scout last looked its record up
 function scoutOnce() {
   trimQueue();
+  if (nearChecked.size > 6000) for (const [m, t] of nearChecked) if (now() - t > 60_000) nearChecked.delete(m);
   if (!settings.researchAuto) return;
   const fast = fastReady();
   // Straight from the live trade feed: a coin is queued the second it crosses 60% bonded with real buyers,
@@ -647,6 +649,10 @@ function scoutOnce() {
   if (fast) {
     for (const [mint, s] of live) {
       if (!(s.progress >= 0.6 && s.progress < 0.995) || now() - s.last > 60_000 || s.traders.size < 20) continue;
+      // Each coin that qualifies is looked up (its whole stored record, safety report included) at most
+      // once every 10 seconds: doing that for all of them every second was most of the scout's cost.
+      if (now() - (nearChecked.get(mint) || 0) < 10_000) continue;
+      nearChecked.set(mint, now());
       const t = q.getToken.get(mint);
       if (!t || t.status !== "active" || t.quarantine || (t.asset_class && t.asset_class !== "meme") || json(t.safety)?.danger > 0) continue;
       enqueue(mint, "near", Math.round(s.progress * 100) * 1000);
