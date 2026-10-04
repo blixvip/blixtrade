@@ -154,10 +154,10 @@ async function lookupPictures() {
 
 // A row for a coin known only from the launch feed and the live trade feed.
 function bare(mint, ai) {
-  const l = launchIndex.get(mint), n = names.get(mint) || {}, m = meta.get(mint) || {};
+  const l = launchIndex.get(mint), n = names.get(mint) || {}, m = meta.get(mint) || {}, pad = live.get(mint)?.pad;
   return { mint, symbol: l?.symbol || n.symbol || null, name: l?.name || n.name || null, image: m.image || n.image || null,
-    age: now() - (l?.seen || n.created || live.get(mint)?.first || now()), mcap: null, graduated: false, dex: "pumpfun",
-    x: m.twitter || null, web: m.website || null, tg: m.telegram || null, desc: m.description || null, creator: l?.creator || null, pool: l?.pool || null,
+    age: now() - (l?.seen || n.created || live.get(mint)?.first || now()), mcap: null, graduated: false, dex: pad ? "launchlab" : "pumpfun",
+    x: m.twitter || null, web: m.website || null, tg: m.telegram || null, desc: m.description || null, creator: l?.creator || null, pool: pad || l?.pool || null,
     devSol: l?.devSol, devCount: l?.creator ? devLaunches.get(l.creator) || 1 : null, state: "watching", ai: ai || null };
 }
 
@@ -258,7 +258,7 @@ export function pulseData() {
     };
     const age = now() - l.seen;
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
-      desc: m.description || null, creator: base.creator || l.creator || null, pool: l.pool || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
+      desc: m.description || null, creator: base.creator || l.creator || null, pool: live.get(l.mint)?.pad || l.pool || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
   }).map(withLive).map(rankRow);
   // A coin that's still trading isn't faded, whatever the 4-minute check said.

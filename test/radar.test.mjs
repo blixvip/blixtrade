@@ -694,3 +694,32 @@ test("old price history thins to each 5 minutes' high and low and leaves the las
   assert.equal(thinSnapshots(now), 0, "already thinned up to a day ago");
   db.exec("DELETE FROM snapshots");
 });
+
+test("a LaunchLab (Bonk) trade is priced from its pool: market cap, progress, size and fee", async () => {
+  const L = await import("../server/launchlab.js");
+  // A real buy seen on chain 2026-10-04 (0.03 SOL in, pool Bqbokd7T...), and that pool's account fields.
+  const ev = Buffer.from("bddb7fd34ee661eea1081a7ba21aa9be6864dd19011fe7f6bc941f56070adf36573f4cd151d66bc30078c5fb51d10200de740e3ee9cf0300d7af30fc06000000ea237e1e86850200b7a6d6a50d0000005eeb7162a28502005fb19aa70d00000080c3c9010000000074c7f3431c000000f824010000000000e09304000000000000000000000000000000000000000000000001", "hex");
+  const acct = Buffer.alloc(429);
+  acct[18] = 6; acct[19] = 9; acct.writeBigUInt64LE(1_000_000_000_000_000n, 21);
+  acct.fill(7, 205, 237);                                                    // some coin
+  acct[237] = 6; acct.fill(0, 238, 269); Buffer.from("069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f00000000001", "hex").copy(acct, 237);   // wrapped SOL
+  const p = L.readPool(acct);
+  assert.equal(p.quote, "So11111111111111111111111111111111111111112"); assert.equal(p.q, 1e9); assert.equal(p.b, 1e6);
+  assert.equal(L.quoteInSol(p.quote, 200, true), 1);
+  const t = L.readTrade(ev, p, 1);
+  assert.equal(t.buy, true);
+  assert.ok(Math.abs(t.sol - 0.03) < 1e-9);
+  assert.ok(Math.abs(t.tokens - 121399.134068) < 1e-6);
+  assert.ok(Math.abs(t.mcSol - 244.11) < 0.05, `market cap ${t.mcSol}`);
+  assert.ok(Math.abs(t.progress - 0.8951) < 0.0005);
+  assert.equal(t.feeBps, 125);
+  // The same pool priced in a dollar coin (6 decimals) is turned into SOL at the going rate.
+  const usd1 = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
+  assert.equal(L.quoteInSol(usd1, 200, true), 1 / 200);
+  assert.ok(Math.abs(L.readTrade(ev, { ...p, quote: usd1, q: 1e6 }, 1 / 200).sol - 30 / 200) < 1e-9);
+  // A pool priced in a token with no known price waits rather than being mispriced.
+  assert.equal(L.quoteInSol("SomeTokenNobodyPrices1111111111111111111111", 200, true), null);
+  assert.equal(L.quoteInSol(usd1, 150, false), null, "no dollar conversion until the SOL price is real");
+  const c = L.readCreate(Buffer.from("97d7e20976a173ae0907b4d157216ae3a7e699d8e8a47f23c3e661adeb0fdada94457a3260fb6766eb0799a070110ebc7290d43fcf681af0d3822362114f5d666b3e1a3c377bc16d824e797ada4b6627bda9ecb7d512953f1bc14fad40c3d22afc17b8d17e276abb06040000002e636f6d040000002e434f4d3600000068747470733a2f2f6d657461646174612e6a37747261636b65722e696f2f6d657461646174612f495641566c7956667a6d2e6a736f6e000080c6a47e8d03000078c5fb51d10200e1770d82010000000100000000000000000000000000000000000000000000000000", "hex"));
+  assert.equal(c.name, ".com"); assert.equal(c.symbol, ".COM"); assert.match(c.uri, /^https:\/\/metadata\.j7tracker\.io\//);
+});

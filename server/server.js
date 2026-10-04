@@ -15,6 +15,7 @@ import * as research from "./research.js";
 import * as brain from "./brain.js";
 import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf } from "./pulse.js";
 import { startLiveTrades, drainUpdates, liveStats, feed as liveFeed } from "./livetrades.js";
+import { startLaunchLab, labStats } from "./launchlab.js";
 import { startHolders, holdersFor, liveHolders, holderStats } from "./holders.js";
 import * as paper from "./paper.js";
 import { quote } from "./quote.js";
@@ -378,6 +379,10 @@ function healthReport() {
     add("coverage", "Coverage (every coin that trades)", !liveFeed.connected ? "degraded" : "ok",
       `${((L.pumpportal || 0) + (L.chainOnly || 0)).toLocaleString()} launches (${(L.chainOnly || 0).toLocaleString()} only seen on chain; PumpPortal missed them) · ${(cv.moving5m || 0).toLocaleString()} coins moving now of ${(cv.trading5m || 0).toLocaleString()} trading`, { stats: cv });
   } catch {}
+  const labAge = labStats.lastMsg ? now - labStats.lastMsg : null;
+  add("launchlab", "Bonk / LaunchLab trade feed", !labStats.connected ? "down" : labAge > 60_000 ? "degraded" : "ok",
+    !labStats.connected ? `Not connected${labStats.error ? `: ${labStats.error}` : ""}` : `${labStats.trades.toLocaleString()} trades and ${labStats.creates.toLocaleString()} launches read this session, last message ${ago(labStats.lastMsg)} · ${labStats.waiting} pools waiting to be identified · ${labStats.unpriced} quote tokens with no price yet (their pools wait) · no trader or holder counts (the feed does not say who traded)`,
+    { lastOk: labStats.lastMsg || null, lastError: labStats.error, stats: labStats });
   add("holders", "Holder ledger (from the trade feed)", !liveFeed.connected ? "degraded" : "ok",
     `${holderStats.books.toLocaleString()} coins with a live ledger (${holderStats.wallets.toLocaleString()} wallets) · ${holderStats.genesis.toLocaleString()} seen from their first trade, ${holderStats.partial.toLocaleString()} joined late (no sniper/bundle figures for those) · ${holderStats.unknownSells.toLocaleString()} sells of tokens the radar never saw bought`, { stats: holderStats });
   const tn = tunnelStats;
@@ -741,6 +746,7 @@ server.listen(PORT, "127.0.0.1", () => {
   brain.startBrain(raise, research.enqueue);
   startPulse();
   startLiveTrades();
+  startLaunchLab();
   startHolders();
   paper.startPaper();
   startCandles();

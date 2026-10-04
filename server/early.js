@@ -47,6 +47,7 @@ let enqueueFn = null, earlyPickFn = null;
 
 // ---------- recording ----------
 function onTrade(mint, s, sol, buy) {
+  if (s.pad) return;                                     // the launch model is fitted on pump.fun launches only
   let r = recs.get(mint);
   if (!r) {
     const l = launches.get(mint);

@@ -15,10 +15,11 @@ const TRADE = "bddb7fd34ee661ee";           // anchor discriminator of pump.fun'
 const CREATE = "1b72a94ddeeb6376";          // ... and of its CreateEvent (name, symbol, uri, mint, curve, user)
 const INITIAL_REAL_TOKENS = 793_100_000;     // tokens sold along the curve before it completes
 const PUBLIC_WS = "wss://api.mainnet-beta.solana.com";
+export const rpcWsUrl = () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : PUBLIC_WS);
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const now = () => Date.now();
 
-function b58(buf) {
+export function b58(buf) {
   let n = 0n;
   for (const b of buf) n = n * 256n + BigInt(b);
   let s = "";
@@ -39,6 +40,8 @@ export const onLiveTrade = (fn) => listeners.push(fn);
 const createListeners = [];
 export const onLiveCreate = (fn) => createListeners.push(fn);
 export const createStats = { seen: 0, failed: 0 };
+// A launch decoded by another launchpad's feed joins the same stream (it carries its own `pool` and `source`).
+export const announceCreate = (c) => { for (const fn of createListeners) fn(c); };
 function onCreate(buf) {
   try {
     let o = 8;
@@ -69,19 +72,27 @@ function onTrade(buf, slot = null) {
   // Coins created with a smaller virtual SOL reserve start at a tiny market cap (a few dollars) but are real
   // coins on the same curve (same 279.9M virtual token offset, same bonding point): about a fifth of all
   // trades. They used to be dropped here and never appeared anywhere. Only absurd readings are skipped now.
+  // The fee it charged (protocol + creator, in basis points), so a buy or sell can be quoted exactly (quote.js).
+  let feeBps = null;
+  if (buf.length >= 225) { const bps = Number(buf.readBigUInt64LE(161)) + Number(buf.readBigUInt64LE(209)); if (bps > 0 && bps < 1000) feeBps = bps; }
+  recordTrade({ mint, sol, tokens, buy, user, mcSol, progress: 1 - rTok / INITIAL_REAL_TOKENS, vSol, vTok, feeBps, slot });
+}
+
+// One trade on a bonding curve, from whichever launchpad feed decoded it (pump.fun here, LaunchLab in
+// launchlab.js). `user` is null when the feed does not say who traded; `pad` names a launchpad other than pump.fun.
+export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSol, vTok, feeBps, slot, pad }) {
   if (!(mcSol > 0) || mcSol > 5e6 || sol > 5000) return;   // a 5,000 SOL trade on a curve is a misread event
   feed.trades++;
   let s = live.get(mint);
-  if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
+  if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; if (pad) s.pad = pad; live.set(mint, s); }
   s.mc = mcSol; s.ath = Math.max(s.ath, mcSol); s.last = now(); s.side = buy ? "b" : "s";
-  s.progress = Math.max(0, Math.min(1, 1 - rTok / INITIAL_REAL_TOKENS));
-  // The curve's reserves after this trade, and the fee it charged (protocol + creator, in basis points),
-  // so a buy or sell can be quoted exactly as the chain would fill it (quote.js).
+  s.progress = Math.max(0, Math.min(1, progress));
+  // The curve's reserves after this trade, so a buy or sell can be quoted as the chain would fill it.
   s.vSol = vSol; s.vTok = vTok; s.resT = now();
-  if (buf.length >= 225) { const bps = Number(buf.readBigUInt64LE(161)) + Number(buf.readBigUInt64LE(209)); if (bps > 0 && bps < 1000) s.feeBps = bps; }
+  if (feeBps) s.feeBps = feeBps;
   buy ? s.buys++ : s.sells++;
   s.vol += sol;
-  if (s.traders.size < 2000) s.traders.add(user);
+  if (user && s.traders.size < 2000) s.traders.add(user);
   // a sample every ~10s for the 1-minute change
   if (!s.hist.length || now() - s.hist[s.hist.length - 1][0] > 10_000) { s.hist.push([now(), mcSol]); if (s.hist.length > 8) s.hist.shift(); }
   dirty.add(mint);
@@ -123,7 +134,7 @@ export function drainUpdates(watched) {
 
 function connect() {
   startRpcStream({
-    url: () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : PUBLIC_WS),
+    url: rpcWsUrl,
     request: { method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] },
     onStatus: ({ connected, error }) => { feed.connected = connected; feed.lastError = error; if (connected) feed.lastMsg = now(); },
     onEvent: (d) => {

@@ -88,7 +88,7 @@ function startPump() {
 export const launchFeeds = { pumpportal: 0, chainOnly: 0 };
 function addLaunch(t) {
   if (!t.mint || launchIndex.has(t.mint)) return false;
-  t.source === "pump-chain" ? launchFeeds.chainOnly++ : launchFeeds.pumpportal++;
+  /-chain$/.test(t.source || "") ? launchFeeds.chainOnly++ : launchFeeds.pumpportal++;
   stats.launchesSeen++;
   const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
   launchLog.push(entry);
@@ -107,7 +107,7 @@ function addLaunch(t) {
 // is added from the chain: the gaps in PumpPortal's feed no longer become invisible coins.
 function fillLaunchGaps() {
   onLiveCreate((c) => setTimeout(() => {
-    if (!launchIndex.has(c.mint)) addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.uri, creator: c.creator, pool: "pump", mcapSol: null, devSol: null, source: "pump-chain" });
+    if (!launchIndex.has(c.mint)) addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.uri, creator: c.creator, pool: c.pool || "pump", mcapSol: null, devSol: null, source: c.source || "pump-chain" });
   }, 2000));
 }
 const pendingGraduations = new Set();
