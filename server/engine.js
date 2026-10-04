@@ -238,6 +238,14 @@ const safetyQueue = new Set();
 async function runSafety() {
   const stale = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND score >= 50 AND (safety_checked IS NULL OR safety_checked < ?) ORDER BY score DESC LIMIT 10`).all(now() - 12 * MIN);
   for (const r of stale) safetyQueue.add(r.mint);
+  // A report taken in a coin's first minutes in its pool goes out of date fast (the dev of an airdrop launch
+  // holds most of the supply, then hands it out): every bonded coin is read again about 3 and about 15
+  // minutes after its pool appeared, whatever its score.
+  const t0 = "COALESCE(pair_created, first_seen)", at = now();
+  const bonded = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND graduated = 1 AND ${t0} > ? AND (safety_checked IS NULL
+      OR (? >= ${t0} + ${3 * MIN} AND safety_checked < ${t0} + ${3 * MIN}) OR (? >= ${t0} + ${15 * MIN} AND safety_checked < ${t0} + ${15 * MIN}))
+    ORDER BY ${t0} DESC LIMIT 6`).all(at - 45 * MIN, at, at);
+  for (const r of bonded) safetyQueue.add(r.mint);
   const batch = [...safetyQueue].slice(0, 12);
   for (const mint of batch) {
     safetyQueue.delete(mint);
@@ -254,7 +262,10 @@ async function safetyCheck(mint) {
   if (!before) return;
   const prev = json(before.safety);
   const s = await src.rugcheck(mint);
-  db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ?, creator = COALESCE(creator, ?) WHERE mint = ?").run(JSON.stringify(s), s.clean, now(), s.creator, mint);
+  // A bonded coin RugCheck has not indexed yet has no score: an empty report used to read as nearly clean
+  // and pass the safety line. (Coins still on the curve keep theirs: the curve itself is the market.)
+  const score = s.unindexed && before.graduated ? null : s.clean;
+  db.prepare("UPDATE tokens SET safety = ?, safety_score = ?, safety_checked = ?, creator = COALESCE(creator, ?) WHERE mint = ?").run(JSON.stringify(s), score, now(), s.creator, mint);
   const t = q.getToken.get(mint);
   const watched = (t.score || 0) >= 45 || q.lastSignal.get(mint, "launch") || q.lastSignal.get(mint, "momentum") || q.lastSignal.get(mint, "smart");
   if (watched && prev && prev.devPct >= 1 && s.devPct < 0.2 && cooldownOk(mint, "dev-sold", 1e12))

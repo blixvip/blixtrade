@@ -120,6 +120,8 @@ export async function rugcheck(mint) {
     totalHolders: r.totalHolders ?? null, top10: +top10.toFixed(1), insiderPct: +insiderPct.toFixed(1),
     insiderNetworks: (r.insiderNetworks || []).length, creator: r.creator || null, devPct: +devPct.toFixed(2),
     devLaunches, rugged: !!r.rugged, holders: real.slice(0, 15),
+    // RugCheck has not counted this coin's holders yet: its figures (and the clean score they give) say nothing.
+    unindexed: !(r.totalHolders > 0) && !(r.topHolders || []).length,
   };
 }
 
