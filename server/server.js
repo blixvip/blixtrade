@@ -337,6 +337,9 @@ function healthReport() {
   add("responsiveness", "Responsiveness", rs.worst10m >= 2000 ? "degraded" : "ok",
     `Longest pause: ${rs.worst10m ? secs(rs.worst10m) : "none over 0.2 s"} in the last 10 minutes, ${rs.worst24h ? secs(rs.worst24h) : "none"} since start or 24h · ${rs.over1s} pauses over 1 s${rs.slow.length ? ` · slowest work: ${rs.slow.slice(0, 3).map((s) => `${s.name} ${secs(s.worstMs)} (${s.n}×)`).join("; ")}` : ""}`,
     { stats: rs });
+  add("webapp", "New page (127.0.0.1:4421)", webStats.on && webStats.built ? "ok" : webStats.on ? "degraded" : "down",
+    webStats.on ? (webStats.built ? `Served by Blix itself from web/dist · built ${ago(webStats.built)}` : "Running, but web/dist has not been built (npm run build in the web folder)") : `Not running${webStats.error ? `: ${webStats.error}` : ""}`,
+    { lastError: webStats.error });
   const fileMb = (f) => { try { return fs.statSync(f).size / 1048576; } catch { return 0; } };
   const dbMb = fileMb(DB_FILE), walMb = fileMb(`${DB_FILE}-wal`);
   add("database", "Database", dbMb > 1500 ? "degraded" : "ok",
@@ -761,6 +764,8 @@ process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message
 const server6 = http.createServer((req, res) => server.emit("request", req, res));
 server6.on("error", () => {});
 server6.listen(PORT, "::1");
+// The new front end (web/dist) on 127.0.0.1:4421, served by this process. Not for a trial copy on another port.
+if (!process.env.RADAR_PORT) startWebApp(server, PORT);
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Blix on http://localhost:${PORT}`);
   // v30: the launch-labelling model is off (its labels barely separated winners), picks are decided by live
