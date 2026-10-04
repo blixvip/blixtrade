@@ -21,20 +21,39 @@ Every route is an app page.
 Nav: N3 side rail (collapses to a bottom bar on phones). Footer: none.
 
 ## Theme
-Custom, tuned: "cool engineered trading terminal, dark". Axes: dark / grotesk-sans / cool.
+**Liquid chrome on black** (2026-10-04, replaces the cobalt palette). The brand is the chrome BLIX
+wordmark (`public/brand/`, `web/public/brand/`): molten silver lettering glowing on a pure black
+ground. The interface is that picture turned into a tool. Axes: dark / grotesk-sans / cold neutral.
 
-- `--color-paper`    oklch(15.5% 0.008 258)
-- `--color-paper-2`  oklch(17.5% 0.009 258)  chrome: rail, headers, sheet
-- `--color-paper-3`  oklch(19.5% 0.010 258)  cards
-- `--color-paper-4`  oklch(22.5% 0.012 258)
-- `--color-paper-5`  oklch(26% 0.014 258)    selected control
-- `--color-ink`      oklch(93% 0.006 258)
-- `--color-ink-2`    oklch(76% 0.012 258)
-- `--color-muted`    oklch(67% 0.014 258)
-- `--color-rule`     oklch(25% 0.012 258)
-- `--color-rule-2`   oklch(33% 0.014 258)
-- `--color-accent`   oklch(70% 0.15 255)     cobalt: selection, focus, links, the AI
-- `--color-focus`    oklch(74% 0.15 255)
+- `--color-paper`    oklch(6% 0.003 255)     the ground: black
+- `--color-paper-2`  oklch(10.5% 0.004 255)  chrome: rail, headers, sheet
+- `--color-paper-3`  oklch(14% 0.005 255)    cards
+- `--color-paper-4`  oklch(18% 0.006 255)
+- `--color-paper-5`  oklch(23% 0.007 255)    selected control
+- `--color-ink`      oklch(96% 0.004 255)
+- `--color-ink-2`    oklch(79% 0.008 255)
+- `--color-muted`    oklch(62% 0.010 255)
+- `--color-rule`     oklch(21% 0.006 255)
+- `--color-rule-2`   oklch(32% 0.008 255)
+- `--color-edge`     oklch(100% 0 0 / 0.13)  the lit top edge of a panel
+- `--color-accent`   oklch(90% 0.012 250)    chrome: selection, focus, links, the AI. A light, not a hue.
+- `--color-focus`    oklch(98% 0.004 250)
+
+The metal (three gradients, defined once in the token files, never re-mixed per component):
+
+- `--chrome`       full strip: white, silver, a dark horizon at the middle, light bouncing back up
+- `--chrome-type`  the same for lettering, brighter with a softer horizon
+- `--chrome-soft`  for filled controls
+
+Where metal goes, and nowhere else:
+
+- the wordmark (always the image, never retyped in a font);
+- page titles and the lead figures in a header (`.chrome-text`), heavy weights only;
+- the selected choice in a group and a button under the pointer (`.chrome-fill`); one filled chrome control per view at rest;
+- panel and column-header edges: a lit hairline on top, falling to black (`.surface`, `.metal-bar`).
+
+Body text, table numbers and row content are plain ink on black: metal is the frame, the data stays flat.
+The background field (React page) is the same light: silver over graphite, never coloured.
 
 Data colours. They mean one thing each and are used for nothing else:
 
@@ -70,16 +89,16 @@ scale when a rule is touched.
 - Disabled is opacity + `not-allowed` cursor + the `disabled` attribute.
 
 ## CTA voice
-- Primary: ink fill, dark label, 6 px radius. One per view at most.
+- Primary: chrome fill (`--chrome-soft`), dark label, 6 px radius. One per view at most.
 - Secondary: 1 px `--color-rule-2` outline on `--color-paper-4`, 6 px radius.
 - Labels are verbs and stay on one line.
 
 ## Surfaces
-- Solid only. No blur, no translucency, no glow, no decorative gradient.
+- Solid only. No blur, no translucency. The only gradients are the metal named in Theme, used where Theme says; the only glow is the wordmark's own.
 - One layer of containment. Inside a card or the sheet, groups are separated by a
   hairline rule, not boxed again.
 - No side stripes. A state is a tint plus a full hairline, or a small square beside the label.
-- Gradients are allowed only where they carry data: the bonding-progress ring and the loading skeleton.
+- Other gradients are allowed only where they carry data: the bonding-progress ring and the loading skeleton.
 
 ## Icons
 One hand-drawn SVG line set (the rail icons and the row glyphs). No emoji as icons.

@@ -4,25 +4,30 @@
 :root {
   color-scheme: dark;
 
-  /* surfaces: cool engineered near-black, every neutral tinted toward the accent hue */
-  --color-paper:    oklch(15.5% 0.008 258);
-  --color-paper-2:  oklch(17.5% 0.009 258);
-  --color-paper-3:  oklch(19.5% 0.010 258);
-  --color-paper-4:  oklch(22.5% 0.012 258);
-  --color-paper-5:  oklch(26% 0.014 258);
-  --color-shade:    oklch(9% 0.006 258);
-  --color-rule:     oklch(25% 0.012 258);
-  --color-rule-2:   oklch(33% 0.014 258);
+  /* surfaces: liquid chrome on black (design.md "Theme"). Black ground, graphite steps, a trace of cold blue. */
+  --color-paper:    oklch(6% 0.003 255);
+  --color-paper-2:  oklch(10.5% 0.004 255);
+  --color-paper-3:  oklch(14% 0.005 255);
+  --color-paper-4:  oklch(18% 0.006 255);
+  --color-paper-5:  oklch(23% 0.007 255);
+  --color-shade:    oklch(3% 0.002 255);
+  --color-rule:     oklch(21% 0.006 255);
+  --color-rule-2:   oklch(32% 0.008 255);
+  --color-edge:     oklch(100% 0 0 / 0.13);
 
   /* ink */
-  --color-ink:      oklch(93% 0.006 258);
-  --color-ink-2:    oklch(76% 0.012 258);
-  --color-muted:    oklch(67% 0.014 258);
+  --color-ink:      oklch(96% 0.004 255);
+  --color-ink-2:    oklch(79% 0.008 255);
+  --color-muted:    oklch(62% 0.010 255);
 
-  /* one accent (cobalt): selection, focus, links, the AI. Never a fill larger than a control. */
-  --color-accent:     oklch(70% 0.15 255);
-  --color-accent-ink: oklch(16% 0.03 255);
-  --color-focus:      oklch(74% 0.15 255);
+  /* one accent (chrome): selection, focus, links, the AI. A light, not a hue. */
+  --color-accent:     oklch(90% 0.012 250);
+  --color-accent-ink: oklch(12% 0.006 255);
+  --color-focus:      oklch(98% 0.004 250);
+
+  /* the metal: lettering, the primary control */
+  --chrome-type: linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(93% 0.008 250) 34%, oklch(66% 0.014 252) 54%, oklch(84% 0.010 250) 66%, oklch(99% 0.004 250) 100%);
+  --chrome-soft: linear-gradient(180deg, oklch(98% 0.004 250) 0%, oklch(80% 0.010 250) 45%, oklch(60% 0.012 252) 55%, oklch(86% 0.008 250) 100%);
 
   /* data colours: they mean something and are used for nothing else */
   --color-up:       oklch(74% 0.15 160);
