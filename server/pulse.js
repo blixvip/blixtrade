@@ -3,18 +3,20 @@
 import { db, q, json } from "./db.js";
 import { recentLaunches, devLaunches, launchIndex } from "./engine.js";
 import { candidates, ipfs, bondingProgress, providers, queueStatus, liveTraction } from "./research.js";
-import { safeUrl, publicUrl, cleanLinks } from "./quality.js";
+import { safeUrl, publicUrl, cleanLinks, readingProblem } from "./quality.js";
 import { liveStats, feed, live, closeToBonding } from "./livetrades.js";
 import { dexTokens } from "./sources.js";
 import { triageFor, triageStats } from "./triage.js";
 import { earlyFor } from "./early.js";
 import { grokStatus } from "./grok.js";
 import { rowHolders, holderStats } from "./holders.js";
-import { runners, windowStats } from "./coverage.js";
+import { runners, windowStats, oddCurve } from "./coverage.js";
 import { traction } from "./quality.js";
 import { adoptLaunch, adoptMint, vet } from "./engine.js";
 import { enqueue } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
+import { priceTick } from "./candles.js";
+import { gtGet, gtReady } from "./gtgate.js";
 
 // Every row carries a live rank: the traction score (0-100) measured on this radar's own past reads as the
 // one ranking that predicted winners, computed this second from the trade feed (5-minute volume, traders,
@@ -65,16 +67,44 @@ export const watched = new Set();
 
 // Overlay the live trade feed on a row (fresher than DexScreener for coins still on the curve), and the
 // holder ledger built from the same feed (holders, top 10, dev, snipers, bundle).
+// Once the curve completes, the coin trades in a pool the feed does not read: the curve's last reading is
+// history, not a price. The pool price (Jupiter, every 2 s) or the radar's tracked price stands instead, and
+// a row with neither says its number is the bonding-time one. The ledger stops at bonding too, so a bonded
+// coin carries it only for LEDGER_AFTER_BOND (while it still describes the coin); then RugCheck's or nothing.
+const LEDGER_AFTER_BOND = 3 * 60_000;
 function withLive(r) {
-  const hl = rowHolders(r.mint);
   const x = liveStats(r.mint);
+  const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
+  const hl = bonded && (!x || now() - x.last > LEDGER_AFTER_BOND) ? null : rowHolders(r.mint);
   if (!x || now() - x.last > 15 * MIN) return hl ? { ...r, hl } : r;
+  if (bonded) {
+    bondedSeen.add(r.mint);
+    const fast = fastMcap(r.mint), tracked = r.mcap > 0 && r.priceT && now() - r.priceT < 2 * MIN ? r.mcap : null;
+    const mcap = fast ?? tracked;
+    return { ...r, ...(hl ? { hl } : {}), progress: 1, graduated: true, traders: x.traders, live: false, mcap: mcap ?? x.mc,
+      ...(mcap == null ? { warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : {}) };
+  }
   return { ...r, mcap: x.mc, buys: r.graduated ? r.buys : x.buys, sells: r.graduated ? r.sells : x.sells, liveVol: x.vol, traders: x.traders,
     progress: r.graduated ? r.progress : x.progress, chg1m: x.chg1m, side: x.side, lastTrade: x.last, live: true, hl };
 }
 
 const now = () => Date.now();
 const MIN = 60_000;
+const bondedSeen = new Set();   // coins shown bonded outside the Migrated column this sweep: priced from Jupiter too
+
+// A red flag a page can show next to the number it is about (shape: { kind, text }). Every row gets one
+// check, all from data already in hand (no extra requests).
+const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+function flag(r) {
+  if (r.warn) return r;
+  const s = live.get(r.mint);
+  if (!r.graduated && oddCurve(s)) return { ...r, warn: { kind: "odd-curve", text: "Non-standard bonding curve: priced far below where every pump.fun curve starts, so its figures do not compare" } };
+  if (r.graduated && r.mcap > 0) {
+    const why = readingProblem({ dex: r.dex, liquidity: r.liq, mcap: r.mcap });
+    if (why) return { ...r, warn: { kind: "emptied", text: `${cap1(why)}: the price shown cannot be traded at` } };
+  }
+  return r;
+}
 const NEW_ROWS = 160;         // newest launches shown in New pairs
 
 // ---------- metadata for brand-new launches (picture + socials) ----------
@@ -113,14 +143,24 @@ export function metaNow(mint) { const l = launchIndex.get(mint); if (l?.uri && !
 // launch the radar watched; for a coin launched before that (or before a restart) DexScreener is asked once.
 const names = new Map();      // mint -> { symbol, name, image, created, t } | { t } while unknown
 let stretchMints = [], runningMints = [];
-const justBonded = () => db.prepare("SELECT mint FROM tokens WHERE graduated = 1 AND symbol IS NULL AND first_seen > ?").all(now() - 20 * MIN).map((r) => r.mint);
+// Coins that bonded in the last 20 minutes with no name yet. Read at most every 15 s, through an index on
+// first_seen (this was a full scan of the tokens table every 2.5 s).
+try { db.exec("CREATE INDEX IF NOT EXISTS tokens_first_seen ON tokens(first_seen)"); } catch {}
+let jb = { t: 0, v: [] };
+const justBonded = () => {
+  if (now() - jb.t > 15_000) jb = { t: now(), v: db.prepare("SELECT mint FROM tokens WHERE first_seen > ? AND graduated = 1 AND symbol IS NULL").all(now() - 20 * MIN).map((r) => r.mint) };
+  return jb.v;
+};
+const symbolOf = (m) => db.prepare("SELECT symbol FROM tokens WHERE mint = ?").get(m)?.symbol || null;
+// Every stored row for a list of mints in one query (the Pulse used to read them one by one).
+const tokensByMint = (mints) => mints.length ? new Map(db.prepare(`SELECT * FROM tokens WHERE mint IN (${mints.map(() => "?").join(",")})`).all(...mints).map((t) => [t.mint, t])) : new Map();
 async function lookupNames() {
   if (now() - cache.t > 15_000) return;
   const ask = [];
   for (const m of [...stretchMints, ...runningMints, ...justBonded()]) {
     if (ask.length >= 30) break;
     const n = names.get(m);
-    if (launchIndex.has(m) || n?.symbol || (n && now() - n.t < 60_000) || q.getToken.get(m)?.symbol) continue;
+    if (launchIndex.has(m) || n?.symbol || (n && now() - n.t < 60_000) || symbolOf(m)) continue;
     ask.push(m);
   }
   if (!ask.length) return;
@@ -135,15 +175,20 @@ async function lookupNames() {
 const picAsked = new Map();
 let needsPicture = () => true, onImage = null;
 export const pictureHooks = (has, found) => { needsPicture = (m) => !has(m); onImage = found; };
+// One GeckoTerminal picture call per PIC_GAP between this and fillImages (Pulse coins first), at the page
+// gate's lowest rank (gtgate.js): charts, pool trades and discovery come first.
+const PIC_GAP = 30_000;
+let picT = 0;
 async function lookupPictures() {
-  if (now() - cache.t > 15_000) return;
+  if (now() - cache.t > 15_000 || now() - picT < PIC_GAP || !gtReady("low")) return;
   const ask = [...new Set([...stretchMints, ...runningMints, ...migMints])].filter((m) => needsPicture(m) && !names.get(m)?.image && now() - (picAsked.get(m) || 0) > 5 * MIN && now() - (live.get(m)?.first || launchIndex.get(m)?.seen || 0) > 20_000).slice(0, 30);
   if (!ask.length) return;
+  picT = now();
   for (const m of ask) picAsked.set(m, now());
   if (picAsked.size > 3000) for (const [k, t] of picAsked) if (now() - t > 10 * MIN) picAsked.delete(k);
-  const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${ask.join(",")}`, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });
-  if (!r.ok) return;
-  for (const t of (await r.json()).data || []) {
+  let j;
+  try { j = await gtGet(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${ask.join(",")}`, { timeout: 10_000, rank: "low" }); } catch { return; }
+  for (const t of j?.data || []) {
     const a = t.attributes || {}, img = safeUrl(a.image_url);
     if (!a.address) continue;
     const had = names.get(a.address) || {};
@@ -167,15 +212,20 @@ function bare(mint, ai) {
 // 30s across 12 fresh coins, against 54 from Jupiter's price API). So while the Pulse page is open the
 // migrated column is priced from Jupiter every 2 seconds: free, no key, 50 coins a call.
 const migPx = new Map();      // mint -> { mcap, vol, liq, chg5, buys, sells, t }
-let migMints = [], migPause = 0, migBusy = false, onMig = null;
+let migMints = [], migPause = 0, migBusy = false, onMig = null, migDexT = 0;
 const migRatio = new Map();   // mint -> tokens in circulation (market cap / price), from the radar's own reading
 export const onMigratedPrices = (fn) => { onMig = fn; };
 export const migStats = { calls: 0, moved: 0, last: 0, paused: 0 };
+// A bonded coin whose page is open is priced with them, Pulse open or not (coin.js calls this while it builds).
+const focusMints = new Map();   // mint -> last asked
+export const focusPrice = (mint) => { focusMints.set(mint, now()); };
 async function priceMigrated() {
-  if (migBusy || now() < migPause || now() - cache.t > 15_000 || !migMints.length) return;
+  for (const [m, t] of focusMints) if (now() - t > 15_000) focusMints.delete(m);
+  const pulseOpen = now() - cache.t <= 15_000;
+  const ids = [...new Set([...focusMints.keys(), ...(pulseOpen ? migMints : [])])].slice(0, 50);
+  if (migBusy || now() < migPause || !ids.length) return;
   migBusy = true;
   try {
-    const ids = migMints.slice(0, 50);
     const got = await jupiterGet(`/price/v3?ids=${ids.join(",")}`, { timeout: 5000 });
     migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes.
     migStats.calls++; migStats.last = now();
@@ -189,7 +239,23 @@ async function priceMigrated() {
       const mc = usd * (t || 1e9);
       const prev = migPx.get(m);
       migPx.set(m, { mcap: mc, t: now() });
+      priceTick(m, mc);
       if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
+    }
+    // A pool Jupiter cannot price yet (it indexes new pools within minutes): DexScreener's reading, at most
+    // every 8 s for up to 30 coins, so a just-bonded coin does not sit on a minutes-old price.
+    const missing = ids.filter((m) => !(got[m]?.usdPrice > 0) && now() - (migPx.get(m)?.t || 0) > 8000);
+    if (missing.length && now() - migDexT > 8000) {
+      migDexT = now();
+      const pairs = await dexTokens(missing.slice(0, 30)).catch(() => new Map());
+      for (const [m, pr] of pairs) {
+        const mc = pr.marketCap || pr.fdv;
+        if (!(mc > 0)) continue;
+        const prev = migPx.get(m);
+        migPx.set(m, { mcap: mc, liq: pr.liquidity?.usd ?? null, t: now(), src: "dex" });
+        priceTick(m, mc);
+        if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
+      }
     }
     migStats.moved += out.length;
     if (out.length) onMig?.(out);
@@ -200,7 +266,12 @@ async function priceMigrated() {
 function withFastPrice(r) {
   const x = migPx.get(r.mint);
   if (!x || now() - x.t > 30_000) return r;
-  return { ...r, mcap: x.mcap, priceT: x.t };
+  return { ...r, mcap: x.mcap, priceT: x.t, ...(x.liq != null ? { liq: x.liq } : {}) };
+}
+// A bonded coin's price that is minutes old says so (a fresh pool can fall 90% in that time).
+function staleness(r) {
+  const age = r.priceT ? now() - r.priceT : null;
+  return r.warn || age == null || age < 2 * MIN ? r : { ...r, warn: { kind: "stale", text: `Price is ${Math.round(age / MIN)} min old: the pool has not been priced since` } };
 }
 
 // ---------- rows ----------
@@ -214,19 +285,48 @@ function researchMap(mints) {
   }));
 }
 
+// RugCheck's holder figures for a tokens row, or nulls where the reading cannot still be true. An empty
+// report (0 holders, nothing in the top 10) is a coin RugCheck has not indexed yet, and its safety score
+// says nothing about concentration. A bonded coin's report from its first minutes in the pool dates fast:
+// a dev who bought out the curve reads as holding 79% with a few dozen holders, then airdrops and reads 0%
+// and 2,000 holders minutes later. Such a reading stands for EARLY_TTL, then is hidden until a re-check.
+const SETTLED = 15 * 60_000, EARLY_TTL = 3 * 60_000;
+export function rugFigures(t, s = json(t?.safety) || {}) {
+  const none = { holders: null, top10: null, dev: null, insiders: null, safety: null, checked: t?.safety_checked || null };
+  const at = t?.safety_checked;
+  if (!s || !Object.keys(s).length) return none;
+  if (t.graduated && !((at && t.pair_created && at - t.pair_created >= SETTLED) || (at && now() - at < EARLY_TTL))) return none;
+  const indexed = s.totalHolders > 0 || s.top10 > 0;
+  return { holders: s.totalHolders > 0 ? s.totalHolders : null, top10: s.top10 > 0 ? s.top10 : null, dev: indexed ? s.devPct ?? null : null,
+    insiders: indexed ? s.insiderPct ?? null : null, safety: indexed ? t.safety_score ?? null : null, checked: at || null };
+}
+
 function row(t, ai) {
   const s = json(t.safety) || {};
+  const rf = rugFigures(t, s);
   const links = cleanLinks(json(t.links, []));
   const link = (re) => links.find((l) => re.test(`${l.type} ${l.url}`))?.url || null;
   return {
     mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.pair_created || t.first_seen), dex: t.dex, priceT: t.price_t || t.updated || null,
     mcap: t.mcap, vol: t.vol_h1, vol5m: t.vol_m5, peak: t.peak_mcap, liq: t.liquidity, chg5: t.chg_m5, chg1h: t.chg_h1, buys: t.buys_h1, sells: t.sells_h1,
-    holders: s.totalHolders ?? null, top10: s.top10 ?? null, dev: s.devPct ?? null, insiders: s.insiderPct ?? null,
-    safety: t.safety_score, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
+    holders: rf.holders, top10: rf.top10, dev: rf.dev, insiders: rf.insiders,
+    safety: rf.safety, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
     x: link(/twitter|x\.com/i), web: links.find((l) => l.type === "website")?.url || null, tg: link(/telegram|t\.me/i),
     tiktok: link(/tiktok/i), creator: t.creator || null, paid: (t.boosts || 0) > 0 || Boolean(t.header),
     ai: ai || null,
   };
+}
+
+// The header's research counters: cheap to keep 10 s old (the reads-per-hour count alone took ~80 ms).
+let counts = { t: 0, v: null };
+function researchCounts() {
+  if (counts.v && now() - counts.t < 10_000) return counts.v;
+  counts = { t: now(), v: {
+    reading: db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'running'").get().n,
+    queued: db.prepare("SELECT COUNT(*) n FROM research WHERE status IN ('queued', 'deep')").get().n,
+    ratedHour: db.prepare("SELECT COUNT(*) n FROM research WHERE t > ? AND status IN ('done', 'deep')").get(now() - 60 * MIN).n,
+  } };
+  return counts.v;
 }
 
 let cache = { t: 0, v: null };
@@ -240,6 +340,7 @@ export function pulseData() {
   // tracked coin near bonding the feed has not seen trade yet (only with volume: no dead ones).
   const nearBy = new Map(near.map((t) => [t.mint, t]));
   stretchMints = closeToBonding(0.5, 10 * MIN, 100);
+  const stretchRows = tokensByMint(stretchMints.filter((m) => !nearBy.has(m)));
   const inFeed = new Set(stretchMints);
   const quiet = near.filter((t) => !inFeed.has(t.mint) && (t.vol_h1 || 0) > 0 && now() - (t.price_t || 0) < 10 * MIN).slice(0, 20);
   // Migrated: everything that bonded in the last 6 hours and is still worth something, plus coins that
@@ -264,7 +365,7 @@ export function pulseData() {
   // A coin that's still trading isn't faded, whatever the 4-minute check said.
   for (const r of newPairs) if (r.state === "faded" && r.lastTrade && now() - r.lastTrade < 2 * MIN) r.state = "watching";
   const stretch = [...stretchMints.map((m) => {
-    const t = nearBy.get(m) || q.getToken.get(m);
+    const t = nearBy.get(m) || stretchRows.get(m);
     if (!t) return withLive(bare(m, ai.get(m)));
     if (t.graduated) return null;
     const b = bare(m), r = row(t, ai.get(m));
@@ -274,17 +375,19 @@ export function pulseData() {
   if (migRatio.size > 800) migRatio.clear();
   const migrated = [...seconds, ...older].map((t) => {
     const b = bare(t.mint), r = row({ ...t, graduated: 1 }, ai.get(t.mint)), x = liveStats(t.mint);
-    // Bonded seconds ago: its last price on the curve stands in until the new pool is priced.
-    return withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 });
+    // Bonded seconds ago: its last price on the curve stands in until the new pool is priced, and says so.
+    const out = withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 });
+    return r.mcap == null && x && out.priceT == null ? { ...out, warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : staleness(out);
   }).filter((r) => r.symbol && (r.mcap || 0) >= 5000).map(rankRow).sort((a, b) => a.age - b.age).slice(0, 80);
-  migMints = migrated.map((r) => r.mint);
+  bondedSeen.clear();
   // Running now: every coin moving in the last 5 minutes that no other column holds (older than the New
   // pairs window and under 50% of the curve, say), hottest first. From coverage.js, off the live trade feed.
   const shownSet = new Set([...newPairs, ...stretch, ...migrated].map((r) => r.mint));
   const runs = runners({ limit: 100, exclude: shownSet });
   for (const [k, v] of researchMap(runs.map((w) => w.mint))) ai.set(k, v);
+  const runRows = tokensByMint(runs.map((w) => w.mint));
   const running = runs.map((w) => {
-    const t = q.getToken.get(w.mint);
+    const t = runRows.get(w.mint);
     const base = t && !t.graduated ? row(t, ai.get(w.mint)) : bare(w.mint, ai.get(w.mint));
     const b = bare(w.mint);
     return withLive({ ...base, symbol: base.symbol || b.symbol, name: base.name || b.name, image: base.image || b.image, x: base.x || b.x, web: base.web || b.web, tg: base.tg || b.tg, creator: base.creator || b.creator, devSol: base.devSol ?? b.devSol, devCount: base.devCount ?? b.devCount,
@@ -292,11 +395,12 @@ export function pulseData() {
   // A moving coin is shown even before its name is known (the lookup fills it in a few seconds later).
   }).map((r) => r.symbol ? r : { ...r, symbol: `${r.mint.slice(0, 4)}…`, name: "name loading" }).map(rankRow);
   runningMints = running.map((r) => r.mint);
+  // Jupiter prices every migrated row, and any coin another column shows as just bonded (first, they are few).
+  migMints = [...new Set([...bondedSeen, ...migrated.map((r) => r.mint)])];
+  for (const list of [newPairs, stretch, migrated, running]) for (let i = 0; i < list.length; i++) list[i] = flag(list[i]);
   // Anything moving that no AI has read yet goes to the queue (the queue's own cap and ranking take it from there).
   try { readHot([...running, ...stretch, ...newPairs.filter((r) => r.state !== "faded")]); } catch {}
-  const reading = db.prepare("SELECT COUNT(*) n FROM research WHERE status = 'running'").get().n;
-  const queued = db.prepare("SELECT COUNT(*) n FROM research WHERE status IN ('queued', 'deep')").get().n;
-  const ratedHour = db.prepare("SELECT COUNT(*) n FROM research WHERE t > ? AND status IN ('done', 'deep')").get(now() - 60 * MIN).n;
+  const { reading, queued, ratedHour } = researchCounts();
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
   watched.clear();
   for (const r of [...newPairs, ...stretch, ...migrated, ...running]) watched.add(r.mint);
@@ -309,17 +413,23 @@ export function pulseData() {
 
 // The anti-slop list: today's launches that got past triage. `fresh` are decent-looking coins not yet
 // sent for a read, `reading` are in the queue or being read right now, `rated` have their grade.
+// Built at most every 5 s (two scans of the research table and up to 240 coins), with one batched read of
+// the coins instead of one per job.
+let slop = { t: 0, v: null };
 export function antiSlop() {
+  if (slop.v && now() - slop.t < 5000) return slop.v;
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
   const jobs = db.prepare(`SELECT mint, status, enq_t, t FROM research WHERE COALESCE(enq_t, t) > ? AND status != 'expired' ORDER BY COALESCE(t, enq_t) DESC LIMIT 240`).all(d0.getTime());
   const ai = researchMap(jobs.map((j) => j.mint));
+  const coins = tokensByMint(jobs.map((j) => j.mint));
   const rows = jobs.map((j) => {
-    const t = q.getToken.get(j.mint);
+    const t = coins.get(j.mint);
     return t && { ...withLive(row(t, ai.get(j.mint))), tri: triageFor(j.mint), waited: j.enq_t ? now() - j.enq_t : null, state: "tracked", tr: liveTraction(t).score, early: earlyFor(j.mint) };
   }).filter(Boolean);
   const fresh = pulseData().newPairs.filter((r) => r.tri && ["maybe", "promising"].includes(r.tri.label) && !r.ai && r.state !== "faded").slice(0, 60);
   const dropped = db.prepare("SELECT COUNT(*) n FROM research WHERE COALESCE(enq_t, t) > ? AND status = 'expired'").get(d0.getTime()).n;
-  return { fresh, reading: rows.filter((r) => !r.ai?.rated), rated: rows.filter((r) => r.ai?.rated), dropped };
+  slop = { t: now(), v: { fresh, reading: rows.filter((r) => !r.ai?.rated), rated: rows.filter((r) => r.ai?.rated), dropped } };
+  return slop.v;
 }
 
 // Coin pictures. Most tracked coins arrive without one (only coins with a paid DexScreener profile carry
@@ -327,23 +437,28 @@ export function antiSlop() {
 // metadata the radar already fetched, then on GeckoTerminal, which serves the on-chain image for
 // almost every token (30 coins per call).
 const imgTried = new Map();   // mint -> when it was last looked up
+let picked = { t: 0, v: [] }; // coins picked or entry-watched in the last 48 h: two table scans, so re-read every 5 min
 async function fillImages() {
   // Picked coins first (they stay on the lists after they die), then everything still being tracked.
-  const rows = [...db.prepare("SELECT mint FROM tokens WHERE image IS NULL AND mint IN (SELECT mint FROM outcomes WHERE kind = 'pick' AND t0 > ? UNION SELECT mint FROM entry_watch WHERE t > ?)").all(now() - 48 * 60 * MIN, now() - 48 * 60 * MIN),
+  if (now() - picked.t > 5 * MIN) picked = { t: now(), v: db.prepare("SELECT mint FROM outcomes WHERE kind = 'pick' AND t0 > ? UNION SELECT mint FROM entry_watch WHERE t > ?").all(now() - 48 * 60 * MIN, now() - 48 * 60 * MIN).map((r) => r.mint) };
+  const due = (m) => now() - (imgTried.get(m) || 0) > 45 * MIN;
+  const picks = picked.v.filter(due).slice(0, 500);
+  const rows = [...(picks.length ? db.prepare(`SELECT mint FROM tokens WHERE image IS NULL AND mint IN (${picks.map(() => "?").join(",")})`).all(...picks) : []),
     ...db.prepare("SELECT mint FROM tokens WHERE status = 'active' AND image IS NULL ORDER BY COALESCE(updated, first_seen) DESC LIMIT 400").all()]
-    .filter((r) => now() - (imgTried.get(r.mint) || 0) > 45 * MIN);
+    .filter((r) => due(r.mint));
   const set = db.prepare("UPDATE tokens SET image = ? WHERE mint = ? AND image IS NULL");
   const ask = [];
   for (const r of rows) {
     const m = meta.get(r.mint);
     if (m?.image) set.run(m.image, r.mint); else if (ask.length < 30) ask.push(r.mint);
   }
-  if (!ask.length) return;
+  if (!ask.length || now() - picT < PIC_GAP || !gtReady("low")) return;
+  picT = now();
   for (const m of ask) imgTried.set(m, now());
   if (imgTried.size > 5000) for (const [m, t] of imgTried) if (now() - t > 60 * MIN) imgTried.delete(m);
-  const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${ask.join(",")}`, { signal: AbortSignal.timeout(12_000), headers: { accept: "application/json" } });
-  if (!r.ok) return;
-  for (const t of (await r.json()).data || []) {
+  let j;
+  try { j = await gtGet(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${ask.join(",")}`, { timeout: 12_000, rank: "low" }); } catch { return; }
+  for (const t of j?.data || []) {
     const img = safeUrl(t.attributes?.image_url);
     if (img && !/missing/.test(img) && t.attributes?.address) set.run(img, t.attributes.address);
   }
@@ -355,6 +470,6 @@ export function startPulse() {
   const look = setInterval(() => lookupPictures().catch(() => {}), 6000);
   const who = setInterval(() => lookupNames().catch(() => {}), 2500);
   const pics = setInterval(() => fillImages().catch(() => {}), 20_000);
-  setTimeout(() => fillImages().catch(() => {}), 8000);
+  setTimeout(() => fillImages().catch(() => {}), 60_000);   // not in the first minute, when everything else starts cold
   return () => { clearInterval(timer); clearInterval(pics); clearInterval(fast); clearInterval(who); clearInterval(look); };
 }

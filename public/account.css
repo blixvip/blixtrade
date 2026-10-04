@@ -1,0 +1,24 @@
+/* Account page (#/account). Tokens from tokens.css; shapes from styles.css. */
+.acct-form { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); max-width: 420px; }
+.acct-form h2 { margin-bottom: var(--space-2xs); }
+.acct-form label { display: flex; flex-direction: column; gap: var(--space-2xs); }
+.acct-form label span, .acct-label { font: 600 var(--text-2xs) var(--font-body); letter-spacing: .045em; text-transform: uppercase; color: var(--color-muted); }
+.acct-form input { height: 32px; padding: 0 10px; border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-control); background: var(--color-paper); min-width: 0; }
+.acct-form input:focus { border-color: var(--color-accent); outline: none; }
+.acct-form .btn svg, .acct .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.acct-form .seg { display: flex; align-self: flex-start; }
+.acct-err { min-height: 1.4em; margin: 0; }
+.acct-wallet { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); padding: var(--space-md); margin-bottom: var(--space-md); flex-wrap: wrap; }
+.acct-addr { display: flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-2xs); font-size: var(--text-md); overflow-wrap: anywhere; flex-wrap: wrap; }
+.acct-figs { display: flex; gap: var(--space-xl); }
+.acct-figs b { display: block; font-size: var(--text-xl); font-weight: 650; white-space: nowrap; }
+.acct-figs small { color: var(--color-muted); }
+.acct-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 420px)); gap: var(--space-md); margin-bottom: var(--space-md); align-items: start; }
+.acct-export { margin-bottom: var(--space-md); }
+.acct-key { margin: 0; padding: var(--space-sm); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+.acct td, .acct th { text-align: left; }
+@media (max-width: 48rem) { .acct-grid { grid-template-columns: minmax(0, 1fr); } .acct-figs { gap: var(--space-lg); } }
+.acct-google { align-self: flex-start; height: 38px; padding: 0 16px; gap: 10px; background: var(--color-ink); border-color: var(--color-ink); color: var(--color-on-fill); font-weight: 600; text-decoration: none; }
+.acct-google:hover { background: color-mix(in oklch, var(--color-ink) 88%, var(--color-paper)); }
+.acct .btn svg.acct-g { width: 16px; height: 16px; stroke: none; }
+.acct-confirm { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; }

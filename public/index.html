@@ -3,20 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#07080c">
+<meta name="theme-color" content="#000000">
 <title>Blix</title>
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/brand/blix-icon.png" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <link rel="stylesheet" href="/trade.css">
+<link rel="stylesheet" href="/coin.css">
+<link rel="stylesheet" href="/docs.css">
+<link rel="stylesheet" href="/account.css">
 </head>
 <body>
 <div class="shell">
   <aside class="side">
-    <a class="brand" href="#/"><img src="/icon.svg" alt="" width="30" height="30"><span>Blix</span></a>
+    <a class="brand" href="#/" aria-label="Blix, home"><img class="brand-mark" src="/brand/blix-chrome.png" alt="Blix" width="360" height="156"></a>
+    <div class="powered" aria-label="Powered by Jev and Grok"><small>Powered by</small><div class="pw-row"><span class="pw"><img src="/brand/jev.png" alt="" width="18" height="18">Jev</span><span class="pw"><span class="grok-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/></svg></span>Grok</span></div></div>
     <nav class="tabs" id="tabs">
       <a href="#/" data-r=""><svg viewBox="0 0 24 24"><path d="M2 12h5l3-7 4 14 3-7h5"/></svg><span>Pulse</span><em class="live-em">LIVE</em></a>
       <a href="#/signals" data-r="signals"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6-6"/></svg><span>Signals</span></a>
@@ -30,6 +34,7 @@
       <a href="#/health" data-r="health"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/><path d="M8 12h2l1.5-2.5 2 5L15 12h1.5"/></svg><span>Health</span></a>
       <a href="#/api" data-r="api"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/></svg><span>API</span></a>
       <a href="#/mcp" data-r="mcp"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v3"/></svg><span>MCP</span></a>
+      <a href="#/account" data-r="account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.600-8 8-8s8 3.600 8 8"/></svg><span>Account</span></a>
       <a href="#/settings" data-r="settings" class="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span>Settings</span></a>
     </nav>
     <div class="live" id="live"><i></i><span>connecting</span></div>

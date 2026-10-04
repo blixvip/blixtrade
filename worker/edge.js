@@ -14,7 +14,7 @@ const API = [
   [new RegExp(`^/api/coin/${MINT}/trades$`), 1, 0, ["limit", "before"]],
   [new RegExp(`^/api/(coin|token|research)/${MINT}$`), 3, 0, []],
   [new RegExp(`^/api/holders/${MINT}$`), 3, 0, ["top"]],
-  [new RegExp(`^/api/candles/${MINT}$`), 5, 0, ["tf"]],
+  [new RegExp(`^/api/candles/${MINT}$`), 1, 0, ["tf"]],
   [/^\/api\/(signals|tokens)$/, 5, 0, ["sort", "limit", "offset", "kind", "q", "minSafety", "theme", "class", "safe"]],
   [/^\/api\/(narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/, 5, 0, []],
 ];

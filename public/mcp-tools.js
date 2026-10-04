@@ -16,8 +16,9 @@ export const MCP_TOOLS = [
   { name: "blix_coin", description: "Everything on one coin: price history, safety report, holders summary, socials, research, signals.", props: { mint: MINT }, required: ["mint"], call: (a) => ["GET", `token/${seg(a.mint)}`] },
   { name: "blix_holders", description: "Live holder ledger for a coin: top holders tagged dev, sniper or bundle, and the top-10 share.", props: { mint: MINT }, required: ["mint"], call: (a) => ["GET", `holders/${seg(a.mint)}${qs({ top: a.limit })}`] },
   { name: "blix_candles", description: "Market-cap candles built from real trades, with volume. Returns the most recent candles.",
-    props: { mint: MINT, tf: { type: "string", enum: ["5s", "15s", "1m", "5m", "15m", "1h"], description: "Candle size (default 1m)" } }, required: ["mint"], tail: true,
-    call: (a) => ["GET", `candles/${seg(a.mint)}${qs({ tf: a.tf || "1m" })}`] },
+    props: { mint: MINT, tf: { type: "string", enum: ["1s", "5s", "15s", "1m", "5m", "15m", "1h"], description: "Candle size (default 1m)" } }, required: ["mint"], tail: true,
+    // The API takes the candle size in seconds.
+    call: (a) => ["GET", `candles/${seg(a.mint)}${qs({ tf: { "1s": 1, "5s": 5, "15s": 15, "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }[a.tf] || 60 })}`] },
   { name: "blix_quote", description: "A real Jupiter quote for a buy or a sell: amount out, price impact, route. Nothing is traded.",
     props: { mint: MINT, side: { type: "string", enum: ["buy", "sell"] }, amount: { type: "number", description: "SOL to spend on a buy, tokens to sell on a sell" }, slip: { type: "integer", description: "Slippage in basis points" } }, required: ["mint", "side", "amount"],
     call: (a) => ["GET", `quote${qs({ mint: a.mint, side: a.side, amount: a.amount, slip: a.slip })}`] },

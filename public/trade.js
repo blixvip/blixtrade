@@ -30,8 +30,8 @@ function cssColor(name, fallback) {
 const alpha = (rgb, a) => rgb.replace(/^rgb\((.+)\)$/, `rgba($1,${a})`);
 
 // ---------- chart ----------
-const TFS = [[5, "5s"], [15, "15s"], [60, "1m"], [300, "5m"], [900, "15m"], [3600, "1h"]];
-const chart = { el: null, api: null, candles: null, vol: null, markers: null, mint: null, tf: null, timer: null, last: null, r: null, ro: null };
+const TFS = [[1, "1s"], [5, "5s"], [15, "15s"], [60, "1m"], [300, "5m"], [900, "15m"], [3600, "1h"]];
+const chart = { el: null, api: null, candles: null, vol: null, markers: null, mint: null, tf: null, timer: null, last: null, r: null, ro: null, byTime: null, firstTime: null, src: null, raw: null, rawFirst: null, loading: false, polls: 0 };
 let tfPref = (() => { try { return +localStorage.getItem("trade:tf") || 0; } catch { return 0; } })();
 
 export function unmountTrade() {
@@ -41,44 +41,86 @@ export function unmountTrade() {
   panel.seq++; panel.epoch++; panel.el = null; panel.quote = null; panel.busy = false;
   try { chart.ro?.disconnect(); } catch {}
   try { chart.api?.remove(); } catch {}
-  Object.assign(chart, { el: null, api: null, candles: null, vol: null, markers: null, mint: null, last: null, r: null, ro: null });
+  Object.assign(chart, { el: null, api: null, candles: null, vol: null, markers: null, mint: null, last: null, r: null, ro: null, byTime: null, firstTime: null, src: null, raw: null, rawFirst: null, loading: false, polls: 0 });
 }
 
+// Prices on the chart need more digits than anywhere else: on a quiet coin every label on the axis would
+// otherwise read the same ("$3.5K" six times). Three significant decimals at every size.
+const usdP = (n) => n == null || !isFinite(n) ? "—" : n < 0 ? "" /* axis room below zero is not a price */ : Math.abs(n) >= 1e9 ? `$${(n / 1e9).toFixed(3)}B` : Math.abs(n) >= 1e6 ? `$${(n / 1e6).toFixed(3)}M`
+  : Math.abs(n) >= 1e5 ? `$${(n / 1e3).toFixed(1)}K` : Math.abs(n) >= 1e4 ? `$${(n / 1e3).toFixed(2)}K` : Math.abs(n) >= 1e3 ? `$${(n / 1e3).toFixed(3)}K`
+  : Math.abs(n) >= 1 ? `$${n.toFixed(2)}` : `$${n.toPrecision(3)}`;
+
+// The candles as a trader expects to read them: one for every interval up to now (an interval nobody
+// traded in is a flat candle at the last price, so the chart keeps moving and time reads evenly), and each
+// candle opening where the one before it closed. Long silences (over 300 intervals) are left as a break.
+const FILL_MAX = 300;
+export function continuous(rows, tf, nowSec = Date.now() / 1000) {
+  const out = [];
+  const flat = (time, px) => ({ time, open: px, high: px, low: px, close: px, value: 0, flat: true });
+  for (const x of rows) {
+    const prev = out[out.length - 1];
+    if (prev) {
+      const gap = Math.round((x.time - prev.time) / tf) - 1;
+      if (gap > 0 && gap <= FILL_MAX) for (let i = 1; i <= gap; i++) out.push(flat(prev.time + i * tf, prev.close));
+      const open = out[out.length - 1].close;
+      out.push({ ...x, open, high: Math.max(x.high, open), low: Math.min(x.low, open) });
+    } else out.push({ ...x });
+  }
+  const last = out[out.length - 1];
+  if (last) {
+    const until = Math.floor(nowSec / tf) * tf, gap = Math.round((until - last.time) / tf);
+    if (gap > 0 && gap <= FILL_MAX) for (let i = 1; i <= gap; i++) out.push(flat(last.time + i * tf, last.close));
+  }
+  return out;
+}
+
+const BAR = 9;            // candle width in pixels at rest: two candles look like two candles, not two walls
 export function mountChart(el, r) {
   unmountTrade();
   if (!el) return;
   const LW = window.LightweightCharts;
   const t = r.token;
-  // Young coins on the curve default to 15s candles, everything else to 1m.
-  const young = !t.graduated && Date.now() - (t.first_seen || Date.now()) < 3 * 3600e3;
-  chart.tf = tfPref || (young ? 15 : 60);
+  // A coin in its first half hour opens on 1s candles, one still on the curve on 15s, everything else on 1m.
+  const age = Date.now() - (t.first_seen || Date.now()), young = !t.graduated && age < 3 * 3600e3;
+  chart.tf = tfPref || (!t.graduated && age < 30 * 60_000 ? 1 : young ? 15 : 60);
   chart.mint = t.mint; chart.el = el; chart.r = r;
   el.innerHTML = `<div class="tc-head"><div class="tc-tfs">${TFS.map(([s, l]) => `<button class="tc-tf ${s === chart.tf ? "on" : ""}" data-tctf="${s}">${l}</button>`).join("")}</div>
     <span class="tc-ohlc num" id="tcOhlc"></span><span class="tc-src" id="tcSrc"></span></div>
     <div class="tc-canvas" id="tcCanvas"></div><p class="tc-note" id="tcNote"></p>`;
   if (!LW) { $q("#tcNote", el).textContent = "Chart library did not load."; return; }
-  const ink2 = cssColor("--color-ink-2", "#9aa3b2"), rule = cssColor("--color-rule", "#232733"), up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d");
+  const ink = cssColor("--color-ink", "#f2f4f7"), muted = cssColor("--color-muted", "#8b93a1"), rule = cssColor("--color-rule", "#232733"), paper = cssColor("--color-paper-4", "#1c1f26");
+  const up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d");
   const box = $q("#tcCanvas", el);
   chart.api = LW.createChart(box, {
     autoSize: true, height: 320,
-    layout: { background: { type: "solid", color: "transparent" }, textColor: ink2, fontFamily: "JetBrains Mono, ui-monospace, monospace", fontSize: 11, attributionLogo: false },
-    grid: { vertLines: { color: alpha(rule, 0.5) }, horzLines: { color: alpha(rule, 0.5) } },
-    rightPriceScale: { borderColor: rule, scaleMargins: { top: 0.08, bottom: 0.24 } },
-    timeScale: { borderColor: rule, timeVisible: true, secondsVisible: chart.tf < 60, rightOffset: 4 },
-    crosshair: { mode: 0 },
-    localization: { priceFormatter: (v) => usdC(v), timeFormatter: (s) => new Date(s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: chart.tf < 60 ? "2-digit" : undefined }) },
+    layout: { background: { type: "solid", color: "transparent" }, textColor: muted, fontFamily: "system-ui, 'Segoe UI Variable Text', 'Segoe UI', sans-serif", fontSize: 11, attributionLogo: false },
+    // Quiet grid: faint level lines to read prices off, no vertical lines.
+    grid: { vertLines: { visible: false }, horzLines: { color: alpha(rule, 0.55) } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.22 }, entireTextOnly: true },
+    // The axis reads in this PC's time (the library's default is UTC, hours off from the trade list beside it).
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: chart.tf < 60, rightOffset: 6, barSpacing: BAR, minBarSpacing: 1.5, shiftVisibleRangeOnNewBar: true,
+      tickMarkFormatter: (sec) => new Date(sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: chart.tf < 60 ? "2-digit" : undefined, hour12: false }) },
+    crosshair: { mode: 0, vertLine: { color: alpha(ink, 0.25), width: 1, style: 3, labelBackgroundColor: paper }, horzLine: { color: alpha(ink, 0.25), width: 1, style: 3, labelBackgroundColor: paper } },
+    localization: { priceFormatter: usdP, timeFormatter: (sec) => new Date(sec * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: chart.tf < 60 ? "2-digit" : undefined }) },
   });
-  chart.candles = chart.api.addSeries(LW.CandlestickSeries, { upColor: up, downColor: down, borderUpColor: up, borderDownColor: down, wickUpColor: up, wickDownColor: down, priceFormat: { type: "custom", formatter: (v) => usdC(v), minMove: 1e-6 } });
-  chart.vol = chart.api.addSeries(LW.HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "custom", formatter: (v) => usdC(v) }, lastValueVisible: false, priceLineVisible: false });
-  chart.api.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  chart.candles = chart.api.addSeries(LW.CandlestickSeries, {
+    upColor: up, downColor: down, borderVisible: false, wickUpColor: up, wickDownColor: down,
+    priceFormat: { type: "custom", formatter: usdP, minMove: 1e-9 },
+    priceLineColor: alpha(ink, 0.5), priceLineStyle: 2, priceLineWidth: 1,
+    // A coin that moved 1% should look like it moved 1%: the pane always spans at least 12% of the price,
+    // so a small candle is not stretched to the full height.
+    autoscaleInfoProvider: (original) => {
+      const o = original();
+      if (!o?.priceRange) return o;
+      const { minValue: lo, maxValue: hi } = o.priceRange, mid = (lo + hi) / 2, need = mid * 0.12;
+      return hi - lo >= need ? o : { ...o, priceRange: { minValue: mid - need / 2, maxValue: mid + need / 2 } };
+    },
+  });
+  // Volume: faint bars along the bottom fifth, on their own hidden scale (it never touches the price axis).
+  chart.vol = chart.api.addSeries(LW.HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+  chart.api.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
   chart.markers = LW.createSeriesMarkers(chart.candles, []);
-  chart.api.subscribeCrosshairMove((p) => {
-    const d = p?.seriesData?.get(chart.candles);
-    const o = $q("#tcOhlc", chart.el);
-    if (!o) return;
-    const c = d || chart.last;
-    o.innerHTML = c ? `O <b>${usdC(c.open)}</b> H <b>${usdC(c.high)}</b> L <b>${usdC(c.low)}</b> C <b class="${c.close >= c.open ? "up" : "down"}">${usdC(c.close)}</b>` : "";
-  });
+  chart.api.subscribeCrosshairMove((p) => readout(p?.seriesData?.get(chart.candles) ? p.time : null));
   el.onclick = (e) => {
     const b = e.target.closest("[data-tctf]");
     if (!b) return;
@@ -86,50 +128,98 @@ export function mountChart(el, r) {
     mountChart(el, chart.r); mountPanelAgain();
   };
   loadCandles(true);
-  chart.timer = setInterval(() => { if (!document.hidden && chart.el?.isConnected) loadCandles(false); else if (!chart.el?.isConnected) unmountTrade(); }, chart.tf <= 15 ? 1500 : 3000);
+  // Fast refresh: only the newest candles are asked for (a few rows), several times a second on the short
+  // intervals, so the last candle moves as trades land. Every 20th pass re-reads the whole chart.
+  chart.polls = 0;
+  chart.timer = setInterval(() => {
+    if (!chart.el?.isConnected) return unmountTrade();
+    if (document.hidden || chart.loading) return;
+    loadCandles(false, ++chart.polls % 20 === 0);
+  }, chart.tf <= 5 ? 400 : chart.tf <= 15 ? 800 : 2000);
 }
 
-async function loadCandles(first) {
+// The line above the chart: the candle under the pointer, or the newest one. Market cap, its move, its volume.
+function readout(time) {
+  const o = chart.el && $q("#tcOhlc", chart.el);
+  if (!o) return;
+  const c = (time != null && chart.byTime?.get(time)) || chart.last;
+  if (!c) { o.innerHTML = ""; return; }
+  const chg = c.open > 0 ? (c.close / c.open - 1) * 100 : 0, cls = c.close >= c.open ? "up" : "down";
+  o.innerHTML = `<span class="dim">MC</span> <b>${usdP(c.close)}</b> <b class="${cls}">${pctF(chg)}</b> <span class="dim">O</span> ${usdP(c.open)} <span class="dim">H</span> ${usdP(c.high)} <span class="dim">L</span> ${usdP(c.low)} <span class="dim">Vol</span> ${usdC(c.value || 0)}`;
+}
+
+async function loadCandles(first, whole = false) {
   const mint = chart.mint, tf = chart.tf;
+  // What the server last sent that was a real candle: the refresh asks from there on.
+  const since = !first && !whole && chart.raw?.length ? chart.raw[chart.raw.length - 1].time : null;
   let d;
-  try { d = await api(`candles/${mint}?tf=${tf}`); } catch (e) { const note = chart.mint === mint && chart.tf === tf && chart.el && $q("#tcNote", chart.el); if (first && note) note.textContent = `No candles: ${e.message}`; return; }
+  chart.loading = true;
+  try { d = await api(`candles/${mint}?tf=${tf}${since ? `&since=${since}` : ""}`); } catch (e) { chart.loading = false; const note = chart.mint === mint && chart.tf === tf && chart.el && $q("#tcNote", chart.el); if (first && note) note.textContent = `No candles: ${e.message}`; return; }
+  chart.loading = false;
   if (!chart.candles || chart.mint !== mint || chart.tf !== tf) return;
   const up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d");
-  const rows = d.rows.filter((x) => x.open > 0 && x.close > 0);
-  const vols = rows.map((x) => ({ time: x.time, value: x.value || 0, color: alpha(x.close >= x.open ? up : down, 0.45) }));
-  if (first || !chart.last || rows.length < 2) {
-    chart.candles.setData(rows.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-    chart.vol.setData(vols);
-    if (first) chart.api.timeScale().fitContent();
+  const got = d.rows.filter((x) => x.open > 0 && x.close > 0);
+  // A partial answer replaces the tail of what is already held; a different source or start means re-read it all.
+  if (d.partial && chart.raw && d.source === chart.src && d.first === chart.rawFirst) chart.raw = [...chart.raw.filter((x) => x.time < since), ...got];
+  else if (d.partial) return loadCandles(false, true);
+  else { chart.raw = got; chart.rawFirst = d.first ?? got[0]?.time ?? null; }
+  const rows = continuous(chart.raw, tf);
+  const candle = ({ time, open, high, low, close }) => ({ time, open, high, low, close });
+  const volume = (x) => ({ time: x.time, value: x.value || 0, color: alpha(x.close >= x.open ? up : down, 0.32) });
+  // A new source (GeckoTerminal charting a just-bonded pool over the price-only candles) redraws it all.
+  // A trade that landed in an interval already drawn as flat (it arrived a moment late) cannot be patched
+  // in place by the chart library: the candles are set again, which keeps the view where it is.
+  const late = Boolean(d.partial && chart.last && got.some((x) => x.time > since && x.time < chart.last.time));
+  if (first || !chart.last || rows.length < 2 || d.source !== chart.src || rows[0].time !== chart.firstTime || late) {
+    chart.candles.setData(rows.map(candle));
+    chart.vol.setData(rows.map(volume));
+    // Newest candle at the right at a fixed width; a long history starts on its latest 160 candles.
+    if (first) {
+      const n = rows.length;
+      if (n > 160) chart.api.timeScale().setVisibleLogicalRange({ from: n - 160, to: n + 6 });
+      else { chart.api.timeScale().applyOptions({ barSpacing: BAR }); chart.api.timeScale().scrollToRealTime(); }
+    }
   } else {
     // Only the newest candles change between polls.
-    for (const x of rows.filter((x) => x.time >= chart.last.time)) chart.candles.update({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close });
-    for (const v of vols.filter((v) => v.time >= chart.last.time)) chart.vol.update(v);
+    for (const x of rows) if (x.time >= chart.last.time) { chart.candles.update(candle(x)); chart.vol.update(volume(x)); }
   }
+  chart.byTime = new Map(rows.map((x) => [x.time, x]));
+  chart.firstTime = rows[0]?.time ?? null;
   chart.last = rows[rows.length - 1] || null;
-  const o = $q("#tcOhlc", chart.el);
-  if (o && chart.last) o.innerHTML = `C <b class="${chart.last.close >= chart.last.open ? "up" : "down"}">${usdC(chart.last.close)}</b> <span class="dim">market cap</span>`;
+  chart.src = d.source;
+  readout(null);
   const src = $q("#tcSrc", chart.el); if (src) src.textContent = d.source ? `${d.live ? "● " : ""}${d.source}` : "";
   const note = $q("#tcNote", chart.el);
   if (note) note.textContent = rows.length ? "" : d.note ? `No candles yet (${d.note}).` : "No trades in this window yet. Candles appear with the first trade Blix sees.";
   if (first) setMarkers();
 }
 
-// Alerts, followed-wallet trades and your paper fills on the candles.
+// Who traded where, as small dots on the candles: your paper fills (B / S), trades by the dev, snipers,
+// bundles and followed wallets (DB / DS, SB / SS… from the coin page), and alerts (a plain square).
+// One dot per candle and side: several trades in the same candle are counted, not stacked.
 function setMarkers() {
   const r = chart.r; if (!r || !chart.markers) return;
-  const up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d"), acc = cssColor("--color-accent", "#5b8cff");
+  const up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d"), ink = cssColor("--color-ink", "#f2f4f7"), muted = cssColor("--color-muted", "#8b93a1");
   const snap = (ms) => Math.floor(ms / 1000 / chart.tf) * chart.tf;
-  const m = [];
-  for (const p of r.paper || []) {
-    m.push({ time: snap(p.t), position: "belowBar", color: up, shape: "arrowUp", text: `B ${p.sol}` });
-    if (p.exit_t) m.push({ time: snap(p.exit_t), position: "aboveBar", color: down, shape: "arrowDown", text: "S" });
-  }
-  for (const w of r.walletTrades || []) m.push({ time: snap(w.t), position: w.side === "buy" ? "belowBar" : "aboveBar", color: w.side === "buy" ? up : down, shape: "circle", text: (w.label || "").slice(0, 8) });
-  for (const s of (r.signals || []).slice(0, 40)) m.push({ time: snap(s.t), position: "aboveBar", color: acc, shape: "square", text: s.kind });
+  const groups = new Map();
+  const add = (ms, buy, text, color) => {
+    const time = snap(ms), k = `${time}|${buy ? 1 : 0}|${color}`;
+    const g = groups.get(k) || { time, buy, color, texts: [], n: 0 };
+    g.n++; if (text && !g.texts.includes(text)) g.texts.push(text);
+    groups.set(k, g);
+  };
+  for (const p of r.paper || []) { add(p.t, true, "B", ink); if (p.exit_t) add(p.exit_t, false, "S", ink); }
+  // Followed wallets: a named one shows its first letters; the rest are bare dots (a busy coin has dozens).
+  for (const w of r.walletTrades || []) add(w.t, w.side === "buy", w.label ? String(w.label).slice(0, 3) : "", w.side === "buy" ? up : down);
+  for (const x of r.marks || []) add(x.t, x.buy, x.text, x.buy ? up : down);
+  const m = [...groups.values()].map((g) => ({ time: g.time, position: g.buy ? "belowBar" : "aboveBar", color: g.color, shape: "circle", size: 0.6,
+    text: g.texts.length ? `${g.texts.slice(0, 2).join(" ")}${g.n > g.texts.length ? ` ×${g.n}` : ""}` : "" }));
+  for (const sg of (r.signals || []).slice(0, 40)) m.push({ time: snap(sg.t), position: "aboveBar", color: muted, shape: "square", size: 0.5, text: "" });
   const first = chart.candles.data()[0]?.time ?? Infinity;
   chart.markers.setMarkers(m.filter((x) => x.time >= first).sort((a, b) => a.time - b.time));
 }
+// Redraw the markers after the open coin's data changed (the coin page adds trade marks as they happen).
+export function refreshMarks(r) { if (chart.r && r && chart.r.token?.mint === r.token?.mint) { chart.r = r; setMarkers(); } }
 
 // ---------- buy / sell panel ----------
 const panel = { el: null, r: null, side: "buy", sol: null, pct: 100, slip: 300, timer: null, quote: null, seq: 0, epoch: 0, submitting: false, sizes: [0.1, 0.25, 0.5, 1, 2], positions: [] };

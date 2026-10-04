@@ -183,3 +183,26 @@ A row is four fixed lines beside a 44px picture with the bonding ring:
 4. **rank** (traction 0–100: a small filled square, up colour at 60+) · triage word · AI call (grade colour, no pill) · verdict (muted, one line) … actions: `B 0.25` (outlined, fills on hover), `read ›` (accent link), `Fomo` (muted link).
 
 Nothing in a row is a bordered chip; the only controls are the three actions. Compact mode drops the verdict text and the contract. Column headers are 32px, small capitals, hairline-separated; columns have no radius.
+
+## Shell and Pulse rows (v9, 2026-10-04): the owner's mockup. This supersedes the earlier "Pulse rows" and "Nav: N3 side rail".
+The owner sent a full-page mockup (a trading terminal in the Axiom layout, with the chrome BLIX wordmark) and said: "it should look exactly like this but for solana only". Do not simplify this back to plain text rows or a side rail unless he asks.
+
+**Shell (new front end, `web/src/shell/Rail.tsx`)**
+- Top bar, 60px: wordmark · page links (Discover, Pulse, Trackers, Signals, Picks, Research, Portfolio, More) with an ink underline on the current page · search pill ("Search by token or CA", `/` focuses it) · SOL pill · white `Deposit` pill · wallet pill (SOL balance, or "Sign in") · account circle.
+- Tape, 32px: what is running now (picture, ticker, market cap, 1m change).
+- Status bar, 36px, along the bottom: Wallet · Pulse · PnL · Health, then SOL price, launches/min, trades/sec, AI queue, the background effect switch, and the LIVE pill.
+- Solana only: no chain switcher.
+
+**Pulse**
+- Three columns in one panel, divided by hairlines: New Pairs, Final Stretch, Migrated. No "Running now".
+- Column header, 48px: title (18px, 600) · search pill · quick-buy pill (lightning, size in SOL, P1 P2 P3 presets kept per column).
+
+**Row, 116px**
+- Left: 68px picture framed by bonding progress (up colour), launchpad dot on its corner, short contract under it.
+- Line 1: ticker (18px, 600) · name (muted, same size) · copy … `V` volume · `MC` market cap. Market cap is coloured by size: info under $30K, warn under $150K, up above.
+- Line 2: age (up colour) · icon links (launchpad, website, Telegram, search on X) · icon + number for holders, live traders, rank … 1m change · `TX` count with the buy/sell bar.
+- Line 3: `@handle` (info colour) · the AI call with its icon · its one-line verdict (muted).
+- Line 4: audit pills (icon + figure, up = pass, down = fail): top-10 share, dev share or `DS`, snipers, bundle, serial-dev count, 5-minute net SOL, and a red pill when the price is stale or the pool is emptied … the quick-buy pill (chrome fill, lightning, size + SOL).
+- A figure Blix has no source for (X followers, watchers, fees paid, insiders) is left out, never faked.
+
+**Shell amendment (2026-10-04, later the same day):** after seeing the top nav the owner said "I like it with the side part better". The new front end is back on the N3 side rail, in classic Blix's order (Pulse, Signals, Picks, Research, Narratives, Coins, Wallets, Briefs, Track record, Health, API, MCP, Account; Settings at the bottom with the connection state). The strip across the top of the page keeps the tape, search, Deposit and the wallet. The three-column Pulse and its rows are unchanged.

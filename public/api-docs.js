@@ -12,7 +12,7 @@ export const API_DOCS = [
     ["GET", "/api/token/<mint>/explain", "Claude's explanation of the coin from Blix's data"],
     ["POST", "/api/token/<mint>/classify", "{ themes, assetClass }. Your correction wins over the automatic classification; null puts it back on automatic"],
     ["GET", "/api/holders/<mint>?top=25", "Live holder ledger: top holders tagged dev / sniper / bundle, each position, top-10 share"],
-    ["GET", "/api/candles/<mint>?tf=5s|15s|1m|5m|15m|1h", "Market-cap candles built from real trades, with volume"],
+    ["GET", "/api/candles/<mint>?tf=<seconds>&since=<time>", "Market-cap candles built from real trades, with volume. tf in seconds: 1, 5, 15, 60, 300, 900 or 3600; since (a candle time) returns only the candles from it on"],
     ["GET", "/api/quote?mint=<mint>&side=buy|sell&amount=<n>&slip=<bps>", "A real Jupiter quote: out amount, price impact, route"],
   ]],
   ["Signals, narratives, briefs", [

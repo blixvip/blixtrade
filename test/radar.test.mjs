@@ -723,3 +723,175 @@ test("a LaunchLab (Bonk) trade is priced from its pool: market cap, progress, si
   const c = L.readCreate(Buffer.from("97d7e20976a173ae0907b4d157216ae3a7e699d8e8a47f23c3e661adeb0fdada94457a3260fb6766eb0799a070110ebc7290d43fcf681af0d3822362114f5d666b3e1a3c377bc16d824e797ada4b6627bda9ecb7d512953f1bc14fad40c3d22afc17b8d17e276abb06040000002e636f6d040000002e434f4d3600000068747470733a2f2f6d657461646174612e6a37747261636b65722e696f2f6d657461646174612f495641566c7956667a6d2e6a736f6e000080c6a47e8d03000078c5fb51d10200e1770d82010000000100000000000000000000000000000000000000000000000000", "hex"));
   assert.equal(c.name, ".com"); assert.equal(c.symbol, ".COM"); assert.match(c.uri, /^https:\/\/metadata\.j7tracker\.io\//);
 });
+
+test("coin page: trades, 5-minute flow, holders with average prices, top traders, early buyers and the dev", async () => {
+  const L = await import("../server/livetrades.js");
+  const C = await import("../server/coin.js");                 // its trade listener registers on import
+  const H = await import("../server/holders.js");
+  const E = await import("../server/engine.js");
+  L.onLiveTrade(H._onTrade);                                   // the holder ledger, without its timers and saved state
+  L.feed.solUsd = 200;
+  const mint = "CoinPageTest11111111111111111111111111pump";
+  const dev = "DevWa11et1111111111111111111111111111111111", sn = "Sn1perWa11et111111111111111111111111111111", late = "LateWa11et11111111111111111111111111111111";
+  E.launchIndex.set(mint, { mint, name: "Test", symbol: "TST", creator: dev });
+  const P = (sold) => sold / 793_100_000;
+  L.recordTrade({ mint, sol: 1, tokens: 30_000_000, buy: true, user: dev, mcSol: 30, progress: P(30e6), slot: 100 });
+  L.recordTrade({ mint, sol: 0.5, tokens: 14_000_000, buy: true, user: sn, mcSol: 31, progress: P(44e6), slot: 101 });
+  L.recordTrade({ mint, sol: 0.2, tokens: 5_000_000, buy: true, user: late, mcSol: 32, progress: P(49e6), slot: 140 });
+  L.recordTrade({ mint, sol: 0.6, tokens: 14_000_000, buy: false, user: sn, mcSol: 31.5, progress: P(35e6), slot: 141 });
+  L.recordTrade({ mint, sol: 0.1, tokens: 1_000, buy: true, user: null, mcSol: 31.6, progress: P(35.001e6), slot: 142 });   // a feed that does not name the trader
+
+  const tr = await C.coinTrades(mint, { limit: 50 });
+  assert.equal(tr.source, "live");
+  assert.equal(tr.trades.length, 5);
+  assert.equal(tr.trades[0].wallet, null, "newest first; an unnamed trader stays unnamed");
+  assert.deepEqual(tr.trades.map((x) => x.tag), [null, "sniper", null, "sniper", "dev"]);
+  assert.equal(tr.trades[1].side, "sell");
+  assert.equal(tr.trades[4].mcUsd, 6000);
+
+  const c = C.coinPage(mint);
+  assert.deepEqual([c.m5.buys, c.m5.sells, c.m5.traders], [4, 1, 3]);
+  assert.equal(c.m5.netUsd, Math.round((1 + 0.5 + 0.2 + 0.1 - 0.6) * 200));
+  assert.equal(c.holders.count, 2, "the sniper sold out");
+  assert.equal(c.holders.genesis, true);
+  assert.equal(c.holders.top10, 3.5);
+  assert.equal(c.info.snipers.n, 1);
+  assert.equal(c.info.snipers.pct, 0);
+  const d = c.holders.list.find((w) => w.wallet === dev);
+  assert.equal(d.tag, "dev");
+  assert.equal(d.avgBuyMc, Math.round((1 / 30e6) * 1e9 * 200));
+  assert.equal(c.dev.wallet, dev);
+  assert.equal(c.dev.pct, 3);
+  assert.equal(c.traders[0].wallet, sn, "the sniper's +0.1 SOL is the best result");
+  assert.equal(c.traders[0].realizedSol, 0.1);
+  assert.deepEqual(c.early.map((w) => w.wallet), [dev, sn, late]);
+  assert.equal(c.early[1].status, "sold all");
+
+  // A coin nobody has seen answers plainly instead of failing.
+  const none = C.coinPage("NobodySawThis111111111111111111111111111pump");
+  assert.equal(none.holders, null); assert.equal(none.m5, null); assert.equal(none.dev, null);
+  assert.equal((await C.coinTrades("NobodySawThis111111111111111111111111111pump")).source, "none");
+});
+
+test("work that holds the radar up is recorded by name; quick work is not", async () => {
+  const H = await import("../server/health.js");
+  const spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end); return "done"; };
+  assert.equal(H.timed("quick job", () => spin(5))(), "done");
+  assert.equal(H.timed("slow job", () => spin(300))(), "done");
+  assert.throws(() => H.timed("slow failing job", () => { spin(300); throw new Error("x"); })());
+  const names = H.responsiveness().slow.map((s) => s.name);
+  assert.ok(names.includes("slow job") && names.includes("slow failing job"));
+  assert.ok(!names.includes("quick job"));
+  assert.ok(H.responsiveness().slow.find((s) => s.name === "slow job").worstMs >= 250);
+});
+
+test("a backup is written by a separate process and is a complete, readable database", async () => {
+  const { backupInBackground, backups } = await import("../server/db.js");
+  const { DatabaseSync } = await import("node:sqlite");
+  db.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('backup_probe', 'yes')").run();
+  const [a, b] = await Promise.all([backupInBackground(), backupInBackground()]);
+  assert.equal(a.file, b.file, "two requests at once share one copy");
+  assert.ok(a.bytes > 0 && backups().some((x) => x.file === a.file));
+  const copy = new DatabaseSync(a.file, { readOnly: true });
+  assert.equal(copy.prepare("SELECT v FROM meta WHERE k = 'backup_probe'").get().v, "yes");
+  copy.close();
+});
+
+test("a visitor on the public site can read the live views and nothing else", async () => {
+  const { visitorMay, visitorHealth } = await import("../server/access.js");
+  const mint = "So11111111111111111111111111111111111111112";
+  for (const p of ["/", "/app.js", `/img/${mint}`, "/api/pulse", "/api/overview", "/api/bot", "/api/picks/all", "/api/me", "/api/health", `/api/coin/${mint}`, `/api/coin/${mint}/trades`, `/api/holders/${mint}`, `/api/candles/${mint}`, `/api/token/${mint}`])
+    assert.equal(visitorMay("GET", p), true, p);
+  // The owner's setup, anything that costs money or calls out on demand, and the per-visitor stream.
+  for (const p of ["/api/settings", "/api/export", "/api/backup", "/api/remote-link", "/api/wallets", "/api/alerts", "/api/paper", "/api/paper/3", "/api/events", "/api/fomo", "/api/quote", "/api/stream", "/api/account/me", `/api/wallet/${mint}`, "/api/anything-new"])
+    assert.equal(visitorMay("GET", p), false, p);
+  // No write of any kind, even on a path a visitor may read.
+  for (const m of ["POST", "DELETE", "PUT", "PATCH"]) for (const p of ["/api/pulse", "/api/settings", "/api/paper", "/api/brief", `/api/research/${mint}`, "/"])
+    assert.equal(visitorMay(m, p), false, `${m} ${p}`);
+  const h = visitorHealth({ worst: "ok", issues: 0, parts: [{ key: "tunnel", name: "Remote access", state: "ok", summary: "https://secret.trycloudflare.com", url: "x", stats: {} }] });
+  assert.deepEqual(h.parts, [{ key: "tunnel", name: "Remote access", state: "ok" }]);
+});
+
+test("the public front door: one PC request serves every visitor, and the last copy survives the PC going off", async () => {
+  const W = await import("../worker/edge.js");
+  const U = (s) => new URL(s, "https://trade.blixvip.com");
+  // Who is a visitor: no access key. The owner and every write go straight to the PC.
+  assert.equal(W.isVisitorRead("GET", U("/api/pulse"), ""), true);
+  assert.equal(W.isVisitorRead("GET", U("/api/pulse"), "a=1; blix_key=abc"), false);
+  assert.equal(W.isVisitorRead("GET", U("/?key=abc"), ""), false);
+  assert.equal(W.isVisitorRead("POST", U("/api/paper"), ""), false);
+  // What is kept, and that made-up query strings cannot get past the kept copy.
+  assert.equal(W.keepPlan(U("/api/pulse?x=" + Math.random())).key, "https://trade.blixvip.com/api/pulse");
+  assert.equal(W.keepPlan(U("/api/settings")), null);
+  assert.equal(W.keepPlan(U("/api/stream")), null);
+  assert.equal(W.keepPlan(U("/some/app/route")).key, "https://trade.blixvip.com/");
+  assert.equal(W.keepPlan(U("/app.js?v=9")).key, "https://trade.blixvip.com/app.js");
+  assert.match(W.keepPlan(U("/api/tokens?sort=score&evil=1&limit=20")).key, /\/api\/tokens\?sort=score&limit=20$/);
+
+  const store = new Map(), kv = new Map();
+  let t = 1_000_000, calls = 0, up = true;
+  const io = {
+    now: () => t, defer: (p) => p,
+    cache: { match: async (r) => store.get(r.url)?.clone(), put: async (r, res) => { store.set(r.url, res); } },
+    kv: { getWithMetadata: async (k) => kv.get(k) ? { value: kv.get(k).value, metadata: kv.get(k).metadata } : { value: null, metadata: null }, put: async (k, value, o) => { kv.set(k, { value, metadata: o.metadata }); } },
+    toOrigin: async () => { calls++; if (!up) throw new Error("tunnel down"); return new Response(JSON.stringify({ n: calls }), { status: 200, headers: { "content-type": "application/json", "set-cookie": "x=1" } }); },
+  };
+  const plan = W.keepPlan(U("/api/pulse"));
+  const many = await Promise.all(Array.from({ length: 50 }, () => W.visitorRead(plan, io)));
+  assert.equal(calls, 1, "fifty visitors at once, one request to the PC");
+  assert.equal((await many[7].json()).n, 1);
+  assert.equal(many[7].headers.get("set-cookie"), null);
+  await new Promise((r) => setTimeout(r, 5));
+  t += 500; await W.visitorRead(plan, io);
+  assert.equal(calls, 1, "still fresh half a second later");
+  t += 1000; assert.equal((await (await W.visitorRead(plan, io)).json()).n, 2);
+  // The PC goes off: the last copy is served and says how old it is.
+  up = false; t += 120_000;
+  const old = await W.visitorRead(plan, io);
+  assert.equal(old.status, 200); assert.equal(old.headers.get("x-blix-stale"), "120"); assert.equal((await old.json()).n, 2);
+  // Even an edge that never saw the page has the copy kept in KV.
+  store.clear();
+  const fromKv = await W.visitorRead(plan, io);
+  assert.equal((await fromKv.json()).n, 1); assert.ok(Number(fromKv.headers.get("x-blix-stale")) >= 120);
+  // A view that is never snapshotted has nothing to fall back on: the caller shows the offline answer.
+  assert.equal(await W.visitorRead(W.keepPlan(U("/api/picks")), io), null);
+  // What the PC refuses (the site not open to visitors yet) is passed on, not kept.
+  up = true; io.toOrigin = async () => new Response("key required", { status: 401 });
+  t += 5000; assert.equal((await W.visitorRead(W.keepPlan(U("/api/bot")), io)).status, 401);
+  assert.equal(store.size, 0);
+  // Too many requests that have to go to the PC from one address are refused.
+  let refused = 0; for (let i = 0; i < 300; i++) if (W.overLimit("1.2.3.4", t)) refused++;
+  assert.equal(refused, 60); assert.equal(W.overLimit("5.6.7.8", t), false);
+});
+
+test("chart candles: one-second buckets, and a refresh that asks only for the newest", async () => {
+  const L = await import("../server/livetrades.js");
+  const K = await import("../server/candles.js");
+  K.startCandles();
+  L.feed.solUsd = 200;
+  const mint = "CandleTest1111111111111111111111111111111pump";
+  const P = { tokens: 1000, user: "u", progress: 0.1, vSol: 30, vTok: 1e9 };
+  L.recordTrade({ ...P, mint, sol: 1, buy: true, mcSol: 30 });
+  L.recordTrade({ ...P, mint, sol: 2, buy: false, mcSol: 29 });
+  const one = await K.candles(mint, 1);
+  assert.equal(one.tf, 1, "the one-second interval is offered");
+  assert.ok(one.rows.length >= 1 && one.rows.length <= 2);
+  const last = one.rows[one.rows.length - 1];
+  assert.equal(last.close, 29 * 200);
+  assert.equal(one.rows.reduce((s, r) => s + r.value, 0), 3 * 200);
+  assert.equal(one.partial, false);
+  const tail = await K.candles(mint, 1, last.time);
+  assert.equal(tail.partial, true); assert.equal(tail.rows.length, 1); assert.equal(tail.first, one.rows[0].time);
+  assert.equal((await K.candles(mint, 1, last.time + 60)).rows.length, 0);
+  assert.equal((await K.candles(mint, 7)).tf, 60, "an interval that is not offered falls back to one minute");
+
+  // The chart's own tidy-up: flat candles for silent intervals, each candle opening at the previous close.
+  const C = await import("../public/trade.js").catch(() => null);
+  if (C?.continuous) {
+    const rows = C.continuous([{ time: 100, open: 10, high: 12, low: 9, close: 11, value: 5 }, { time: 103, open: 14, high: 15, low: 13, close: 15, value: 2 }], 1, 105.4);
+    assert.deepEqual(rows.map((r) => r.time), [100, 101, 102, 103, 104, 105]);
+    assert.deepEqual([rows[1].open, rows[1].close, rows[1].value], [11, 11, 0]);
+    assert.deepEqual([rows[3].open, rows[3].low, rows[3].high], [11, 11, 15]);
+    assert.equal(rows[5].close, 15);
+  }
+});

@@ -46,14 +46,23 @@ export function windowStats(mint) {
 // Moving = real demand in the last 5 minutes, not one wallet looping trades and not dust bots (dozens of
 // wallets trading 0.0001 SOL each): 10+ trades from 6+ different wallets with at least half a SOL traded,
 // or 3+ SOL of net buying.
+// Every pump.fun curve starts near 28 SOL of market cap (30 virtual SOL against 1.073B virtual tokens). A coin
+// priced far below that is on a non-standard curve: real trades, but its figures do not compare with the rest.
+// LaunchLab coins (s.pad) start elsewhere and are left alone.
+const STD_START_SOL = 25;
+export const oddCurve = (s) => Boolean(s) && !s.pad && s.mc > 0 && s.mc < STD_START_SOL;
+
 const moving = (w) => (w.trades >= 10 && w.traders >= 6 && w.buySol + w.sellSol >= 0.5) || w.netSol >= 3;
 const heat = (w) => w.traders * 2 + w.netSol * 3 + w.trades * 0.3 + Math.max(0, Math.min(w.chg ?? 0, 300)) * 0.1;
 
 // Every coin moving right now, hottest first. `exclude` = mints already shown elsewhere (they are still
-// counted, just not returned).
+// counted, just not returned). A coin whose curve has completed belongs to Migrated, and one on a
+// non-standard curve is left out.
 export function runners({ limit = 80, exclude = null } = {}) {
   const out = [];
   for (const m of recent.keys()) {
+    const s = live.get(m);
+    if (s && ((s.progress ?? 0) >= 0.995 || oddCurve(s))) continue;
     const w = windowStats(m);
     if (!w || !moving(w) || exclude?.has(m)) continue;
     out.push({ mint: m, ...w, heat: Math.round(heat(w)) });

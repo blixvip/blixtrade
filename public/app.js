@@ -3,8 +3,28 @@ import { mountChart, mountPanel } from "./trade.js";
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 let lastApiOk = 0;
-const api = (p, opt) => fetch(`/api/${p}`, { signal: AbortSignal.timeout(opt?.method ? 120_000 : 20_000), ...opt }).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.error || r.status); lastApiOk = Date.now(); return b; });
-const post = (p, body) => api(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+// The public site: visitors get a read-only page (the server refuses their writes), and when the PC that
+// runs Blix is off the site answers with its last copy and says how old it is (x-blix-stale, in seconds).
+const site = { readonly: false, stale: null };
+function siteBar() {
+  let el = $("#sitebar");
+  if (!el) { el = document.createElement("div"); el.id = "sitebar"; el.setAttribute("role", "status"); document.body.appendChild(el); }
+  el.hidden = !site.readonly && site.stale == null;
+  el.classList.toggle("stale", site.stale != null);
+  el.textContent = site.stale != null ? `Host offline · showing the last copy, about ${Math.max(1, Math.round(site.stale / 60))} min old · retrying`
+    : "Public view · read-only · paper trading only, not financial advice";
+}
+const api = (p, opt) => fetch(`/api/${p}`, { signal: AbortSignal.timeout(opt?.method ? 120_000 : 20_000), ...opt }).then(async (r) => {
+  const b = await r.json(); if (!r.ok) throw new Error(b.error || r.status); lastApiOk = Date.now();
+  const st = r.headers.get("x-blix-stale"), stale = st == null ? null : +st;
+  if (!opt?.method && (stale == null) !== (site.stale == null)) { site.stale = stale; siteBar(); } else if (stale != null) site.stale = stale;
+  return b;
+});
+const post = (p, body) => {
+  if (site.readonly) { toast("This is the public view of Blix: it is read-only."); return Promise.reject(new Error("read-only")); }
+  return api(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+};
+api("me").then((m) => { site.readonly = Boolean(m.readonly); document.body.classList.toggle("readonly", site.readonly); siteBar(); }).catch(() => {});
 
 // ---------- formatting ----------
 const money = (n) => n == null ? "—" : n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
@@ -978,7 +998,7 @@ function pulseRow(t, col) {
     <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
     <div class="pr-b">
       <div class="r1"><button class="star ${pulseState.watch.has(t.mint) ? "on" : ""}" data-pwatch="${esc(t.mint)}" title="Watchlist (w)">${ICON.star}</button><b class="sym">${esc(t.symbol || "?")}</b><span class="nm">${esc(t.name || "")}</span>
-        <span class="r-right mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></span></div>
+        <span class="r-right mc ${t.warn ? `w-${esc(t.warn.kind)}` : ""}"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b>${t.warn ? `<i class="pr-warn" title="${esc(t.warn.text)}">${t.warn.kind === "odd-curve" ? "ODD CURVE" : t.warn.kind === "emptied" ? "EMPTIED" : "STALE"}</i>` : ""}</span></div>
       <div class="r2"><span class="pr-age">${ageStr(t.age)}</span>${protoChips(t)}<span class="links">${extLink(t.x, ICON.x, "") && `<span title="X">${extLink(t.x, ICON.x, "")}</span>`}${extLink(t.web, ICON.web, "untrusted") && `<span title="Website set by the creator (unverified)">${extLink(t.web, ICON.web, "untrusted")}</span>`}${extLink(t.tg, ICON.tg, "") && `<span title="Telegram">${extLink(t.tg, ICON.tg, "")}</span>`}</span><span class="ca mono" title="Contract ${esc(t.mint)}">${esc(t.mint.slice(0, 4))}…${esc(t.mint.slice(-4))}</span>
         <span class="r-right vol"><small>V</small><b class="num lv-v">${compact(vol)}</b>${t.chg1m != null ? `<i class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</i>` : t.chg5 != null ? `<i class="num lv-c5 ${cls(t.chg5)}">${pct(t.chg5)}</i>` : `<i class="num lv-chg"></i>`}</span></div>
       <div class="r3">
@@ -1045,8 +1065,10 @@ const PF_BOOLS = [...PF_TOGGLES, ...PF_FLAGS];
 // Where a coin was launched and where it trades now.
 function protoOf(t) {
   const m = t.mint || "", d = String(t.dex || "").toLowerCase(), out = new Set();
-  // The live trade feed decodes the pump.fun program only, so anything it has priced is a pump.fun coin.
-  if (/pump$/.test(m) || t.pool === "pump" || d === "pumpfun" || d === "pumpswap" || t.live || t.lastTrade || (!t.pool && (t.startMcapSol != null || t.devSol != null))) out.add("Pump");
+  // The live trade feed decodes pump.fun and LaunchLab (Bonk); a LaunchLab coin always says so in `pool`,
+  // so anything else the feed has priced is a pump.fun coin.
+  const lab = /bonk$/.test(m) || t.pool === "bonk" || t.pool === "launchlab";
+  if (/pump$/.test(m) || t.pool === "pump" || d === "pumpfun" || d === "pumpswap" || (!lab && (t.live || t.lastTrade || (!t.pool && (t.startMcapSol != null || t.devSol != null))))) out.add("Pump");
   if (/bonk$/.test(m) || t.pool === "bonk") out.add("Bonk");
   if (/BAGS$/.test(m) || d === "bags") out.add("Bags");
   if (/moon$/.test(m) || d === "moonshot") out.add("Moonshot");
@@ -2137,70 +2159,11 @@ async function viewHealth(main) {
 }
 setInterval(() => { if (route() === "health" && !document.hidden) viewHealth($("#main")).catch(() => {}); }, 10_000);
 
-// ---------- API ----------
-// The endpoint list lives in api-docs.js, shared with the public docs page (worker/).
-async function viewApi(main) {
-  const { API_DOCS, API_EVENTS } = await import("/api-docs.js");
-  const base = location.origin, n = API_DOCS.reduce((a, [, rows]) => a + rows.length, 0);
-  const row = ([m, p, d, run]) => `<tr><td class="mono">${m}</td><td><code data-copy="${esc(base + p)}" title="Copy URL">${esc(p)}</code></td><td>${esc(d)}</td><td>${run ? `<button class="btn sm-btn" data-run="${esc(p.split("?")[0])}">Run</button>` : ""}</td></tr>`;
-  const wrap = document.createElement("div");
-  wrap.className = "apidoc";
-  wrap.innerHTML = `<div class="page-head"><div><h1>API</h1><p>Blix serves JSON over plain HTTP and one live event stream. This dashboard is just a client of it, so anything shown here can be read from a script, a bot or your own front end. <b>No key on this PC</b>; through the remote link every call needs the <code>blix_key</code> cookie.</p></div>
-      <div class="desk-stats"><span class="pill mono" data-copy="${esc(base)}" title="Copy base URL">${esc(base)}</span><span class="pill">${n} endpoints</span></div></div>
-    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Live stream</h2><small><code data-copy="${esc(base)}/api/stream" title="Copy URL">GET /api/stream</code> · text/event-stream</small></div>
-      <div class="table-wrap"><table><thead><tr><th>Event</th><th>Payload</th><th>When</th></tr></thead><tbody>${API_EVENTS.map(([e, p, w]) => `<tr><td class="mono">${e}</td><td>${esc(p)}</td><td>${w}</td></tr>`).join("")}</tbody></table></div>
-      <pre>curl -N ${esc(base)}/api/stream
-
-const es = new EventSource("${esc(base)}/api/stream");
-es.addEventListener("signal", (e) => console.log(JSON.parse(e.data)));</pre></div>
-    ${API_DOCS.map(([title, rows]) => `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>${title}</h2><small>${rows.length} endpoints</small></div>
-      <div class="table-wrap"><table><thead><tr><th>Method</th><th>Path</th><th>Returns</th><th></th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div></div>`).join("")}
-    <div class="card"><div class="card-head"><h2>Errors</h2></div><p class="note pad">Errors are JSON <code>{ error: "human sentence" }</code> with a 4xx or 5xx status. Rate-limited upstreams (public RPC, DexScreener) are reported on <a class="linkish" href="#/health">Health</a>, not as request errors. Responses are cached for 1 to 60 seconds, so polling faster returns the same body.</p></div>`;
-  // Run: fetch the endpoint and show the response under its row; a second press closes it.
-  wrap.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-run]");
-    if (!b) return;
-    const tr = b.closest("tr");
-    if (tr.nextElementSibling?.classList.contains("api-res")) { tr.nextElementSibling.remove(); b.textContent = "Run"; return; }
-    b.disabled = true;
-    let text, t0 = performance.now(), status = "";
-    try {
-      const r = await fetch(b.dataset.run, { signal: AbortSignal.timeout(20_000) });
-      const body = await r.text();
-      status = `${r.status} · ${Math.round(performance.now() - t0)} ms · ${(body.length / 1024).toFixed(1)} KB`;
-      try { text = JSON.stringify(JSON.parse(body), null, 2); } catch { text = body; }
-    } catch (err) { text = err.message; status = "failed"; }
-    b.disabled = false; b.textContent = "Hide";
-    const MAX = 6000;
-    tr.insertAdjacentHTML("afterend", `<tr class="api-res"><td colspan="4"><small>${status}${text.length > MAX ? ` · first ${MAX} characters` : ""}</small><pre>${esc(text.slice(0, MAX))}</pre></td></tr>`);
-  });
-  main.replaceChildren(wrap);
-}
-
-// ---------- MCP ----------
-// How to plug an AI client into Blix, and the tools it gets. The tool list is the same module the
-// MCP server (mcp/blix-mcp.mjs) loads, so this page cannot drift from what the server offers.
-async function viewMcp(main) {
-  const { MCP_TOOLS } = await import("/mcp-tools.js");
-  const script = "<blix folder>/mcp/blix-mcp.mjs";
-  const SETUP = [
-    ["Claude Code", "run once in a terminal", `claude mcp add blix -- node "${script}"`],
-    ["Claude Desktop, Cursor", "add to the client's MCP config file", JSON.stringify({ mcpServers: { blix: { command: "node", args: [script] } } }, null, 2)],
-    ["Codex", "add to ~/.codex/config.toml", `[mcp_servers.blix]\ncommand = "node"\nargs = ["${script}"]`],
-  ];
-  const args = (t) => Object.entries(t.props || {}).map(([k, p]) => `<code title="${esc(p.description || (p.enum || []).join(" | "))}">${k}${(t.required || []).includes(k) ? "" : "?"}</code>`).join(" ") || `<span class="dim">none</span>`;
-  const wrap = document.createElement("div");
-  wrap.className = "apidoc";
-  wrap.innerHTML = `<div class="page-head"><div><h1>MCP</h1><p>Plug Claude, Cursor or Codex into Blix. The MCP server is a small script with no dependencies that turns the <a class="linkish" href="#/api">API</a> into tools an AI can call: ask it what is running, why a coin was flagged, or to paper trade a call. <b>It reads only, plus the paper desk</b>; nothing here can spend real funds. Blix has to be running.</p></div>
-      <div class="desk-stats"><span class="pill">${MCP_TOOLS.length} tools</span><span class="pill">stdio</span></div></div>
-    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Connect a client</h2><small>replace <code>&lt;blix folder&gt;</code> with where Blix is installed · click a block to copy</small></div>
-      ${SETUP.map(([name, how, code]) => `<div class="mcp-setup"><b>${name}</b><small>${how}</small><pre data-copy="${esc(code)}" title="Copy">${esc(code)}</pre></div>`).join("")}
-      <p class="note pad">Another install or port: set <code>BLIX_URL</code> (for example <code>http://localhost:4420</code>) in the client's environment for this server.</p></div>
-    <div class="card"><div class="card-head"><h2>Tools</h2><small>every tool also takes <code>limit</code> (rows per list, default 10, max 50)</small></div>
-      <div class="table-wrap"><table><thead><tr><th>Tool</th><th>Arguments</th><th>What it does</th><th></th></tr></thead><tbody>
-      ${MCP_TOOLS.map((t) => `<tr><td class="mono">${t.name}</td><td>${args(t)}</td><td>${esc(t.description)}</td><td>${t.write ? `<span class="pill">paper</span>` : ""}</td></tr>`).join("")}</tbody></table></div></div>`;
-  main.replaceChildren(wrap);
-}
+// ---------- API and MCP ----------
+// How to read Blix from a script, a bot or an AI client: docs.js. The endpoint, event and tool lists it
+// shows are the modules the public docs pages (worker/) and the MCP server load, so they cannot drift.
+async function viewApi(main) { return (await import("/docs.js")).viewApi(main, { esc }); }
+async function viewMcp(main) { return (await import("/docs.js")).viewMcp(main, { esc }); }
 
 // ---------- coin drawer ----------
 // Price while tracked, with 5-minute volume underneath and a marker for every alert and every trade by
@@ -2353,7 +2316,13 @@ document.addEventListener("pointercancel", sheetDrop);
 
 const SRC_NAME = { dexscreener: "DexScreener" };
 let coinData = null;
-async function openCoin(mint) {
+// A coin opens as its own page (#/coin/<mint>, coin.js); Shift-click keeps the quick side sheet below.
+function openCoin(mint, e) {
+  if (e?.shiftKey) return openCoinSheet(mint);
+  if (location.hash === `#/coin/${mint}`) return render();
+  location.hash = `#/coin/${mint}`;
+}
+async function openCoinSheet(mint) {
   const p = $("#panel");
   sheetOpen();
   p.innerHTML = `<div class="skel" style="margin-top:22px"></div><div class="skel"></div><div class="skel"></div>`;
@@ -2437,11 +2406,11 @@ function pollResearch(mint, tries = 0) {
     const r = await api(`research/${mint}`).catch(() => null);
     if (r?.status === "deep" && !pollResearch.shown?.has(mint)) {
       (pollResearch.shown ||= new Set()).add(mint);
-      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoinSheet(mint);
       toast(`Fast read: ${r.grade}. Waiting for the deep read`);
     }
     if (r?.status === "done" || r?.status === "error" || r?.status === "expired" || tries > 60) {
-      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoin(mint);
+      if (drawerOpen() && $("#panel").innerHTML.includes(mint)) openCoinSheet(mint);
       if (route() === "research") viewResearch($("#main"));
       if (r?.status === "done") toast(`Graded ${r.grade} by ${providerOf(r.model)}`);
       return;
@@ -2452,7 +2421,15 @@ function pollResearch(mint, tries = 0) {
 function closeCoin() { coinData = null; if (!$("#drawer").hidden) sheetTo(false); }
 
 // ---------- routing ----------
-const VIEWS = { "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, health: viewHealth, api: viewApi, mcp: viewMcp, settings: viewSettings };
+// The full coin page lives in coin.js and borrows the app's helpers instead of copying them.
+function coinCtx() {
+  return { api, esc, empty, price, ago, av, wav, protoChips, fomoUrl, toast, beep, paperBuy, toggleWatch, researchSection, KIND,
+    isWatched: (m) => pulseState.watch.has(m), sizes: () => pulseState.sizes, setDesk: (d) => { if (d) { pulseState.desk = d; renderDesk(); } } };
+}
+async function viewCoinPage(main) { return (await import("/coin.js")).viewCoin(main, coinCtx()); }
+// Accounts and real wallets live in account.js (server/accounts.js, keys held by Blix Vault).
+async function viewAccountPage(main) { return (await import("/account.js")).viewAccount(main, { toast }); }
+const VIEWS = { account: viewAccountPage, "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, health: viewHealth, api: viewApi, mcp: viewMcp, settings: viewSettings, coin: viewCoinPage };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 // Each view renders into an off-screen node; only the latest navigation is shown, and a skeleton
 // appears right away if the data takes more than a moment.
@@ -2461,6 +2438,8 @@ const SKELETON = `<div class="boot"><div class="skel big"></div><div class="skel
 async function render() {
   const r = route(), seq = ++renderSeq;
   document.body.classList.toggle("pulse-mode", r === "");
+  document.body.classList.toggle("coin-mode", r === "coin");
+  document.body.classList.toggle("doc-mode", r === "api" || r === "mcp");
   document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.r === r));
   const main = $("#main");
   const slow = setTimeout(() => { if (seq === renderSeq) main.innerHTML = SKELETON; }, 120);
@@ -2620,7 +2599,7 @@ document.addEventListener("click", async (e) => {
   const pm = el.closest("[data-pmin]");
   if (pm) { pulseState.min = pm.dataset.pmin; store.set("pulse:min", pulseState.min); document.querySelectorAll("[data-pmin]").forEach((b) => b.classList.toggle("on", b === pm)); pulseState.first = true; return pulseTick(); }
   const m = el.closest("[data-mint]");
-  if (m && !el.closest("a")) openCoin(m.dataset.mint);
+  if (m && !el.closest("a")) openCoin(m.dataset.mint, e);
 });
 document.addEventListener("input", (e) => {
   for (const key of ["tp", "sl", "trail"]) {

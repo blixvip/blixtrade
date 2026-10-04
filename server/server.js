@@ -30,8 +30,11 @@ import { startClusters, clusterBoard } from "./clusters.js";
 import { coverageStats } from "./coverage.js";
 import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL } from "./quality.js";
 import * as health from "./health.js";
+import { visitorMay, visitorHealth } from "./access.js";
+import { startWebApp, webStats } from "./webapp.js";
 import { startEarly, earlyData } from "./early.js";
 import * as images from "./images.js";
+import * as coin from "./coin.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 
@@ -642,7 +645,10 @@ const server = http.createServer(async (req, res) => {
     // Real quotes and candles for the coin page's trade panel and chart (quote.js, candles.js).
     if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip }));
     const cm = p.match(new RegExp(`^/api/candles/(${MINT})$`));
-    if (cm) return send(res, 200, await candles(cm[1], params.tf));
+    if (cm) return send(res, 200, await candles(cm[1], params.tf, params.since));
+    // The full coin page (coin.js): live ledger, top traders, early buyers, the dev's coins, recent trades.
+    const cpm = p.match(new RegExp(`^/api/coin/(${MINT})(/trades)?$`));
+    if (cpm) return send(res, 200, cpm[2] ? await coin.coinTrades(cpm[1], params) : coin.coinPage(cpm[1], params));
     if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
     if (p === "/api/paper") {
       if (POST) { const b = await readBody(req); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }

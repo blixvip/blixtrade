@@ -1,0 +1,137 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app
+ * theme: liquid chrome on black (design.md "Theme"). The brand is the chrome BLIX wordmark: the page is black,
+ * the light is silver, and metal shows where a hand would touch it: titles, the primary control, panel edges.
+ */
+@import "tailwindcss";
+
+/* The one place colour, type, radius and motion are defined. Components only use these names. */
+@theme {
+  /* surfaces: black, as in the wordmark's ground, stepping up through graphite. A trace of blue keeps it cold like polished steel. */
+  --color-paper: oklch(6% 0.003 255);
+  --color-paper-2: oklch(10.5% 0.004 255);
+  --color-paper-3: oklch(14% 0.005 255);
+  --color-paper-4: oklch(18% 0.006 255);
+  --color-paper-5: oklch(23% 0.007 255);
+  --color-rule: oklch(21% 0.006 255);
+  --color-rule-2: oklch(32% 0.008 255);
+  --color-edge: oklch(100% 0 0 / 0.13);
+
+  --color-ink: oklch(96% 0.004 255);
+  --color-ink-2: oklch(79% 0.008 255);
+  --color-muted: oklch(62% 0.010 255);
+
+  /* one accent, chrome: selection, focus, links, the AI, the light in the field. It is a light, not a hue. */
+  --color-accent: oklch(90% 0.012 250);
+  --color-accent-dim: oklch(52% 0.012 250);
+  --color-accent-ink: oklch(12% 0.006 255);
+  --color-focus: oklch(98% 0.004 250);
+
+  /* the metal itself: a strip of polished chrome, light from above, a dark horizon, light bouncing back up */
+  --chrome: linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(88% 0.010 250) 22%, oklch(58% 0.014 252) 47%, oklch(34% 0.012 255) 53%, oklch(74% 0.012 250) 70%, oklch(96% 0.006 250) 100%);
+  /* the same metal for lettering: brighter, with a softer horizon, so small titles stay readable */
+  --chrome-type: linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(93% 0.008 250) 34%, oklch(66% 0.014 252) 54%, oklch(84% 0.010 250) 66%, oklch(99% 0.004 250) 100%);
+  --chrome-soft: linear-gradient(180deg, oklch(98% 0.004 250) 0%, oklch(80% 0.010 250) 45%, oklch(60% 0.012 252) 55%, oklch(86% 0.008 250) 100%);
+
+  /* data colours: they mean one thing each and are used for nothing else */
+  --color-up: oklch(74% 0.15 160);
+  --color-down: oklch(67% 0.20 18);
+  --color-warn: oklch(82% 0.14 85);
+  --color-caution: oklch(73% 0.15 50);
+  --color-on-fill: oklch(16% 0.02 258);
+  /* a small market cap, and an X handle: the one cool data colour (large caps read warn, then up) */
+  --color-info: oklch(80% 0.09 235);
+
+  --font-display: system-ui, "Segoe UI Variable Display", "Segoe UI", -apple-system, sans-serif;
+  --font-body: system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+  --font-outlier: "JetBrains Mono", "Cascadia Mono", ui-monospace, Consolas, monospace;
+
+  --text-2xs: 0.625rem;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-md: 0.8125rem;
+  --text-lg: 0.9375rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.5rem;
+
+  --radius-control: 5px;
+  --radius-card: 7px;
+  --radius-chip: 3px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* depth: every raised surface has a lit top edge and a shadow that falls away from the light */
+  --shadow-panel: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.6), 0 18px 40px -22px oklch(0% 0 0 / 0.9);
+  --shadow-raised: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.5), 0 6px 16px -8px oklch(0% 0 0 / 0.8);
+  --shadow-glow: 0 0 18px -4px oklch(96% 0.006 250 / 0.35);
+  --shadow-sheet: inset 0 1px 0 var(--color-edge), 0 30px 80px -20px oklch(0% 0 0 / 0.95);
+
+  --animate-flash-up: flash-up 700ms var(--ease-out);
+  --animate-flash-down: flash-down 700ms var(--ease-out);
+  --animate-row-in: row-in 420ms var(--ease-out);
+  --animate-sweep: sweep 4s linear infinite;
+  @keyframes flash-up { from { color: var(--color-up); } }
+  @keyframes flash-down { from { color: var(--color-down); } }
+  @keyframes row-in { from { opacity: 0; transform: translateY(-6px); } }
+  @keyframes sweep { to { transform: rotate(360deg); } }
+}
+
+@layer base {
+  html, body { height: 100%; overflow-x: clip; }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font: 400 var(--text-md) / 1.4 var(--font-body);
+    font-feature-settings: "tnum", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  #root { height: 100%; }
+  ::selection { background: color-mix(in oklch, var(--color-accent) 35%, transparent); }
+  :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; border-radius: var(--radius-chip); }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-rule-2) transparent; }
+}
+
+@layer components {
+  /* a surface raised one step above the field: mostly opaque, the light shows faintly through */
+  /* a panel: dark polished metal. Lit along its top edge, falling to black, with a hairline that catches the light. */
+  .surface {
+    background: linear-gradient(180deg, color-mix(in oklch, var(--color-paper-3) 88%, transparent), color-mix(in oklch, var(--color-paper-2) 90%, transparent) 64px, color-mix(in oklch, var(--color-paper) 88%, transparent));
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-panel);
+  }
+  /* chrome lettering: page titles and the lead figures. Only on large, heavy type; never on body text. */
+  .chrome-text {
+    background: var(--chrome-type);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 10px oklch(96% 0.006 250 / 0.18));
+  }
+  /* a chrome control: the one primary action in a view, and what a quiet button becomes under the pointer */
+  .chrome-fill {
+    background: var(--chrome-soft);
+    color: var(--color-accent-ink);
+    border-color: oklch(98% 0 0 / 0.6);
+    box-shadow: inset 0 1px 0 oklch(100% 0 0 / 0.9), inset 0 -1px 0 oklch(0% 0 0 / 0.35), var(--shadow-glow);
+  }
+  .label {
+    font: 600 var(--text-2xs) / 1 var(--font-body);
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  /* a strip of brushed metal: column headers, the selected choice in a group */
+  .metal-bar {
+    background: linear-gradient(180deg, var(--color-paper-5), var(--color-paper-3) 55%, var(--color-paper-2));
+    box-shadow: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}
