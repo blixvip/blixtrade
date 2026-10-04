@@ -1,9 +1,10 @@
 // Blix (Blix Trade) — HTTP API + live event stream + dashboard.
+import "./timing.js";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { db, json, logEvent, meta, backup, backups, DB_FILE, DATA, dbStats } from "./db.js";
+import { db, json, logEvent, meta, backupInBackground, backups, DB_FILE, DATA, dbStats } from "./db.js";
 import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots } from "./engine.js";
 import { computeNarratives, THEMES, themesFor } from "./narratives.js";
 import { settings, saveSettings, publicSettings, withOverrides, SECRETS } from "./settings.js";
@@ -298,12 +299,20 @@ function tokenDetail(mint) {
 // Crashes, read from the supervisor's log: an exit code the radar did not choose itself (a native fault
 // or abort), as opposed to being stopped on purpose.
 function crashes(now) {
-  const out = { h6: 0, h24: 0, last: null };
+  const out = { h6: 0, h24: 0, last: null, hangs24: 0 };
   try {
     const file = path.join(DATA, "server.log"), size = fs.statSync(file).size, len = Math.min(size, 200_000);
     const buf = Buffer.alloc(len), fd = fs.openSync(file, "r");
     try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
-    for (const m of buf.toString("utf8").matchAll(/radar exited with (\d+) at (\S+)/g)) {
+    const text = buf.toString("utf8");
+    // A radar the supervisor had to stop because it no longer answered counts as much as a crash.
+    for (const m of text.matchAll(/radar exited with \S+ at (\S+) after \S+ \(hang/g)) {
+      const t = Date.parse(m[1]);
+      if (!(now - t < DAY)) continue;
+      out.hangs24++; out.h24++; if (now - t < 6 * HOUR) out.h6++;
+      out.last = Math.max(out.last || 0, t);
+    }
+    for (const m of text.matchAll(/radar exited with (\d+) at (\S+)(?! after \S+ \(hang)/g)) {
       const code = +m[1], t = Date.parse(m[2]);
       if (!(code === 134 || (code >= 0xC0000000 && code < 0xFFFFFFFF)) || !(now - t < DAY)) continue;
       out.h24++; if (now - t < 6 * HOUR) out.h6++;
@@ -322,8 +331,12 @@ function healthReport() {
   const cr = crashes(now), upMs = now - stats.startedAt;
   const upFor = upMs < HOUR ? `${Math.max(1, Math.round(upMs / MIN))}m` : `${(upMs / HOUR).toFixed(1)}h`;
   add("stability", "Radar process", cr.h6 >= 2 ? "degraded" : "ok",
-    `Running for ${upFor} · crashed ${cr.h24}× in the last 24h${cr.last ? ` (last ${ago(cr.last)})` : ""}${cr.h24 ? " · it restarts itself in about 2 seconds and picks up its recordings" : ""}`,
+    `Running for ${upFor} · crashed ${cr.h24 - cr.hangs24}× and stopped answering ${cr.hangs24}× in the last 24h${cr.last ? ` (last ${ago(cr.last)})` : ""}${cr.h24 ? " · it restarts itself in about 2 seconds and picks up its recordings" : ""}`,
     { lastFail: cr.last, crashes24h: cr.h24, sql: dbStats, runtime: process.version });
+  const rs = health.responsiveness(), secs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
+  add("responsiveness", "Responsiveness", rs.worst10m >= 2000 ? "degraded" : "ok",
+    `Longest pause: ${rs.worst10m ? secs(rs.worst10m) : "none over 0.2 s"} in the last 10 minutes, ${rs.worst24h ? secs(rs.worst24h) : "none"} since start or 24h · ${rs.over1s} pauses over 1 s${rs.slow.length ? ` · slowest work: ${rs.slow.slice(0, 3).map((s) => `${s.name} ${secs(s.worstMs)} (${s.n}×)`).join("; ")}` : ""}`,
+    { stats: rs });
   const fileMb = (f) => { try { return fs.statSync(f).size / 1048576; } catch { return 0; } };
   const dbMb = fileMb(DB_FILE), walMb = fileMb(`${DB_FILE}-wal`);
   add("database", "Database", dbMb > 1500 ? "degraded" : "ok",
@@ -597,7 +610,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/import" && POST) return send(res, 200, importData(await readBody(req)));
     if (p === "/api/backup") {
-      if (POST) { const b = backup(); logEvent("system", `Backup written (${(b.bytes / 1e6).toFixed(0)} MB)`); }
+      if (POST) { const b = await backupInBackground(); logEvent("system", `Backup written (${(b.bytes / 1e6).toFixed(0)} MB)`); }
       return send(res, 200, { backups: backups(), last: +meta.get("backup_t", 0) || null, database: { file: DB_FILE, bytes: fs.statSync(DB_FILE).size } });
     }
     if (p === "/api/repair" && POST) return send(res, 200, rebuildFromSnapshots());
@@ -730,6 +743,16 @@ process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.messa
 process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message || e}`));
 
 // Also answer on IPv6 loopback: browsers try "localhost" as ::1 first and stall before falling back to IPv4.
+// Requests are timed the same way as the repeating jobs: one that holds the radar up is recorded by its path.
+{
+  const [handle] = server.listeners("request");
+  server.removeAllListeners("request");
+  server.on("request", (req, res) => {
+    const t = performance.now();
+    try { return handle(req, res); }
+    finally { const ms = performance.now() - t; if (ms > 250) health.noteSlow(`${req.method} ${String(req.url).split("?")[0].replace(/[1-9A-HJ-NP-Za-km-z]{32,44}/g, ":mint")}`, ms); }
+  });
+}
 const server6 = http.createServer((req, res) => server.emit("request", req, res));
 server6.on("error", () => {});
 server6.listen(PORT, "::1");
@@ -795,6 +818,6 @@ server.listen(PORT, "127.0.0.1", () => {
   // A daily copy of the database, so a corrupted or lost file costs at most a day.
   setInterval(() => {
     if (Date.now() - +meta.get("backup_t", 0) < DAY) return;
-    try { const b = backup(); logEvent("system", `Daily backup written (${(b.bytes / 1e6).toFixed(0)} MB)`); } catch (e) { logEvent("error", `backup: ${e.message}`); }
+    backupInBackground().then((b) => logEvent("system", `Daily backup written (${(b.bytes / 1e6).toFixed(0)} MB)`), (e) => logEvent("error", `backup: ${e.message}`));
   }, 30 * MIN);
 });

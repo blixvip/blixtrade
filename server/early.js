@@ -144,7 +144,12 @@ const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const result = (row) => (row.res === "win" ? WIN : row.fill ?? row.endm ?? 1) * cost();
 const vec = (f) => FEATURES.map((k) => Number(f[k]) || 0);
 
-export function fit(X, y, { iters = 500, lr = 0.2, l2 = 0.01 } = {}) {
+// The fit is written as steps so the every-10-minutes training can give the radar a turn between them
+// (in one go it held everything up for about five seconds). `fit` runs the same steps straight through.
+const drain = (g) => { let r; while (!(r = g.next()).done); return r.value; };
+const drainGently = async (g) => { let r; while (!(r = g.next()).done) await new Promise((go) => setImmediate(go)); return r.value; };
+export const fit = (X, y, opts) => drain(fitSteps(X, y, opts));
+function* fitSteps(X, y, { iters = 500, lr = 0.2, l2 = 0.01 } = {}) {
   const n = X.length, d = X[0].length;
   const mu = Array(d).fill(0), sd = Array(d).fill(0);
   for (const x of X) for (let j = 0; j < d; j++) mu[j] += x[j] / n;
@@ -166,6 +171,7 @@ export function fit(X, y, { iters = 500, lr = 0.2, l2 = 0.01 } = {}) {
     }
     b -= lr * gb;
     for (let j = 0; j < d; j++) w[j] -= lr * (g[j] + l2 * w[j]);
+    if (it % 10 === 9) yield;
   }
   return { w, b, mu, sd };
 }
@@ -177,7 +183,7 @@ export function predict(m, x) {
 const group = (rows) => ({ n: rows.length, winPct: rows.length ? Math.round((100 * rows.filter((r) => r.res === "win").length) / rows.length) : null,
   avg: rows.length ? +(rows.reduce((a, r) => a + result(r), 0) / rows.length).toFixed(2) : null });
 
-function train(cp) {
+function* trainSteps(cp) {
   // Only launches whose 30 minutes are fully over: counting the ones that already resolved among the
   // recent launches would over-count quick winners and quick losers.
   const rows = db.prepare("SELECT feat, res, fill, endm FROM early WHERE cp = ? AND res IS NOT NULL AND t > ? AND t < ? ORDER BY t").all(cp, now() - 3 * 24 * 60 * MIN, now() - HORIZON - 6 * MIN)
@@ -188,7 +194,8 @@ function train(cp) {
   // Judge it on launches it never saw: fit on the oldest 70%, score the newest 30%.
   const cut = Math.floor(rows.length * 0.7), tr = rows.slice(0, cut), te = rows.slice(cut);
   if (tr.filter((r) => r.y).length < 8) return { ...info, status: "learning" };
-  const m0 = fit(tr.map((r) => r.x), tr.map((r) => r.y));
+  yield;
+  const m0 = yield* fitSteps(tr.map((r) => r.x), tr.map((r) => r.y));
   const scored = te.map((r) => ({ ...r, p: predict(m0, r.x) })).sort((a, b) => b.p - a.p);
   const top = (frac) => scored.slice(0, Math.max(1, Math.round(scored.length * frac)));
   const test = { all: group(te), top25: group(top(0.25)), top10: group(top(0.1)), top5: group(top(0.05)) };
@@ -196,23 +203,37 @@ function train(cp) {
   // (The top quarter, not the top tenth: a handful of coins is too few to judge a model by.)
   const valid = test.top25.n >= 20 && test.top25.winPct >= Math.max(1, test.all.winPct) * 1.5 && test.top25.avg > test.all.avg;
   // The final model uses everything; the thresholds are where its own top 10% and top 5% of scores begin.
-  const m = fit(rows.map((r) => r.x), rows.map((r) => r.y));
+  const m = yield* fitSteps(rows.map((r) => r.x), rows.map((r) => r.y));
   const ps = rows.map((r) => predict(m, r.x)).sort((a, b) => b - a);
   const drivers = FEATURES.map((k, j) => ({ k, w: +m.w[j].toFixed(2) })).sort((a, b) => Math.abs(b.w) - Math.abs(a.w)).slice(0, 6);
   return { ...info, status: valid ? "working" : "not beating chance", valid, test, model: m, thr10: ps[Math.floor(ps.length * 0.1)], thr5: ps[Math.floor(ps.length * 0.05)],
     // Entering before the AI has answered is only allowed while the very top of the unseen set made money after costs.
     autoOk: valid && test.top10.n >= 10 && test.top10.avg > 1, drivers };
 }
-function trainAll() {
-  for (const cp of CPS) {
-    try {
-      const m = train(cp), was = models.get(cp);
-      models.set(cp, m);
-      if (m.status !== was?.status) logEvent("system", `Early model (${cp}s): ${m.status}${m.test ? `. Unseen launches: top quarter won ${m.test.top25.winPct}% (avg ${m.test.top25.avg}x) against ${m.test.all.winPct}% (avg ${m.test.all.avg}x) overall` : `, ${m.n} of ${m.need} launches recorded, ${m.wins} winners`}`);
-    } catch (e) { logEvent("error", `early model ${cp}s: ${e.message}`); }
-  }
+let training = false;
+async function trainAll(run = drainGently) {
+  if (training) return;
+  training = true;
+  try { for (const cp of CPS) await learn(cp, run); } finally { training = false; }
   earlyStats.lastTrain = now();
   db.prepare("DELETE FROM early WHERE t < ?").run(now() - 4 * 24 * 60 * MIN);
+}
+// Straight through, for the tests and a manual retrain.
+function trainAllNow() {
+  for (const cp of CPS) learn(cp, drain);
+  earlyStats.lastTrain = now();
+}
+function learn(cp, run) {
+  const done = (m) => {
+    const was = models.get(cp);
+    models.set(cp, m);
+    if (m.status !== was?.status) logEvent("system", `Early model (${cp}s): ${m.status}${m.test ? `. Unseen launches: top quarter won ${m.test.top25.winPct}% (avg ${m.test.top25.avg}x) against ${m.test.all.winPct}% (avg ${m.test.all.avg}x) overall` : `, ${m.n} of ${m.need} launches recorded, ${m.wins} winners`}`);
+  };
+  const failed = (e) => logEvent("error", `early model ${cp}s: ${e.message}`);
+  try {
+    const out = run(trainSteps(cp));
+    return out instanceof Promise ? out.then(done, failed) : done(out);
+  } catch (e) { failed(e); }
 }
 function score(cp, feat) {
   const m = models.get(cp);
@@ -221,7 +242,7 @@ function score(cp, feat) {
   return { p, strong: p >= m.thr10, top: p >= m.thr5, auto: m.autoOk && p >= m.thr5 };
 }
 export const earlyFor = (mint) => scores.get(mint) || null;
-export const trainNow = () => { trainAll(); return models; };
+export const trainNow = () => { trainAllNow(); return models; };
 
 // ---------- acting on it ----------
 function act(r, c, sc) {
@@ -329,6 +350,7 @@ export function startEarly({ enqueue, earlyPick }) {
   const safe = (fn, name) => () => { try { fn(); } catch (e) { if (now() - errT > 60_000) { errT = now(); logEvent("error", `${name}: ${e.message}`); } } };
   setInterval(safe(tick, "early radar"), 1000);
   setInterval(safe(scanWinners, "winners"), 15_000);
-  setInterval(safe(trainAll, "early model"), 10 * MIN);
-  setTimeout(safe(trainAll, "early model"), 5000);
+  const retrain = () => trainAll().catch((e) => logEvent("error", `early model: ${e.message}`));
+  setInterval(retrain, 10 * MIN);
+  setTimeout(retrain, 5000);
 }

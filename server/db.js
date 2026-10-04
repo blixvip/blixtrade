@@ -1,5 +1,6 @@
 // SQLite store: tokens we track, their price history, signals we raised, and briefs.
 import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -174,6 +175,27 @@ export function backups() {
     return fs.readdirSync(BACKUPS).filter((f) => /^radar-.*\.db$/.test(f)).sort().reverse()
       .map((f) => { const st = fs.statSync(path.join(BACKUPS, f)); return { file: path.join(BACKUPS, f), bytes: st.size, t: st.mtimeMs }; });
   } catch { return []; }
+}
+// The same copy, made by a separate process: copying the whole file here would hold the radar up for as
+// long as it takes. Resolves with the new file once it is written.
+let backingUp = null;
+export function backupInBackground(keep = 2) {
+  if (backingUp) return backingUp;
+  fs.mkdirSync(BACKUPS, { recursive: true });
+  const file = path.join(BACKUPS, `radar-${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 16)}.db`);
+  backingUp = new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--no-warnings", path.join(ROOT, "bin", "backup.mjs"), DB_FILE, file], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code !== 0) return reject(new Error(err.trim().slice(0, 200) || `backup exited with ${code}`));
+      for (const b of backups().slice(keep)) fs.rmSync(b.file);
+      meta.set("backup_t", Date.now());
+      resolve({ file, bytes: fs.statSync(file).size });
+    });
+  }).finally(() => { backingUp = null; });
+  return backingUp;
 }
 export function backup(keep = 2) {
   fs.mkdirSync(BACKUPS, { recursive: true });
