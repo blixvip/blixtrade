@@ -135,6 +135,23 @@ export function logEvent(kind, text) {
 
 export const json = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
+// Price history older than a day is kept as the highest and lowest reading of each 5 minutes per coin,
+// which is all the peak and outcome checks look at. Works forward six hours of history per call so it
+// never holds the radar up for long.
+const THIN_AFTER = 864e5, THIN_BUCKET = 5 * 60_000, THIN_STEP = 6 * 3600e3;
+export function thinSnapshots(now = Date.now()) {
+  const end = now - THIN_AFTER;
+  let from = Number(meta.get("snap_thin_t", 0));
+  if (!from) from = db.prepare("SELECT MIN(t) m FROM snapshots").get().m || end;
+  const to = Math.min(end, from + THIN_STEP);
+  if (to <= from) return 0;
+  const n = db.prepare(`DELETE FROM snapshots WHERE t >= ?1 AND t < ?2 AND rowid NOT IN (
+      SELECT rowid FROM (SELECT rowid, MAX(mcap) FROM snapshots WHERE t >= ?1 AND t < ?2 GROUP BY mint, t / ${THIN_BUCKET})
+      UNION SELECT rowid FROM (SELECT rowid, MIN(mcap) FROM snapshots WHERE t >= ?1 AND t < ?2 GROUP BY mint, t / ${THIN_BUCKET}))`).run(from, to).changes;
+  meta.set("snap_thin_t", to);
+  return Number(n);
+}
+
 // Keeps the database small: old snapshots and dead tokens go after a few days.
 export function prune() {
   const now = Date.now();
@@ -143,6 +160,9 @@ export function prune() {
   db.prepare("DELETE FROM events WHERE t < ?").run(now - 7 * 864e5);
   db.prepare("DELETE FROM deliveries WHERE t < ?").run(now - 14 * 864e5);
   try { db.prepare("DELETE FROM ai_spend WHERE t < ?").run(now - 60 * 864e5); } catch {}
+  try { thinSnapshots(now); } catch {}
+  // A read keeps its grade and report; the raw pages it was written from are only useful for a few days.
+  try { db.prepare("UPDATE research SET sources = NULL WHERE t < ? AND sources IS NOT NULL").run(now - 3 * 864e5); } catch {}
   // Fold the write-ahead log back into the database so it does not grow without limit.
   try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch {}
 }

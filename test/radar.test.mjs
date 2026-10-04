@@ -677,3 +677,20 @@ test("RPC stream requires subscription acknowledgement and rejects provider erro
   assert.equal(events.length, 1);
   stop();
 });
+
+test("old price history thins to each 5 minutes' high and low and leaves the last day alone", async () => {
+  const { thinSnapshots, meta } = await import("../server/db.js");
+  const now = Date.now(), old = Math.floor((now - 30 * 3600e3) / 300_000) * 300_000;
+  db.exec("DELETE FROM snapshots");
+  meta.set("snap_thin_t", 0);
+  const ins = db.prepare("INSERT INTO snapshots (mint, t, price, mcap, liquidity, vol_m5, ok) VALUES (?, ?, 1, ?, 1, 1, 1)");
+  [50, 90, 20, 70, 60].forEach((mc, i) => ins.run("ThinA", old + i * 30_000, mc));     // one 5-minute bucket, a day and more old
+  [5, 6].forEach((mc, i) => ins.run("ThinB", old + i * 30_000, mc));
+  [1, 2, 3].forEach((mc, i) => ins.run("ThinA", now - 3600e3 + i * 30_000, mc));        // an hour old: untouched
+  assert.equal(thinSnapshots(now), 3);
+  assert.deepEqual(db.prepare("SELECT mcap FROM snapshots WHERE mint = 'ThinA' AND t < ? ORDER BY mcap").all(now - 864e5).map((r) => r.mcap), [20, 90]);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM snapshots WHERE mint = 'ThinB'").get().n, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM snapshots WHERE t > ?", ).get(now - 2 * 3600e3).n, 3);
+  assert.equal(thinSnapshots(now), 0, "already thinned up to a day ago");
+  db.exec("DELETE FROM snapshots");
+});

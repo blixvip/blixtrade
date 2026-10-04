@@ -43,7 +43,7 @@ const share = (n, d) => d ? `${Math.round((n / d) * 100)}%` : "—";
 function stateTags(f, { compact = false } = {}) {
   if (!f) return "";
   const out = [];
-  if (f.dead) out.push(`<span class="st dead" title="No real trading left. The radar stopped following it; its price is the last one seen.">dead</span>`);
+  if (f.dead) out.push(`<span class="st dead" title="No real trading left. Blix stopped following it; its price is the last one seen.">dead</span>`);
   if (f.quarantine || f.illiquid) out.push(`<span class="st bad" title="${esc(f.exitWhy || f.quarantine || "")}. The quoted price cannot actually be traded at.">${compact ? "unsellable" : "can't be sold"}</span>`);
   else if (f.stale && !f.dead && f.ageMs != null) out.push(`<span class="st old" title="Price last read ${mins(f.ageMs)} ago">price ${mins(f.ageMs)} old</span>`);
   return out.join("");
@@ -82,7 +82,7 @@ const initials = (s, n = 3) => Array.from(String(s || "?").replace(/^\$/, "")).s
 // would start again from that source on every re-draw and never get to the one that works (an empty box).
 // So: remember which address worked for each coin, and which addresses are dead.
 const imgGood = new Map(), imgBad = new Set();
-// Coin pictures come from the radar itself (/img/<mint>), which fetches them from wherever they live.
+// Coin pictures come from Blix itself (/img/<mint>), which fetches them from wherever they live.
 // A coin a few seconds old may not have one yet: the generated picture stands in and the real one is
 // asked for again a few times.
 const picTries = new Map();   // mint -> { n, t }
@@ -104,7 +104,7 @@ setInterval(() => {
     probe.src = `/img/${m}?r=${tr.n}`;
   }
 }, 2000);
-// The radar says a coin's picture just arrived: swap it in everywhere that coin is on screen.
+// Blix says a coin's picture just arrived: swap it in everywhere that coin is on screen.
 function applyPic(mint) {
   picHave.add(mint); picTries.delete(mint);
   for (const el of document.querySelectorAll(`img.av[data-pic="${CSS.escape(mint)}"]`)) if (el.classList.contains("gen") || !(el.naturalWidth > 1)) { el.classList.remove("gen"); el.src = `/img/${mint}?p=1`; }
@@ -127,7 +127,7 @@ document.addEventListener("error", (e) => { if (e.target?.tagName === "IMG") win
 document.addEventListener("submit", (e) => e.preventDefault());
 
 
-// Coin logo: pump.fun's image CDN for pump coins (fast, small), then the coin's own image (the radar fills
+// Coin logo: pump.fun's image CDN for pump coins (fast, small), then the coin's own image (Blix fills
 // these in from launch metadata and GeckoTerminal), then a generated one with the ticker.
 function av(t, size = "") {
   const fb = genAvatar(t.mint || t.symbol || "?", initials(t.symbol));
@@ -293,7 +293,7 @@ const idLine = (t) => { const i = protoInfo(t); return `<small class="idline"><s
 const dupTag = (t) => t.dupes > 1 ? `<span class="st ${t.dupTop ? "top" : "dup"}" title="${t.dupes} tracked coins share this ticker. ${t.dupTop ? "This is the largest by market cap." : "This is not the largest; check the contract."}">${t.dupTop ? `largest of ${t.dupes}` : `1 of ${t.dupes} copies`}</span>` : "";
 
 function coinTable(list, { sort, dir = "desc", compact } = {}) {
-  if (!list.length) return empty("No coins match", sort != null ? "Loosen a filter, or clear them all." : "The radar fills up over the first few minutes.");
+  if (!list.length) return empty("No coins match", sort != null ? "Loosen a filter, or clear them all." : "Blix fills up over the first few minutes.");
   const th = (k, label, extra = "") => `<th class="${sort != null ? "sortable" : ""} ${sort === k ? "sorted" : ""} ${extra}" data-sort="${k}" ${sort != null ? `title="Sort by ${label.toLowerCase()}; click again to reverse"` : ""}>${label}${sort === k ? `<i class="arrow">${dir === "asc" ? "▲" : "▼"}</i>` : ""}</th>`;
   return `<div class="table-wrap"><table>
     <thead><tr><th>Coin</th><th class="hide-sm">6h</th>${th("score", "Score")}${th("safety", "Safety")}${th("mcap", "Mcap")}${compact ? "" : th("liq", "Liquidity", "hide-sm")}${th("volume", "Vol 1h", "hide-sm")}${compact ? "" : th("tx", "TX 1h", "hide-sm")}${compact ? "" : th("holders", "Holders", "hide-sm")}${th("change", "1h")}${compact ? "" : th("chg24", "24h", "hide-sm")}${th("new", "Age", "hide-sm")}</tr></thead>
@@ -350,7 +350,7 @@ function setupBanner(h) {
 const partialNote = (b) => b && b.status === "partial" ? `<div class="warn-box"><b>Incomplete brief.</b> The AI stopped before finishing (${esc(b.stop || "cut off")}), twice. What it wrote is below; treat it as partial.</div>` : "";
 function briefCard(b) {
   return `<div class="card-head"><h2>Latest AI brief</h2><div style="display:flex;gap:8px;align-items:center">${b ? `<small>${ago(b.t)} ago · ${esc(providerOf(b.model))}</small>` : ""}<button class="btn" data-brief>Write one now</button></div></div>
-    ${partialNote(b)}<div class="brief md">${b ? md(b.body) : `<p class="note">A market brief is written every hour from what the radar sees. The first one arrives about 12 minutes after start, or press “Write one now”.</p>`}</div>`;
+    ${partialNote(b)}<div class="brief md">${b ? md(b.body) : `<p class="note">A market brief is written every hour from what Blix sees. The first one arrives about 12 minutes after start, or press “Write one now”.</p>`}</div>`;
 }
 
 // ---------- numeric filters + saved presets (Coins and Pulse) ----------
@@ -395,7 +395,7 @@ PANELS.cf = { host: "#cfilters", fields: COIN_FILTERS, builtin: COIN_PRESETS, ke
   presets: () => ({ ...COIN_PRESETS, ...store.get("coins:presets", {}) }), apply: () => loadCoins() };
 async function viewCoins(main) {
   const nar = await api("narratives");
-  main.innerHTML = `<div class="page-head"><div><h1>Coins</h1><p>Every coin the radar is tracking right now. Brand-new pump.fun launches show up here once they trade for real.</p></div></div>
+  main.innerHTML = `<div class="page-head"><div><h1>Coins</h1><p>Every coin Blix is tracking right now. Brand-new pump.fun launches show up here once they trade for real.</p></div></div>
     <div class="filters">
       <input class="input" id="cq" placeholder="Search ticker, name or contract (searches dead and flagged coins too)" value="${esc(coinState.q)}" style="flex:1;min-width:200px">
       <select class="input" id="cgrad"><option value="">Any stage</option><option value="1">Graduated</option><option value="0">Still on the curve</option></select>
@@ -446,19 +446,19 @@ function fomoCard(f) {
       <button class="btn fomo" type="submit">Add Fomo trader</button></form>`;
   if (!f.connected) return `<div class="card">${head}
     <div class="empty" style="text-align:left;padding:0 16px 12px"><b>Connect Fomo for free</b>
-      Fomo pays its users' Solana fees, so every Fomo trade carries Fomo's fee-payer signature. Add one Fomo wallet and the radar learns that signature from its trades, then watches Fomo trades as they happen. No API key, nothing to pay.
+      Fomo pays its users' Solana fees, so every Fomo trade carries Fomo's fee-payer signature. Add one Fomo wallet and Blix learns that signature from its trades, then watches Fomo trades as they happen. No API key, nothing to pay.
       <ol style="margin:10px 0 0;padding-left:18px;color:var(--ink-2)">
         <li>Your own: Fomo app → Profile → Deposit → Solana → copy the address.</li>
         <li>Or any trader: look up their handle on <a class="linkish" href="https://fomowalletfinder.com/" target="_blank" rel="noreferrer">fomowalletfinder.com</a> (free) and paste the Solana wallet.</li>
       </ol>
-      <p class="note" style="margin:10px 0 0">${f.fomoWallets ? `${f.fomoWallets} Fomo wallet${f.fomoWallets > 1 ? "s" : ""} added. Learning starts once the radar has seen 2 of their trades.` : "Buy on Fomo buttons already work."}</p></div>
+      <p class="note" style="margin:10px 0 0">${f.fomoWallets ? `${f.fomoWallets} Fomo wallet${f.fomoWallets > 1 ? "s" : ""} added. Learning starts once Blix has seen 2 of their trades.` : "Buy on Fomo buttons already work."}</p></div>
     ${addForm}</div>`;
   const hot = f.hot || [], traders = f.traders || [];
   return `<div class="card">${head}${addForm}
     <div class="card-head" style="padding-top:4px"><h2>What Fomo is buying</h2><small>last hour</small></div>
     ${hot.length ? hot.map((c) => `<div class="leader" style="margin:0 10px" data-mint="${esc(c.mint)}">${av(c, "sm")}<span class="grow"><b>$${esc(c.symbol || shortAddr(c.mint))}</b> <span class="dim">${c.buyers} buyers · ${c.sellers} sellers</span></span><span class="num ${cls((c.bought || 0) - (c.sold || 0))}">${usd((c.bought || 0) - (c.sold || 0))}</span>${fomoBtn(c.mint)}</div>`).join("")
       : `<p class="note" style="padding:0 16px">No Fomo trades seen yet this hour.</p>`}
-    <div class="card-head"><h2>Best Fomo traders seen</h2><small>by profit on trades the radar watched</small></div>
+    <div class="card-head"><h2>Best Fomo traders seen</h2><small>by profit on trades Blix watched</small></div>
     ${traders.length ? `<div class="table-wrap"><table><thead><tr><th>Trader</th><th>Profit</th><th class="hide-sm">Win rate</th><th class="hide-sm">Coins</th><th></th></tr></thead><tbody>
       ${traders.slice(0, 15).map((t) => `<tr class="row" data-wallet="${esc(t.wallet)}"><td><div class="coin">${wav(t.wallet, { handle: t.handle, source: "fomo" }, "sm")}<div><b>${t.handle ? "@" + esc(t.handle) : esc(t.label || shortAddr(t.wallet))}</b><small>${t.trades} trades</small></div></div></td>
       <td class="${cls(t.realized)}">${usd(t.realized)}</td><td class="hide-sm">${t.winRate == null ? "—" : Math.round(t.winRate * 100) + "%"}</td><td class="hide-sm">${t.coins}</td>
@@ -490,15 +490,15 @@ async function viewWallets(main) {
   </form>
   ${rpcNote}
   <div class="card" style="margin-bottom:18px"><div class="card-head"><h2>Following</h2><small>${watching.length} wallet${watching.length === 1 ? "" : "s"} · realized and open PnL are kept apart</small></div>
-      ${d.wallets.length ? `<div class="table-wrap"><table><thead><tr><th>Wallet</th><th title="Closed positions that made money / all closed positions the radar saw">Wins</th><th title="Profit actually taken on positions that were sold">Realized</th><th title="Open positions at quoted prices, sellable coins only">Open</th><th class="hide-sm" title="What the open positions could plausibly be sold for, after pool depth, minus what they cost">Sellable</th><th class="hide-sm">Checked</th></tr></thead><tbody>
+      ${d.wallets.length ? `<div class="table-wrap"><table><thead><tr><th>Wallet</th><th title="Closed positions that made money / all closed positions Blix saw">Wins</th><th title="Profit actually taken on positions that were sold">Realized</th><th title="Open positions at quoted prices, sellable coins only">Open</th><th class="hide-sm" title="What the open positions could plausibly be sold for, after pool depth, minus what they cost">Sellable</th><th class="hide-sm">Checked</th></tr></thead><tbody>
         ${d.wallets.map((w) => `<tr class="row ${w.watching ? "" : "paused"}" data-wallet="${esc(w.address)}"><td><div class="coin">${wav(w.address, w, "sm")}<div><b>${esc((w.label || shortAddr(w.address)).replace(/ \((bot|unverified), paused\)$/, ""))}</b>${w.watching ? "" : ` <span class="pill">${/\(bot/.test(w.label || "") ? "bot · paused" : /\(unverified/.test(w.label || "") ? "unverified · paused" : "paused"}</span>`}${w.linked ? `<span class="st dup" title="${esc(`Moves with ${w.linked} other followed wallet${w.linked > 1 ? "s" : ""}: ${w.groupWhy}. Counted as one actor.`)}">linked ×${w.linked + 1}</span>` : ""}
           <small>${w.source === "fomo" ? "Fomo trader" : w.source === "smart" ? `early in ${w.winners} runner${w.winners === 1 ? "" : "s"}` : "added by you"}${w.last_trade ? ` · traded ${ago(w.last_trade)} ago` : ""}${w.missed ? ` · <span class="down">${w.missed} missed</span>` : ""}</small></div></div></td>
         <td>${w.closed ? `${frac(Math.round((w.winRate || 0) * w.closed), w.closed)}` : "—"}</td>
         <td class="${cls(w.realized)}">${w.closed ? usd(w.realized) : "—"}</td>
         <td class="${cls(w.unrealized)}">${w.open ? usd(w.unrealized) : "—"}${w.stuck ? `<small class="down" title="${esc(`${w.stuck} bag${w.stuck > 1 ? "s" : ""} in emptied pools, quoted at ${money(w.stuckQuoted)} but unsellable; counted as zero`)}">${w.stuck} stuck</small>` : ""}</td>
         <td class="hide-sm ${cls(w.sellablePnl)}">${w.open ? usd(w.sellablePnl) : "—"}</td>
-        <td class="hide-sm dim">${w.watching ? (w.checked ? `${mins(Date.now() - w.checked)} ago` : "not yet") : "—"}${w.lagMs != null ? `<small title="Typical delay between a trade landing on-chain and the radar reading it">lag ${mins(w.lagMs)}</small>` : ""}</td></tr>`).join("")}
-      </tbody></table></div><p class="note pad">Realized = profit on coins already sold, from trades the radar saw. Open = unsold bags at quoted prices. Sellable = the same bags capped by what their pools could actually pay out. Bags in emptied pools count as zero.</p>` : empty("No wallets yet", "Paste a wallet above, or follow one from the list below. Auto-follow adds the best discovered wallets for you.")}</div>
+        <td class="hide-sm dim">${w.watching ? (w.checked ? `${mins(Date.now() - w.checked)} ago` : "not yet") : "—"}${w.lagMs != null ? `<small title="Typical delay between a trade landing on-chain and Blix reading it">lag ${mins(w.lagMs)}</small>` : ""}</td></tr>`).join("")}
+      </tbody></table></div><p class="note pad">Realized = profit on coins already sold, from trades Blix saw. Open = unsold bags at quoted prices. Sellable = the same bags capped by what their pools could actually pay out. Bags in emptied pools count as zero.</p>` : empty("No wallets yet", "Paste a wallet above, or follow one from the list below. Auto-follow adds the best discovered wallets for you.")}</div>
   <div class="radar-grid even">
     <div class="stack">
       ${fomoCard(d.fomo)}
@@ -509,7 +509,7 @@ async function viewWallets(main) {
         <div style="min-width:0"><span class="tag">${w.coins} winners</span><h3>${esc(w.label || shortAddr(w.address))}</h3>
         <p>${w.early ? `${w.early} early buys` : ""}${w.early && w.holder ? " · " : ""}${w.holder ? `${w.holder} as top holder` : ""} · ${w.tokens.slice(0, 5).map((t) => "$" + esc(t.symbol)).join(" ")}</p></div>
         <div class="meta">${w.watching ? '<b class="up">following</b>' : `<button class="btn" data-follow="${esc(w.address)}">Follow</button>`}</div></div>`).join("")
-        : empty("Still learning", "Smart money shows up once coins the radar watched have run 3x or more. Give it a few hours.")}</div>
+        : empty("Still learning", "Smart money shows up once coins Blix watched have run 3x or more. Give it a few hours.")}</div>
     </div>
     <div class="card"><div class="card-head"><h2>Live wallet activity</h2><small>buys and sells by wallets you follow</small></div>
       <div class="feed" id="wfeed">${d.activity.length ? d.activity.map((a) => tradeRow(a)).join("") : empty("Nothing yet", "Trades show up here within a minute of happening.")}</div></div>
@@ -556,7 +556,7 @@ async function openWallet(address) {
       <a class="btn" href="https://solscan.io/account/${esc(address)}" target="_blank" rel="noreferrer">Solscan</a>
       <button class="btn" data-copy="${esc(address)}">Copy address</button>
     </div>
-    ${w.group ? `<div class="p-sec"><div class="warn-box"><b>Linked to ${w.group.size - 1} other wallet${w.group.size > 2 ? "s" : ""} you follow.</b> They ${esc(w.group.why)}, so the radar counts them as one actor: ${w.group.members.map((m) => `<span class="linkish" data-wallet="${esc(m.address)}">${esc(m.name)}</span>`).join(", ")}. Likely one operator, a bundle, or copy-bots.</div></div>` : ""}
+    ${w.group ? `<div class="p-sec"><div class="warn-box"><b>Linked to ${w.group.size - 1} other wallet${w.group.size > 2 ? "s" : ""} you follow.</b> They ${esc(w.group.why)}, so Blix counts them as one actor: ${w.group.members.map((m) => `<span class="linkish" data-wallet="${esc(m.address)}">${esc(m.name)}</span>`).join(", ")}. Likely one operator, a bundle, or copy-bots.</div></div>` : ""}
     <div class="p-sec"><div class="facts">
       <div class="fact"><b>Trades seen</b><span>${pnl.trades}</span></div>
       <div class="fact"><b>Closed with a profit</b><span>${pnl.closed ? `${frac(Math.round(pnl.winRate * pnl.closed), pnl.closed)} (${Math.round(pnl.winRate * 100)}%)` : "—"}</span></div>
@@ -566,12 +566,12 @@ async function openWallet(address) {
       <div class="fact"><b>Stuck in dead pools</b><span class="${pnl.stuck ? "down" : ""}">${pnl.stuck ? `${pnl.stuck} · cost ${money(pnl.stuckCost)}` : "none"}</span></div>
       <div class="fact"><b>Last checked</b><span>${w.checked ? `${mins(Date.now() - w.checked)} ago` : "—"}</span></div>
       <div class="fact"><b>Read delay / missed</b><span>${w.lagMs != null ? mins(w.lagMs) : "—"} / ${w.missed || 0}</span></div>
-    </div><p class="note" style="margin:10px 0 0">Covers only trades the radar saw since it started watching, priced in USD at the time. Realized profit is the only number that was actually banked. Open value is a quote, and bags in emptied pools${pnl.stuck ? ` (quoted at ${money(pnl.stuckQuoted)} here)` : ""} are counted as zero because they cannot be sold.</p></div>
+    </div><p class="note" style="margin:10px 0 0">Covers only trades Blix saw since it started watching, priced in USD at the time. Realized profit is the only number that was actually banked. Open value is a quote, and bags in emptied pools${pnl.stuck ? ` (quoted at ${money(pnl.stuckQuoted)} here)` : ""} are counted as zero because they cannot be sold.</p></div>
     ${open.length ? `<div class="p-sec"><h3>Holding now</h3>${open.map((x) => `<div class="leader" data-mint="${esc(x.mint)}">${av(x, "sm")}<span class="grow"><b>$${esc(x.symbol || shortAddr(x.mint))}</b> <span class="dim">${esc(x.name || "")}</span>${x.exitable ? "" : `<span class="st bad" title="${esc(x.exitWhy || "")}">can't be sold</span>`}</span><span class="num ${x.exitable ? "" : "strike"}">${money(x.value)}</span><span class="num ${cls(x.unrealized)}" style="width:80px;text-align:right">${x.exitable ? usd(x.unrealized) : "$0"}</span></div>`).join("")}</div>` : ""}
     ${r.hits.length ? `<div class="p-sec"><h3>Why it's smart</h3>${r.hits.map((h) => `<div class="leader" data-mint="${esc(h.mint)}">${av(h, "sm")}<span class="grow"><b>$${esc(h.symbol || shortAddr(h.mint))}</b> <span class="dim">${h.kind === "early" ? "early buyer" : "top holder"}</span></span><span class="num up">${h.multiple ? h.multiple.toFixed(1) + "x run" : ""}</span></div>`).join("")}</div>` : ""}
     <div class="p-sec" style="padding:0"><h3 style="padding:16px 22px 0">Trades</h3>${r.trades.length ? r.trades.map((a) => tradeRow(a, { showWallet: false })).join("") : w.source
       ? `<p class="note" style="padding:0 22px 16px">No trades seen yet. New wallets get their last ~25 transactions checked within a minute or two.</p>`
-      : `<div style="padding:0 22px 16px"><p class="note">The radar hasn't looked at this wallet yet.</p><button class="btn" data-wscan="${esc(address)}">Scan recent trades</button></div>`}</div>
+      : `<div style="padding:0 22px 16px"><p class="note">Blix hasn't looked at this wallet yet.</p><button class="btn" data-wscan="${esc(address)}">Scan recent trades</button></div>`}</div>
     <div class="p-sec"><div class="mint">${esc(address)}</div></div>`;
   p.scrollTop = 0;
 }
@@ -744,7 +744,7 @@ function narCard(n) {
   const withMint = (n.examples || []).filter((e) => e.mint);
   return `<div class="card scout ${n.review === "expired" ? "expired" : ""}">
     <div class="scout-top"><h3>${esc(n.name)}</h3>${stageBadge(n.stage)}<span class="num conf" title="Confidence the AI gave this thesis when it wrote it">${n.confidence}</span></div>
-    <div class="scout-age"><span class="st ${rvCls === "up" ? "top" : rvCls === "warn" ? "old" : "bad"}">${rvLabel}</span><span class="dim small">${n.source === "cluster" ? `caught as a burst of launches${n.detect_ms != null ? `, named ${mins(n.detect_ms)} after it began` : ""} · ` : ""}researched ${mins(n.researchAge)} ago by ${n.model === "radar" ? "the radar alone (not looked up on X)" : esc(providerOf(n.model))}${cat.searches ? ` (${cat.searches} live searches)` : ""}${n.seen > 1 ? ` · found ${n.seen} times` : ""} · coin prices refreshed ${n.pricesAge != null ? `${mins(n.pricesAge)} ago` : "at scouting"}</span></div>
+    <div class="scout-age"><span class="st ${rvCls === "up" ? "top" : rvCls === "warn" ? "old" : "bad"}">${rvLabel}</span><span class="dim small">${n.source === "cluster" ? `caught as a burst of launches${n.detect_ms != null ? `, named ${mins(n.detect_ms)} after it began` : ""} · ` : ""}researched ${mins(n.researchAge)} ago by ${n.model === "radar" ? "Blix alone (not looked up on X)" : esc(providerOf(n.model))}${cat.searches ? ` (${cat.searches} live searches)` : ""}${n.seen > 1 ? ` · found ${n.seen} times` : ""} · coin prices refreshed ${n.pricesAge != null ? `${mins(n.pricesAge)} ago` : "at scouting"}</span></div>
     ${n.review === "expired" ? `<p class="note warn-note">This thesis has not been re-checked since it was written. The catalysts below may be over; only the coin prices are current.</p>` : ""}
     <p>${esc(n.thesis || "")}</p>
     ${(cat.catalysts || []).length ? `<ul class="cats">${cat.catalysts.slice(0, 3).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
@@ -758,7 +758,7 @@ function narCard(n) {
 // One line that says where a self-running process stands, so "has not run" is never mistaken for "broken".
 const statusLine = (state, text) => `<div class="status-line s-${state}"><i></i><span>${esc(text)}</span></div>`;
 
-// ---------- Picks: every pick the radar has made ----------
+// ---------- Picks: every pick Blix has made ----------
 const picksState = { tab: store.get("picks:tab", "ledger"), state: "all", day: "all", sort: "t", dir: -1, q: "", timer: null };
 const pnlPct = (x) => x == null ? "—" : `${x >= 1 ? "+" : ""}${((x - 1) * 100).toFixed(Math.abs(x - 1) >= 1 ? 0 : 1)}%`;
 const dayName = (t) => { const d = new Date(t), n = new Date(); n.setHours(0, 0, 0, 0); return t >= n.getTime() ? "Today" : t >= n.getTime() - 864e5 ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); };
@@ -837,7 +837,7 @@ async function picksTick(force) {
   const tw = box.querySelector(".table-wrap"); if (tw) tw.scrollTop = top;
 }
 async function viewPicks(main) {
-  main.innerHTML = `<div class="page-head slim"><div><h1>Picks</h1><p>Every coin the radar has picked, and what following its one exit rule would have returned. Paper only: nothing is bought.</p></div>
+  main.innerHTML = `<div class="page-head slim"><div><h1>Picks</h1><p>Every coin Blix has picked, and what following its one exit rule would have returned. Paper only: nothing is bought, and none of it is financial advice.</p></div>
       <div class="seg big">${[["ledger", "All picks"], ["desk", "AI desk"]].map(([k, l]) => `<button class="${picksState.tab === k ? "on" : ""}" data-pktab="${k}">${l}</button>`).join("")}</div></div>
     <div id="pkBox"><div class="skel"></div><div class="skel"></div></div>`;
   clearInterval(picksState.timer);
@@ -946,7 +946,7 @@ function triChip(t) {
 
 function aiChip(t) {
   const a = t.ai;
-  // Not read yet: one press sends it to the front of the AI's queue (a coin the radar is not tracking yet is adopted first).
+  // Not read yet: one press sends it to the front of the AI's queue (a coin Blix is not tracking yet is adopted first).
   if (!a) return t.state === "faded" ? `<span class="ai none">faded</span>` : `<button class="ai none rd" data-research="${esc(t.mint)}" title="Send to the AI for a first read now (hotkey r)">read</button>`;
   if (a.status === "queued") return `<span class="ai queued" title="Waiting for a read. Not rated yet.">queued</span>`;
   // Name whoever is really reading: a deep read when a first grade already exists, else the first-read lane.
@@ -1000,62 +1000,14 @@ function pulseRow(t, col) {
   </div>`;
 }
 
-function pulseRowOld(t, col) {
-  const prog = t.progress != null ? Math.round(t.progress * 100) : null;
-  const ring = col === "migrated" ? 100 : prog ?? 0;
-  const tx = (t.buys || 0) + (t.sells || 0);
-  const buyShare = tx ? (t.buys || 0) / tx : null;
-  const a = t.ai;
-  const verdict = a && a.verdict && ["done", "deep"].includes(a.status) ? `<div class="pr-verdict">${a.tag ? `<b>${esc(a.tag)}</b> · ` : ""}${esc(a.verdict)}</div>`
-    : t.tri?.why && col === "new" ? `<div class="pr-verdict tri-why tri-${esc(t.tri.label)}">${esc(t.tri.why)}${t.desc ? ` · <span class="dim">${esc(t.desc)}</span>` : ""}</div>`
-    : t.desc && col === "new" ? `<div class="pr-verdict dim">${esc(t.desc)}</div>` : "";
-  const vol = t.vol ?? t.liveVol;
-  // Holder figures: the live ledger (built from the trade feed) for coins on the curve, RugCheck for bonded ones.
-  // Every chip is rendered, hidden when unknown, so the 200ms live push can fill it in without a redraw.
-  const H = t.hl || {}, curve = !t.graduated && col !== "migrated";
-  const holders = curve ? (H.h ?? t.holders ?? null) : (t.holders ?? H.h ?? null);
-  const top10 = curve ? (H.t10 ?? t.top10 ?? null) : (t.top10 ?? H.t10 ?? null);
-  const dev = curve ? (H.dev ?? t.dev ?? null) : (t.dev ?? H.dev ?? null);
-  const hl = (k, label, v, fmt, bad, title) => `<span class="hl lv-${k}w ${bad ? "down" : ""}" title="${esc(title)}" ${v == null ? "hidden" : ""}>${label}<b class="lv-${k}">${v == null ? "" : fmt(v)}</b>${k === "h" ? "" : "%"}</span>`;
-  const sizes = pulseState.sizes, main = sizes[1] ?? sizes[0];
-  return `<div class="pr ${t.ai?.status === "running" ? "rating" : ""} ${t.state === "faded" ? "faded" : ""} ${a?.action === "buy" ? "is-buy" : ""} ${t.live ? "is-live" : ""} ${t.tri?.label === "slop" && !a ? "slop" : ""} ${pulseState.sel === t.mint ? "sel" : ""} ${pulseState.watch.has(t.mint) ? "watched" : ""}" data-mint="${esc(t.mint)}" data-born="${Date.now() - (t.age || 0)}" style="--ring:${ring}">
-    <div class="pr-av ${col === "migrated" ? "gold" : ""}">${av(t)}${prog != null && col !== "migrated" ? `<span class="pr-pct lv-pct">${prog}%</span>` : ""}</div>
-    <div class="pr-main">
-      <div class="pr-l1"><button class="star ${pulseState.watch.has(t.mint) ? "on" : ""}" data-pwatch="${esc(t.mint)}" title="Watchlist (hotkey w)">${ICON.star}</button><b class="pr-sym">${esc(t.symbol || "?")}</b><span class="pr-name">${esc(t.name || "")}</span>${protoChips(t)}<span class="pr-ca mono" title="Contract ${esc(t.mint)}">${esc(t.mint.slice(0, 4))}…${esc(t.mint.slice(-4))}</span>
-        <span class="pr-links">${extLink(t.x, ICON.x, "") && `<span title="X">${extLink(t.x, ICON.x, "")}</span>`}${extLink(t.web, ICON.web, "untrusted") && `<span title="Website set by the coin's creator (unverified)">${extLink(t.web, ICON.web, "untrusted")}</span>`}${extLink(t.tg, ICON.tg, "") && `<span title="Telegram">${extLink(t.tg, ICON.tg, "")}</span>`}</span></div>
-      <div class="pr-l2"><span class="pr-age">${ageStr(t.age)}</span>
-        ${hl("h", ICON.users, holders, (v) => String(v), false, curve ? "Holders: wallets holding it right now, from the live trade feed" : "Holders (RugCheck)")}
-        ${holders == null && t.traders != null ? `<span class="lv-trw" title="Traders seen live">${ICON.users}<b class="lv-tr">${t.traders}</b></span>` : ""}
-        ${hl("t10", ICON.crown, top10, (v) => String(Math.round(v)), top10 > 45, "Top 10 holders' share of the supply")}
-        ${hl("dev", ICON.chef, dev, (v) => (+v).toFixed(1), dev > 8, "Dev wallet's share of the supply")}
-        ${dev == null && t.devSol != null ? `<span class="lv-devsol" title="Dev bought at launch">${ICON.chef}${(+t.devSol).toFixed(2)} SOL</span>` : ""}
-        <i class="hl-tag ds lv-ds" ${H.ds ? "" : "hidden"} title="The dev wallet has sold ${H.ds === "all" ? "everything" : "more than half of"} what it held">${H.ds === "all" ? "DEV SOLD" : "DEV SELLING"}</i>
-        ${hl("sn", "SN ", H.snN ? H.sn : null, (v) => String(v), H.sn > 20, `Snipers: ${H.snN ?? "?"} wallets that bought within 2 blocks of the first trade${H.snOut != null ? `, ${H.snOut} already out` : ""}; this is the share of supply they still hold`)}
-        ${hl("bd", "BD ", H.bdN ? H.bd : null, (v) => String(v), H.bd > 15, `Bundle: ${H.bdN ?? "?"} other wallets bought in the launch block itself; this is the share of supply they still hold`)}
-        ${t.devCount >= 4 ? `<span class="${t.devCount >= 10 ? "down" : "dim"}" title="Coins this dev wallet launched in the last 6h">dev ×${t.devCount}</span>` : ""}
-        <span title="Buys / sells" class="lv-txw" ${tx ? "" : "hidden"}>TX <b class="lv-tx">${tx}</b><i class="bs"><i class="lv-bs" style="width:${Math.round((buyShare ?? 0.5) * 100)}%"></i></i></span>
-        ${t.win ? `<span class="hl win ${t.win.netSol < 0 ? "down" : ""}" title="The last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, ${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol} SOL net buying${t.win.chg != null ? `, ${t.win.chg >= 0 ? "+" : ""}${t.win.chg}% price` : ""}">5m <b>${t.win.traders}</b>w <b>${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}</b> SOL${t.win.chg != null ? ` <b class="${cls(t.win.chg)}">${t.win.chg >= 0 ? "+" : ""}${t.win.chg}%</b>` : ""}</span>` : ""}
-      </div>
-      ${verdict}
-    </div>
-    <div class="pr-side">
-      <div class="pr-mc"><small>MC</small><b class="num lv-mc">${t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—"}</b></div>
-      <div class="pr-v"><small>V</small><span class="num lv-v">${compact(vol)}</span>${t.chg1m != null ? `<span class="num lv-chg ${cls(t.chg1m)}">${pct(t.chg1m)}</span>` : t.chg5 != null ? `<span class="num lv-c5 ${cls(t.chg5)}">${pct(t.chg5)}</span>` : `<span class="num lv-chg"></span>`}</div>
-    </div>
-    <div class="pr-act">${col === "new" ? triChip(t) : ""}${t.early ? `<span class="trc ${t.early.strong ? "hi early" : "mid"}" title="Launch model: chance this doubles before it falls 40%, judged ${t.early.cp}s after launch${t.early.top ? ". Top 5% of launches" : t.early.strong ? ". Top 10% of launches" : ""}">${t.early.strong ? "★" : ""}E${Math.round(t.early.p * 100)}%</span>` : ""}${t.tr != null ? `<span class="trc ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}" title="Live traction, 0-100: how much real demand it shows this second. 60+ is the pick line.">▲${t.tr}</span>` : ""}${aiChip(t)}
-      <span class="pr-quick"><button class="qb main" data-pbuy="${esc(t.mint)}" data-sol="${main}" title="Paper buy ${main} SOL at the price this second (hotkey b). Nothing is really bought.">B ${main}</button><span class="qb-more">${sizes.filter((s) => s !== main).map((s) => `<button class="qb" data-pbuy="${esc(t.mint)}" data-sol="${s}" title="Paper buy ${s} SOL">${s}</button>`).join("")}</span></span>
-      <a class="fomo-q" href="${fomoUrl(t.mint)}" target="_blank" rel="noreferrer" title="Buy on Fomo (hotkey f)">Fomo</a></div>
-  </div>`;
-}
-
 // Numeric filters for the live columns. A coin with no reading for a field (holders are unknown until
 // the safety check runs) is hidden by that field's filter rather than assumed to pass.
 //
 // Pulse Filters: the same layout Axiom and GMGN use. Each column (New Pairs, Final Stretch, Migrated) has
 // its own set: keywords, launchpads, an Audit tab, a $ Metrics tab and a Socials tab, with three saved
-// slots (1 / 2 / 3). Holders, top 10, dev holding, snipers and bundles come from the radar's own ledger of
+// slots (1 / 2 / 3). Holders, top 10, dev holding, snipers and bundles come from Blix's own ledger of
 // the live trade feed (t.hl). Fields with no free source left (X follower counts, fees, pro traders) are
-// listed but switched off: the radar does not guess.
+// listed but switched off: Blix does not guess.
 const PF_COLS = [["new", "New Pairs"], ["running", "Running Now"], ["stretch", "Final Stretch"], ["migrated", "Migrated"]];
 const PF_PROTOCOLS = ["Pump", "Bonk", "Bags", "Moonshot", "Jupiter Studio", "Believe", "LaunchLab", "Dynamic BC", "PumpSwap", "Raydium", "Meteora AMM", "Orca", "Other"];
 const PF_NO_SOURCE = ["Mayhem", "Bonkers", "Rise Rich", "Stonkfun", "Printr", "Liquid", "Surge", "Soar", "Heaven", "Daos.fun", "Candle", "Sugar", "Moonit", "Boop"];
@@ -1215,10 +1167,10 @@ function pfBody(f) {
     const on = (p) => !f.protocols || f.protocols.includes(p);
     return `<div class="pf-sec"><b>Protocols</b><button class="btn sm-btn" data-pfall>${f.protocols ? "Select All" : "Unselect All"}</button></div>
       <div class="pf-protos">${PF_PROTOCOLS.map((p) => `<button class="pf-proto ${on(p) ? "on" : ""}" data-pfp="${p}">${p}</button>`).join("")}
-      ${pf.more ? PF_NO_SOURCE.map((p) => `<button class="pf-proto off" disabled title="The radar does not see this launchpad yet.">${p}</button>`).join("") : ""}</div>
+      ${pf.more ? PF_NO_SOURCE.map((p) => `<button class="pf-proto off" disabled title="Blix does not see this launchpad yet.">${p}</button>`).join("") : ""}</div>
       <button class="pf-more" data-pfmore>${pf.more ? "Show less" : `Show more <i>${PF_NO_SOURCE.length}</i>`}</button>
       <div class="pf-sec"><b>Quote Tokens</b></div>
-      <div class="pf-protos">${["SOL", "USDC", "USD1", "STOCK", "OTHER"].map((q) => `<button class="pf-proto ${q === "SOL" ? "on" : "off"}" disabled title="Every coin the radar tracks is paired with SOL.">${q}</button>`).join("")}</div>`;
+      <div class="pf-protos">${["SOL", "USDC", "USD1", "STOCK", "OTHER"].map((q) => `<button class="pf-proto ${q === "SOL" ? "on" : "off"}" disabled title="Every coin Blix tracks is paired with SOL.">${q}</button>`).join("")}</div>`;
   }
   if (pf.tab === "audit") return `<div class="pf-flags">${PF_FLAGS.map((x) => pfBool(x, f)).join("")}</div><div class="pf-grid">${PF_AUDIT.map((x) => pfRange(x, f)).join("")}</div>
     <div class="pf-field wide"><span>Search Dev Wallet</span><input class="input" placeholder="wallet1, wallet2…" data-pf="devWallets" value="${esc(f.devWallets || "")}"></div>`;
@@ -1715,7 +1667,7 @@ function ledgerSection(h) {
       <div class="fact"><b>Snipers</b><span>${h.snipers ? `${flag(h.snipers.pct > 20, h.snipers.pct.toFixed(1) + "%")} <small class="dim">· ${h.snipers.n} wallets, ${h.snipers.sold} out</small>` : "—"}</span></div>
       <div class="fact"><b>Bundle</b><span>${h.bundle ? `${flag(h.bundle.pct > 15, h.bundle.pct.toFixed(1) + "%")} <small class="dim">· ${h.bundle.n} wallets in the launch block</small>` : "—"}</span></div>
     </div>
-    ${h.partial ? `<p class="note" style="margin:10px 0 0">${h.genesis ? "Some sells were of tokens the radar never saw bought, so the figures are approximate." : "The radar joined this coin after its first trade, so holders are partial and sniper/bundle figures are not shown."}</p>` : ""}
+    ${h.partial ? `<p class="note" style="margin:10px 0 0">${h.genesis ? "Some sells were of tokens Blix never saw bought, so the figures are approximate." : "Blix joined this coin after its first trade, so holders are partial and sniper/bundle figures are not shown."}</p>` : ""}
     ${h.top.length ? `<div class="leaders" style="margin-top:10px">${h.top.map((w, i) => `<div class="leader" data-wallet="${esc(w.wallet)}"><span class="num dim" style="width:22px">${i + 1}</span>${wav(w.wallet, {}, "xs")}<span class="grow num">${shortAddr(w.wallet)} ${tagPill(w.tag)}</span><span class="num dim">${w.sol >= 0 ? "" : "−"}${Math.abs(w.sol).toFixed(2)} SOL</span><span class="num" style="width:62px;text-align:right">${w.pct.toFixed(2)}%</span></div>`).join("")}</div>` : ""}
   </div>`;
 }
@@ -1819,8 +1771,8 @@ function botToday(d) {
       const mrow = (m) => `<tr><td>${m.cp < 60 ? `${m.cp}s` : `${m.cp / 60}m`} after launch</td><td>${m.n}${m.status === "learning" ? ` / ${m.need}` : ""}</td><td>${m.base?.winPct != null ? `${m.base.winPct}%` : "—"}</td>
         <td>${m.test ? `<b class="${m.test.top25.winPct > m.test.all.winPct ? "up" : "down"}">${m.test.top25.winPct}%</b> <span class="dim">vs ${m.test.all.winPct}%</span>` : "—"}</td><td>${m.test ? `<b class="${xCls(m.test.top25.avg)}">${mult(m.test.top25.avg)}</b> <span class="dim">vs ${mult(m.test.all.avg)}</span>` : "—"}</td>
         <td><span class="st ${m.status === "working" ? "ok" : m.status === "learning" ? "" : "bad"}">${esc(m.status)}</span>${m.autoOk ? ` <span class="dim">· entering its strongest</span>` : ""}</td></tr>`;
-      return `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Today's real winners</h2><small>every launch today that reached ${money(E.winnerUsd)}+ · did the radar have it, and how early?</small></div>
-        ${E.winners.length ? `<p class="bot-note" style="margin:0 2px 10px">${S.n} launches got there from a normal start${S.bundled ? ` (plus ${S.bundled} that were bundled straight to bonding, where no early entry existed)` : ""}. The radar noticed <b>${S.noticed}</b>${S.medianNoticedSecs != null ? ` (typically ${secs(Math.max(0, S.medianNoticedSecs))} after launch${S.medianNoticedMcap ? `, at ${money(S.medianNoticedMcap)}` : ""})` : ""}, the launch model flagged <b>${S.flagged}</b>, the AI read <b>${S.read}</b>, and <b>${S.picked}</b> were picked${S.medianPickMcap ? ` (typically at ${money(S.medianPickMcap)})` : ""}.</p>
+      return `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Today's real winners</h2><small>every launch today that reached ${money(E.winnerUsd)}+ · did Blix have it, and how early?</small></div>
+        ${E.winners.length ? `<p class="bot-note" style="margin:0 2px 10px">${S.n} launches got there from a normal start${S.bundled ? ` (plus ${S.bundled} that were bundled straight to bonding, where no early entry existed)` : ""}. Blix noticed <b>${S.noticed}</b>${S.medianNoticedSecs != null ? ` (typically ${secs(Math.max(0, S.medianNoticedSecs))} after launch${S.medianNoticedMcap ? `, at ${money(S.medianNoticedMcap)}` : ""})` : ""}, the launch model flagged <b>${S.flagged}</b>, the AI read <b>${S.read}</b>, and <b>${S.picked}</b> were picked${S.medianPickMcap ? ` (typically at ${money(S.medianPickMcap)})` : ""}.</p>
         <div class="table-wrap"><table><thead><tr><th>Coin</th><th>Peak</th><th>Launched</th><th>First noticed</th><th title="The launch model's chance of a 2x; a star means it was in the top 10% of launches">Early signal</th><th>AI read</th><th>Pick</th></tr></thead><tbody>${E.winners.slice(0, 25).map(wr).join("")}</tbody></table></div>`
           : empty("No winners recorded yet", "A launch appears here once it reaches that market cap. Counting started when this version did.")}
         <div class="card-head" style="margin-top:14px"><h2>Launch model</h2><small>learns what winners look like in their first seconds · judged only on launches it never saw · recording ${E.stats.recording} launches now</small></div>
@@ -1884,7 +1836,7 @@ async function viewPulse(main) {
 let narTimer = null;
 function burstTable(d) {
   const rows = d.clusters;
-  if (!rows.length) return empty("Nothing bursting right now", `Every launch is compared with the last three hours. A burst shows here within seconds of the third or fourth matching launch; ${d.stats.launches.toLocaleString()} launches compared since the radar started.`);
+  if (!rows.length) return empty("Nothing bursting right now", `Every launch is compared with the last three hours. A burst shows here within seconds of the third or fourth matching launch; ${d.stats.launches.toLocaleString()} launches compared since Blix started.`);
   return `<div class="table-wrap"><table><thead><tr><th>Shared by the launches</th><th title="Launches in the last 10 minutes / the last hour">Launches 10m / 1h</th><th title="How many times its normal rate over the last three hours">vs normal</th><th title="Different wallets that launched one in the last 10 minutes">Launchers</th><th title="Different wallets trading these coins">Buyers</th><th>Lead coin</th><th>Status</th></tr></thead><tbody>${rows.map((c) => `<tr>
     <td><div class="kw">${c.keys.slice(0, 4).map((k) => `<span>${esc(k)}</span>`).join("")}</div>${c.name ? `<div class="small"><b>${esc(c.name)}</b> ${stageBadge(c.stage)}</div>` : c.looking ? `<div class="dim small">Grok is looking it up on X…</div>` : ""}</td>
     <td class="num">${c.n10}<span class="dim"> / ${c.n60}</span></td><td class="num">${c.lift >= 20 ? "20x+" : `${c.lift}x`}</td><td class="num">${c.devs}</td><td class="num">${c.traders.toLocaleString()}</td>
@@ -1895,7 +1847,7 @@ async function viewNarratives(main) {
   const [nar, live] = await Promise.all([api("narratives"), api("clusters")]);
   const calls = live.calls.calls, rec = live.calls.record, cur = calls.filter((n) => n.review !== "expired"), old = calls.filter((n) => n.review === "expired" && (n.best_mult || n.best_peak)).slice(0, 9);
   const recLine = (r, what) => r.n ? `${what}: ${r.n} scored, the best coin ran 3x+ in ${r.bestRan3x}${r.typicalCoin != null ? `, the typical coin peaked at ${mult(r.typicalCoin)}` : ""}${r.leadN ? `, the coin named as lead peaked at ${mult(r.leadCoin)} (${r.leadN})` : ""}${r.detectSecs != null ? `, named a median ${r.detectSecs}s after the burst began` : ""}.` : `${what}: none scored yet (each call is scored after 24 hours).`;
-  main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>A narrative shows up on-chain as a burst: several different people launching on the same word or the same post within minutes, with real buyers arriving. The radar catches the burst in seconds and asks Grok, which can search X, what the story is. An hourly scout looks for catalysts that have no coins yet.</p></div></div>
+  main.innerHTML = `<div class="page-head"><div><h1>Narratives</h1><p>A narrative shows up on-chain as a burst: several different people launching on the same word or the same post within minutes, with real buyers arriving. Blix catches the burst in seconds and asks Grok, which can search X, what the story is. An hourly scout looks for catalysts that have no coins yet.</p></div></div>
     <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Bursting right now</h2><small>refreshes every few seconds · ${live.armed.length} narrative${live.armed.length === 1 ? "" : "s"} armed, ${live.stats.armedHits} matching launches caught</small></div>
       ${live.grok ? "" : `<div class="warn-box" style="margin:0 16px 12px"><b>Grok is not available right now.</b> Bursts are still caught and recorded, but they are not being looked up on X, so they have no story or stage. See Health for why.</div>`}
       <div id="narLive">${burstTable(live)}</div></div>
@@ -1930,8 +1882,8 @@ async function viewNarratives(main) {
 async function viewBriefs(main) {
   const list = await api("briefs");
   const partial = list.filter((b) => b.status === "partial").length;
-  main.innerHTML = `<div class="page-head"><div><h1>Briefs</h1><p>Every hour the radar's data is written up: the tape, hot narratives, coins to watch, and red flags. A brief that comes back unfinished is retried once, then kept and marked incomplete rather than passed off as whole.${partial ? ` ${partial} of the ${list.length} below ${partial === 1 ? "is" : "are"} incomplete.` : ""}</p></div><button class="btn primary" data-brief>Write one now</button></div>
-    <div class="stack">${list.length ? list.map((b) => `<div class="card ${b.status === "partial" ? "partial" : ""}"><div class="card-head"><h2>${new Date(b.t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}${b.status === "partial" ? ' <span class="st bad">incomplete</span>' : ""}</h2><small>${ago(b.t)} ago · ${esc(providerOf(b.model))}</small></div>${partialNote(b)}<div class="brief md">${md(b.body)}</div></div>`).join("") : `<div class="card">${empty("No briefs yet", "The first one is written about 12 minutes after the radar starts.")}</div>`}</div>`;
+  main.innerHTML = `<div class="page-head"><div><h1>Briefs</h1><p>Every hour Blix's data is written up: the tape, hot narratives, coins to watch, and red flags. A brief that comes back unfinished is retried once, then kept and marked incomplete rather than passed off as whole.${partial ? ` ${partial} of the ${list.length} below ${partial === 1 ? "is" : "are"} incomplete.` : ""}</p></div><button class="btn primary" data-brief>Write one now</button></div>
+    <div class="stack">${list.length ? list.map((b) => `<div class="card ${b.status === "partial" ? "partial" : ""}"><div class="card-head"><h2>${new Date(b.t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}${b.status === "partial" ? ' <span class="st bad">incomplete</span>' : ""}</h2><small>${ago(b.t)} ago · ${esc(providerOf(b.model))}</small></div>${partialNote(b)}<div class="brief md">${md(b.body)}</div></div>`).join("") : `<div class="card">${empty("No briefs yet", "The first one is written about 12 minutes after Blix starts.")}</div>`}</div>`;
 }
 
 // ---------- track record ----------
@@ -2005,7 +1957,7 @@ async function viewSettings(main) {
   const secret = (k, label, ph, help, extra = "", wide = false) => `<div class="field" ${wide ? 'style="grid-column:1/-1"' : ""}><label for="s-${k}">${label}${S[k]?.set ? ` <span class="st top">saved ${esc(S[k].hint)}</span>` : ""}</label>
     <div style="display:flex;gap:8px"><input class="input num" id="s-${k}" name="${k}" type="password" autocomplete="new-password" spellcheck="false" value="" placeholder="${S[k]?.set ? "Leave blank to keep the saved one, or type to replace it" : ph}" style="flex:1">${S[k]?.set ? `<button class="btn" type="button" data-secret-clear="${k}">Remove</button>` : ""}${extra}</div><small>${help}</small></div>`;
   const mb = (n) => `${(n / 1e6).toFixed(0)} MB`;
-  main.innerHTML = `<div class="page-head"><div><h1>Settings</h1><p>Where updates go and how picky the radar is. Everything is saved on this PC only (data/settings.json). Saved keys and webhook URLs are never shown again or sent back to this page.</p></div><button class="btn primary" id="save">Save</button></div>
+  main.innerHTML = `<div class="page-head"><div><h1>Settings</h1><p>Where updates go and how picky Blix is. Everything is saved on this PC only (data/settings.json). Saved keys and webhook URLs are never shown again or sent back to this page.</p></div><button class="btn primary" id="save">Save</button></div>
   <form id="sform" class="stack">
     <div class="card"><div class="card-head"><h2>Setup checklist</h2><small>what is working right now</small></div>${checklist(al, pv)}</div>
     <div class="card"><div class="card-head"><h2>Where alerts go</h2><button class="btn" type="button" id="testN" title="Sends a test using what is typed here. Nothing is saved.">Send test message</button></div>
@@ -2075,7 +2027,7 @@ async function viewSettings(main) {
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="claudeFast" ${s.claudeFast ? "checked" : ""}> Claude Haiku does fast reads when Grok and Groq are out</label><small>Seconds per coin on your Claude login, capped by “Max fast reads per hour”. No live X search.</small></div>
         ${num("buyConviction", "Buy call at conviction", "Starting point; the self-review tunes it from results (55-90).")}
         ${num("scoutEveryMin", "Scout narratives every (minutes)", "Needs Grok: it searches X and the web for narratives starting to run. 0 = off.")}
-        <div class="field"><label for="s-grokDailyBudget">Grok daily budget ($)</label><input class="input num" id="s-grokDailyBudget" name="grokDailyBudget" type="number" step="0.5" min="0" value="${esc(s.grokDailyBudget)}"><small>The most Grok subscription credit the radar may spend in a day; 0 means no limit. Naming a live burst costs about 7 cents and may use all of it, the hourly scout up to 60%, deep reads 50%, the one-second quick calls 25%. When a share is used up that job moves to Claude. Today's spend is on the Health page.</small></div>
+        <div class="field"><label for="s-grokDailyBudget">Grok daily budget ($)</label><input class="input num" id="s-grokDailyBudget" name="grokDailyBudget" type="number" step="0.5" min="0" value="${esc(s.grokDailyBudget)}"><small>The most Grok subscription credit Blix may spend in a day; 0 means no limit. Naming a live burst costs about 7 cents and may use all of it, the hourly scout up to 60%, deep reads 50%, the one-second quick calls 25%. When a share is used up that job moves to Claude. Today's spend is on the Health page.</small></div>
         ${num("narrativeCardsPerHour", "Bursts looked up per hour", "How many live bursts Grok may look up on X in an hour, at about 7 cents each.")}
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="quickGrok" ${s.quickGrok ? "checked" : ""}> Grok's fastest model makes the first call on each coin</label><small>About one second a coin against three to four for Claude Haiku, with no X search. Uses its 25% share of the daily budget, spread through the day; Haiku takes the rest.</small></div>
         ${num("reviewMinNew", "Self-review after N new results", "The playbook is rewritten once this many graded coins have played out 6h+.")}
@@ -2095,14 +2047,14 @@ async function viewSettings(main) {
       </div></div>
     <div class="card"><div class="card-head"><h2><span class="fomo-mark">fomo</span> Connection</h2><small>free, on-chain, no API key</small></div>
       <div class="form">
-        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="fomoAutoFollow" ${s.fomoAutoFollow ? "checked" : ""}> Auto-follow the best Fomo traders</label><small>Traders the radar watched make money on Fomo (3+ closed coins, $300+ profit, 50%+ win rate).</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="fomoAutoFollow" ${s.fomoAutoFollow ? "checked" : ""}> Auto-follow the best Fomo traders</label><small>Traders Blix watched make money on Fomo (3+ closed coins, $300+ profit, 50%+ win rate).</small></div>
         ${num("fomoFollowTop", "Max Fomo traders to follow", "Each followed wallet costs RPC calls.")}
       </div></div>
     <div class="card"><div class="card-head"><h2>Market data &amp; wallets</h2></div>
       <div class="form">
         ${secret("rpcUrl", "Solana RPC URL", "Blank = free public RPC (slow, rate limited)", "For fast, complete wallet tracking, make a free account at helius.dev and paste its mainnet RPC URL here. The URL contains your key, so it is treated as a secret.", "", true)}
         ${secret("jupiterKey", "Jupiter API key (optional)", "Blank = keyless access", "Quotes and prices share a request allowance. Add a key from developers.jup.ag/portal for more capacity.", "", true)}
-        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="autoFollowSmart" ${s.autoFollowSmart ? "checked" : ""}> Auto-follow discovered early wallets</label><small>Adds the best wallets the radar finds, up to the limit below.</small></div>
+        <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="autoFollowSmart" ${s.autoFollowSmart ? "checked" : ""}> Auto-follow discovered early wallets</label><small>Adds the best wallets Blix finds, up to the limit below.</small></div>
         ${num("maxSmartWallets", "Max auto-followed wallets", "More wallets means more RPC calls.")}
         ${num("walletMinSol", "Wallet alert minimum (SOL)", "Buys by auto-followed wallets below this are logged but not alerted. Wallets you add always alert.")}
       </div></div>
@@ -2117,11 +2069,11 @@ async function viewSettings(main) {
         ${num("nurseryMinVol5m", "Launch survival volume ($ in 5m)", "…or trade this much in 5 minutes.")}
         ${num("maxTracked", "Max coins tracked", "Weakest coins are dropped past this.")}
       </div></div>
-    <div class="card"><div class="card-head"><h2>This PC, backups and moving</h2><small>the radar runs here and nowhere else</small></div>
+    <div class="card"><div class="card-head"><h2>This PC, backups and moving</h2><small>Blix runs here and nowhere else</small></div>
       <div class="plain">
-        <p><b>It only works while this PC is on.</b> The radar runs hidden from login and restarts itself if it crashes. If the PC sleeps or shuts down, nothing is watched: launches, wallet buys and alert checkpoints in that window are simply missed, and the gap is logged on the <a class="linkish" href="#/health">Health</a> page. Closing this window changes nothing; the radar keeps running, but browser pop-ups stop, so set up Discord or Telegram above to keep getting alerts.</p>
+        <p><b>It only works while this PC is on.</b> Blix runs hidden from login and restarts itself if it crashes. If the PC sleeps or shuts down, nothing is watched: launches, wallet buys and alert checkpoints in that window are simply missed, and the gap is logged on the <a class="linkish" href="#/health">Health</a> page. Closing this window changes nothing; Blix keeps running, but browser pop-ups stop, so set up Discord or Telegram above to keep getting alerts.</p>
         <p><b>It only answers this PC.</b> The dashboard is reachable at localhost only and refuses requests from other sites and devices. To check it from a phone, use the Discord or Telegram alerts. Do not expose port 4420 to the network or the internet: the dashboard has no login. If you want remote access later, put it behind a private VPN such as Tailscale, never a public port.</p>
-        <p><b>Backups.</b> The database (${mb(bk.database.bytes)}) is copied to data/backups once a day and the two newest copies are kept${bk.last ? `; the last one was ${ago(bk.last)} ago` : "; none has been made yet"}. To restore, stop the radar and replace data/radar.db with a backup. The export below is a small file with your settings, followed wallets, alert rules and playbook, for moving to another PC.</p>
+        <p><b>Backups.</b> The database (${mb(bk.database.bytes)}) is copied to data/backups once a day and the two newest copies are kept${bk.last ? `; the last one was ${ago(bk.last)} ago` : "; none has been made yet"}. To restore, stop Blix and replace data/radar.db with a backup. The export below is a small file with your settings, followed wallets, alert rules and playbook, for moving to another PC.</p>
         <div class="filters"><button class="btn" type="button" id="bkNow">Back up now</button><a class="btn" href="/api/export" download>Export settings and wallets</a><a class="btn" href="/api/export?secrets=1" download title="Includes your webhook URL, bot token and keys in plain text. Keep the file private.">Export including secrets</a><label class="btn">Import…<input type="file" id="impFile" accept="application/json" hidden></label></div>
       </div></div>
   </form>`;
@@ -2174,7 +2126,7 @@ async function viewHealth(main) {
     ${rows.map((p) => `<div class="hrow hs-${p.state}"><span class="hstate">${HSTATE[p.state] || p.state}</span><div class="hmain"><b>${esc(p.name)}</b><p>${esc(p.summary)}</p>
       ${p.fix ? `<p class="hfix"><b>What to do:</b> ${esc(p.fix)}</p>` : ""}</div>
       <div class="htimes">${p.lastOk || p.lastFail ? `<span>last success <b>${when(p.lastOk)}</b></span>` : ""}${p.lastFail ? `<span>last failure <b>${when(p.lastFail)}</b></span>` : ""}${p.lastError && p.state !== "ok" ? `<span class="down" title="${esc(p.lastError)}">${esc(String(p.lastError).slice(0, 70))}</span>` : ""}</div></div>`).join("")}</div>` : ""; };
-  main.innerHTML = `<div class="page-head"><div><h1>Health</h1><p>Everything the radar depends on: whether it is working, when it last worked, and what went wrong. “Connected” in the corner only means this page can reach the radar; this page is what tells you whether the data behind it is current.</p></div>
+  main.innerHTML = `<div class="page-head"><div><h1>Health</h1><p>Everything Blix depends on: whether it is working, when it last worked, and what went wrong. “Connected” in the corner only means this page can reach Blix; this page is what tells you whether the data behind it is current.</p></div>
       <div class="desk-stats"><span class="pill ${h.issues ? "warn-pill" : ""}">${h.issues ? `${h.issues} issue${h.issues > 1 ? "s" : ""}` : "No issues"}</span><span class="pill">running ${mins(Date.now() - h.startedAt)}</span></div></div>
     ${group("Market data", ["launches", "trades", "scan", "dexscreener", "geckoterminal", "rugcheck", "freshness"])}
     ${group("Wallet tracking", ["rpc", "wallets", "fomo"])}
@@ -2184,6 +2136,147 @@ async function viewHealth(main) {
       ${h.events.length ? h.events.map((e) => `<div class="risk"><i style="background:${e.kind === "error" ? "var(--down)" : "var(--info)"}"></i><div><b>${esc(e.text)}</b><small>${ago(e.t)} ago</small></div></div>`).join("") : `<p class="note pad">Nothing logged.</p>`}</div>`;
 }
 setInterval(() => { if (route() === "health" && !document.hidden) viewHealth($("#main")).catch(() => {}); }, 10_000);
+
+// ---------- API ----------
+// The reference for the local HTTP API (docs/API.md). Rows are [method, path, what it returns, runnable]:
+// a GET that takes no arguments and has no side effects can be run in place.
+const API_DOCS = [
+  ["Market", [
+    ["GET", "/api/overview", "KPIs: launches per hour, tracking, pass-safety, signals 24h, graduations, health issues", 1],
+    ["GET", "/api/pulse", "The four Pulse columns (new, final stretch, migrated, running) with per-coin stats and AI verdicts", 1],
+    ["GET", "/api/bot", "Anti-slop filter state, today's desk, live counters, narrative scout, early-launch model", 1],
+    ["GET", "/api/tokens?…", "Coins table. Query params mirror the Coins page filters (sort, safety, stage, search)"],
+    ["GET", "/api/token/<mint>", "Full coin detail: price history, safety report, holders summary, socials, research, signals"],
+    ["GET", "/api/token/<mint>/explain", "Claude's explanation of the coin from Blix's data"],
+    ["POST", "/api/token/<mint>/classify", "{ themes, assetClass }. Your correction wins over the automatic classification; null puts it back on automatic"],
+    ["GET", "/api/holders/<mint>?top=25", "Live holder ledger: top holders tagged dev / sniper / bundle, each position, top-10 share"],
+    ["GET", "/api/candles/<mint>?tf=5s|15s|1m|5m|15m|1h", "Market-cap candles built from real trades, with volume"],
+    ["GET", "/api/quote?mint=<mint>&side=buy|sell&amount=<n>&slip=<bps>", "A real Jupiter quote: out amount, price impact, route"],
+  ]],
+  ["Signals, narratives, briefs", [
+    ["GET", "/api/signals?…", "Signals feed. Params: type, safety=passed|unscreened|all, group=coin, limit", 1],
+    ["GET", "/api/narratives", "Themes with heat, launch share, lift vs previous hours, emerging words, lead coins", 1],
+    ["GET", "/api/clusters", "Narrative bursts (same word or same X post within minutes) and Grok's calls on them", 1],
+    ["GET", "/api/briefs", "Last 20 market briefs", 1],
+    ["POST", "/api/brief", "Write a brief now"],
+    ["GET", "/api/events", "Last 80 system events", 1],
+  ]],
+  ["Research and picks", [
+    ["GET", "/api/research", "Research desk status: providers, queue, reads this hour, narratives the AI rates", 1],
+    ["GET", "/api/research/<mint>", "The coin's reads: first read, deep read, grade, thesis, plan, sources"],
+    ["POST", "/api/research/<mint>", "Queue the coin for a fresh read at top priority"],
+    ["GET", "/api/triage", "The first-read gate's record", 1],
+    ["GET", "/api/picks", "Picks scorecard: by stage, by AI call, by reason, by day, running result", 1],
+    ["GET", "/api/picks/all", "Every pick with entry, exit, peak, rule result", 1],
+    ["POST", "/api/picks/review", "Start a self-review (Grok studies the scorecard and rewrites the playbook)"],
+    ["POST", "/api/picks/scout", "Run the narrative scout now"],
+  ]],
+  ["Paper desk", [
+    ["GET", "/api/paper", "The desk: positions, today's and lifetime PnL", 1],
+    ["POST", "/api/paper/quoted", "{ mint, sol, slippageBps?, tp?, sl?, trail? }. Open at the real quote"],
+    ["POST", "/api/paper", "{ mint, sol, tp?, sl?, trail? }. Open at the last price"],
+    ["GET", "/api/paper/<id>/preview?pct=100", "What selling would return at the real quote"],
+    ["POST", "/api/paper/<id>/sellq", "{ pct?, why? }. Sell all or part at the real quote"],
+    ["POST", "/api/paper/<id>/sell", "{ pct?, why? }. Sell at the last price"],
+    ["POST", "/api/paper/<id>/rule", "{ tp?, sl?, trail? }. Take-profit multiple, stop-loss %, trailing %; omitted or zero clears"],
+    ["DELETE", "/api/paper/<id>", "Forget a closed position"],
+  ]],
+  ["Wallets and Fomo", [
+    ["GET", "/api/wallets", "Followed wallets with PnL, smart-money ranking, recent activity, RPC tracking stats", 1],
+    ["POST", "/api/wallets", "{ address, label? }. Follow a wallet"],
+    ["GET", "/api/wallet/<address>", "Wallet detail: swaps, realized / open / sellable PnL, positions, linked wallets, alert rule"],
+    ["POST", "/api/wallet/<address>", "{ scan: true } scans without following; { follow: true, label? } follows; { label?, muted? } updates"],
+    ["DELETE", "/api/wallet/<address>", "Unfollow"],
+    ["GET", "/api/fomo", "Fomo overview: learned fee payer, what Fomo is buying, top Fomo traders", 1],
+    ["POST", "/api/fomo/trader", "{ wallet, handle? }. Mark a wallet as a Fomo wallet"],
+  ]],
+  ["Track record, health, ops", [
+    ["GET", "/api/perf", "Track record per signal type: checked, up 20%+, down 50%+, unsellable, median, worst, reached 2x", 1],
+    ["GET", "/api/health", "Every dependency with last success, last failure, what to do", 1],
+    ["GET", "/api/settings", "Public settings (secrets never returned)", 1],
+    ["POST", "/api/settings", "{ settings: {…}, clear: [\"discordWebhook\", …] }"],
+    ["POST", "/api/test-notify · /api/test-grok · /api/test-fast", "Test a destination or provider with the body's values, without saving"],
+    ["GET", "/api/alerts", "Alert rules (mute / quiet / cooldown), destinations, last 80 deliveries", 1],
+    ["POST", "/api/alerts", "{ scope: \"coin\"|\"wallet\"|\"type\", target, effect, note } or { clear: true, scope, target }"],
+    ["DELETE", "/api/alerts/<id>", "Remove a rule"],
+    ["GET", "/api/export?secrets=1", "One JSON file: settings, wallets, rules, playbook (secrets only with secrets=1)"],
+    ["POST", "/api/import", "The export file"],
+    ["GET · POST", "/api/backup", "List backups · write one now"],
+    ["POST", "/api/repair", "Rebuild derived tables from snapshots"],
+    ["GET", "/api/remote-link", "Local only: the tunnel URL with the remote key"],
+  ]],
+];
+const API_EVENTS = [
+  ["tick", "{ tracking, launchesPerHour, tradesPerSecond, … }", "every few seconds"],
+  ["launch", "a new pump.fun launch (mint, name, symbol, dev, uri)", "sub-second after the chain"],
+  ["live", "live price / mcap / flow updates for coins on the Pulse", "per trade batch"],
+  ["signal", "a new signal (type, mint, symbol, text, safety, score)", "when raised"],
+  ["mig", "a pump.fun graduation / migration", "when detected"],
+  ["pic", "coin image became available", "when fetched"],
+  ["paper", "paper desk changed (fill, sell, rule, stop)", "on change"],
+  ["brief", "a new market brief", "hourly or on demand"],
+];
+async function viewApi(main) {
+  const base = location.origin, n = API_DOCS.reduce((a, [, rows]) => a + rows.length, 0);
+  const row = ([m, p, d, run]) => `<tr><td class="mono">${m}</td><td><code data-copy="${esc(base + p)}" title="Copy URL">${esc(p)}</code></td><td>${esc(d)}</td><td>${run ? `<button class="btn sm-btn" data-run="${esc(p.split("?")[0])}">Run</button>` : ""}</td></tr>`;
+  const wrap = document.createElement("div");
+  wrap.className = "apidoc";
+  wrap.innerHTML = `<div class="page-head"><div><h1>API</h1><p>Blix serves JSON over plain HTTP and one live event stream. This dashboard is just a client of it, so anything shown here can be read from a script, a bot or your own front end. <b>No key on this PC</b>; through the remote link every call needs the <code>blix_key</code> cookie.</p></div>
+      <div class="desk-stats"><span class="pill mono" data-copy="${esc(base)}" title="Copy base URL">${esc(base)}</span><span class="pill">${n} endpoints</span></div></div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Live stream</h2><small><code data-copy="${esc(base)}/api/stream" title="Copy URL">GET /api/stream</code> · text/event-stream</small></div>
+      <div class="table-wrap"><table><thead><tr><th>Event</th><th>Payload</th><th>When</th></tr></thead><tbody>${API_EVENTS.map(([e, p, w]) => `<tr><td class="mono">${e}</td><td>${esc(p)}</td><td>${w}</td></tr>`).join("")}</tbody></table></div>
+      <pre>curl -N ${esc(base)}/api/stream
+
+const es = new EventSource("${esc(base)}/api/stream");
+es.addEventListener("signal", (e) => console.log(JSON.parse(e.data)));</pre></div>
+    ${API_DOCS.map(([title, rows]) => `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>${title}</h2><small>${rows.length} endpoints</small></div>
+      <div class="table-wrap"><table><thead><tr><th>Method</th><th>Path</th><th>Returns</th><th></th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div></div>`).join("")}
+    <div class="card"><div class="card-head"><h2>Errors</h2></div><p class="note pad">Errors are JSON <code>{ error: "human sentence" }</code> with a 4xx or 5xx status. Rate-limited upstreams (public RPC, DexScreener) are reported on <a class="linkish" href="#/health">Health</a>, not as request errors. Responses are cached for 1 to 60 seconds, so polling faster returns the same body.</p></div>`;
+  // Run: fetch the endpoint and show the response under its row; a second press closes it.
+  wrap.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-run]");
+    if (!b) return;
+    const tr = b.closest("tr");
+    if (tr.nextElementSibling?.classList.contains("api-res")) { tr.nextElementSibling.remove(); b.textContent = "Run"; return; }
+    b.disabled = true;
+    let text, t0 = performance.now(), status = "";
+    try {
+      const r = await fetch(b.dataset.run, { signal: AbortSignal.timeout(20_000) });
+      const body = await r.text();
+      status = `${r.status} · ${Math.round(performance.now() - t0)} ms · ${(body.length / 1024).toFixed(1)} KB`;
+      try { text = JSON.stringify(JSON.parse(body), null, 2); } catch { text = body; }
+    } catch (err) { text = err.message; status = "failed"; }
+    b.disabled = false; b.textContent = "Hide";
+    const MAX = 6000;
+    tr.insertAdjacentHTML("afterend", `<tr class="api-res"><td colspan="4"><small>${status}${text.length > MAX ? ` · first ${MAX} characters` : ""}</small><pre>${esc(text.slice(0, MAX))}</pre></td></tr>`);
+  });
+  main.replaceChildren(wrap);
+}
+
+// ---------- MCP ----------
+// How to plug an AI client into Blix, and the tools it gets. The tool list is the same module the
+// MCP server (mcp/blix-mcp.mjs) loads, so this page cannot drift from what the server offers.
+async function viewMcp(main) {
+  const { MCP_TOOLS } = await import("/mcp-tools.js");
+  const script = "<blix folder>/mcp/blix-mcp.mjs";
+  const SETUP = [
+    ["Claude Code", "run once in a terminal", `claude mcp add blix -- node "${script}"`],
+    ["Claude Desktop, Cursor", "add to the client's MCP config file", JSON.stringify({ mcpServers: { blix: { command: "node", args: [script] } } }, null, 2)],
+    ["Codex", "add to ~/.codex/config.toml", `[mcp_servers.blix]\ncommand = "node"\nargs = ["${script}"]`],
+  ];
+  const args = (t) => Object.entries(t.props || {}).map(([k, p]) => `<code title="${esc(p.description || (p.enum || []).join(" | "))}">${k}${(t.required || []).includes(k) ? "" : "?"}</code>`).join(" ") || `<span class="dim">none</span>`;
+  const wrap = document.createElement("div");
+  wrap.className = "apidoc";
+  wrap.innerHTML = `<div class="page-head"><div><h1>MCP</h1><p>Plug Claude, Cursor or Codex into Blix. The MCP server is a small script with no dependencies that turns the <a class="linkish" href="#/api">API</a> into tools an AI can call: ask it what is running, why a coin was flagged, or to paper trade a call. <b>It reads only, plus the paper desk</b>; nothing here can spend real funds. Blix has to be running.</p></div>
+      <div class="desk-stats"><span class="pill">${MCP_TOOLS.length} tools</span><span class="pill">stdio</span></div></div>
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Connect a client</h2><small>replace <code>&lt;blix folder&gt;</code> with where Blix is installed · click a block to copy</small></div>
+      ${SETUP.map(([name, how, code]) => `<div class="mcp-setup"><b>${name}</b><small>${how}</small><pre data-copy="${esc(code)}" title="Copy">${esc(code)}</pre></div>`).join("")}
+      <p class="note pad">Another install or port: set <code>BLIX_URL</code> (for example <code>http://localhost:4420</code>) in the client's environment for this server.</p></div>
+    <div class="card"><div class="card-head"><h2>Tools</h2><small>every tool also takes <code>limit</code> (rows per list, default 10, max 50)</small></div>
+      <div class="table-wrap"><table><thead><tr><th>Tool</th><th>Arguments</th><th>What it does</th><th></th></tr></thead><tbody>
+      ${MCP_TOOLS.map((t) => `<tr><td class="mono">${t.name}</td><td>${args(t)}</td><td>${esc(t.description)}</td><td>${t.write ? `<span class="pill">paper</span>` : ""}</td></tr>`).join("")}</tbody></table></div></div>`;
+  main.replaceChildren(wrap);
+}
 
 // ---------- coin drawer ----------
 // Price while tracked, with 5-minute volume underneath and a marker for every alert and every trade by
@@ -2198,7 +2291,7 @@ function coinChart(r) {
   const pts = inRange.filter((s) => s.ok !== 0);
   const dropped = inRange.length - pts.length;
   const tabs = `<div class="chips tf">${Object.keys(TF).map((k) => `<button class="chip ${chartState.tf === k ? "on" : ""}" data-tf="${k}">${k}</button>`).join("")}</div>`;
-  if (pts.length < 2) return `${tabs}<p class="note">${r.snapshots.length ? "Not enough readings in this window. Try a longer one." : r.untracked ? "The radar is not tracking this coin yet, so it has no price history." : "Price history builds up while the radar watches this coin."}</p>`;
+  if (pts.length < 2) return `${tabs}<p class="note">${r.snapshots.length ? "Not enough readings in this window. Try a longer one." : r.untracked ? "Blix is not tracking this coin yet, so it has no price history." : "Price history builds up while Blix watches this coin."}</p>`;
   const W = 760, H = 250, PH = 160, VY = 176, VH = 56;
   const x0 = pts[0].t, x1 = Math.max(pts[pts.length - 1].t, x0 + 1), ys = pts.map((p) => p.price);
   const y0 = Math.min(...ys), y1 = Math.max(...ys);
@@ -2349,8 +2442,8 @@ async function openCoin(mint) {
   const cls_ = t.asset_class || "meme";
   // Everything that makes the headline price less than it looks, said once, at the top.
   const warn = [];
-  if (r.untracked) warn.push(["info", "Not tracked yet", "The radar only adopts launches that show real trading. These numbers come from the live pump.fun trade feed; safety, holders and price history appear once it is tracked."]);
-  if (f.dead) warn.push(["bad", "This coin is dead", `Trading dried up and the radar stopped following it. The price shown is the last one read${f.priceT ? `, ${mins(f.ageMs)} ago` : ""}, not a live quote.`]);
+  if (r.untracked) warn.push(["info", "Not tracked yet", "Blix only adopts launches that show real trading. These numbers come from the live pump.fun trade feed; safety, holders and price history appear once it is tracked."]);
+  if (f.dead) warn.push(["bad", "This coin is dead", `Trading dried up and Blix stopped following it. The price shown is the last one read${f.priceT ? `, ${mins(f.ageMs)} ago` : ""}, not a live quote.`]);
   if (f.quarantine || f.illiquid) warn.push(["bad", "The price shown cannot be traded at", `${f.exitWhy || f.quarantine}. With almost nothing in the pool, any “price” or market cap is a number on a screen: holders cannot sell for it. Past highs for this coin are price peaks, not exits.`]);
   else if (f.stale && !f.dead && f.priceT) warn.push(["old", "Price is behind", `Last read ${mins(f.ageMs)} ago from ${SRC_NAME[f.source] || f.source}. Active coins are normally re-priced every 30 seconds to 2 minutes.`]);
   if (cls_ !== "meme") warn.push(["info", `Not a memecoin: ${r.classOptions[cls_] || cls_}`, "It is kept out of signals, narratives, research and the track record."]);
@@ -2383,7 +2476,7 @@ async function openCoin(mint) {
     <div class="p-sec"><h3>Chart <span class="dim">· market cap, real trades</span></h3><div id="tradeChart"></div></div>
     <div class="p-sec"><h3>Trade <span class="dim">· paper, filled at real quotes</span></h3><div id="tradePanel"></div></div>
     <div class="p-sec"><div class="mint-row"><span class="mint">${esc(t.mint)}</span><span class="dim small">${t.dex ? esc(DEX_NAME[t.dex] || t.dex) : "no market yet"} · first seen ${ago(t.first_seen)} ago</span></div>
-      ${r.sameTicker.length ? `<div class="warn-box w-old" style="margin-top:10px"><b>${r.sameTicker.length} other coin${r.sameTicker.length > 1 ? "s use" : " uses"} the ticker $${esc(t.symbol)}.</b> A shared name means nothing: check the contract above. ${r.sameTicker[0].mcap > (t.mcap || 0) ? "This one is not the largest." : "This one is the largest the radar tracks."}
+      ${r.sameTicker.length ? `<div class="warn-box w-old" style="margin-top:10px"><b>${r.sameTicker.length} other coin${r.sameTicker.length > 1 ? "s use" : " uses"} the ticker $${esc(t.symbol)}.</b> A shared name means nothing: check the contract above. ${r.sameTicker[0].mcap > (t.mcap || 0) ? "This one is not the largest." : "This one is the largest Blix tracks."}
         <div class="leaders" style="margin-top:8px">${r.sameTicker.slice(0, 5).map((x) => `<div class="leader" data-mint="${esc(x.mint)}">${av(x, "xs")}<span class="grow"><span class="mono">${shortAddr(x.mint)}</span> <span class="dim">${esc(DEX_NAME[x.dex] || x.dex || "")} · ${ago(x.born)} old${x.status === "dead" ? " · dead" : ""}</span></span><span class="num">${money(x.mcap)}</span></div>`).join("")}</div></div>` : ""}</div>
     ${r.untracked ? "" : `<div class="p-sec tight"><div class="verdict-box ${v.ok ? "pass" : v.unknown ? "unknown" : "fail"}"><b>${v.ok ? "Passes the safety policy" : v.unknown ? "Not safety-checked yet" : "Fails the safety policy"}</b>${v.ok ? `<span>RugCheck ${t.safety_score}/100, no danger risks, sellable pool. Coins that pass can raise signals; passing is not a guarantee.</span>` : `<ul>${v.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><span>No approved signal can fire for this coin while this holds. Wallet buys in it are filed as unscreened activity.</span>`}</div></div>`}
     <div class="p-sec"><div class="facts">
@@ -2394,7 +2487,7 @@ async function openCoin(mint) {
       ${fact(L ? "Buys / sells (live)" : "Buys / sells 1h", tx)}
       ${fact("Score", r.untracked ? "—" : `${t.score}/100`)}${fact("Safety", t.safety_score != null ? `${t.safety_score}/100` : "—")}
       ${fact("LP locked", s?.lpLockedPct != null ? Math.round(s.lpLockedPct) + "%" : "—")}${fact(L ? "Traders (live)" : "Age", L ? L.traders : ago(t.pair_created || t.first_seen))}
-    </div><p class="note" style="margin:8px 0 0">“—” means the radar has no reading for that field yet, not zero.</p></div>
+    </div><p class="note" style="margin:8px 0 0">“—” means Blix has no reading for that field yet, not zero.</p></div>
     ${researchSection(r.research, t.mint)}
     ${paperSection(t, r.paper)}
     ${ledgerSection(r.holders)}
@@ -2435,7 +2528,7 @@ function pollResearch(mint, tries = 0) {
 function closeCoin() { coinData = null; if (!$("#drawer").hidden) sheetTo(false); }
 
 // ---------- routing ----------
-const VIEWS = { "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, health: viewHealth, settings: viewSettings };
+const VIEWS = { "": viewPulse, signals: viewRadar, picks: viewPicks, research: viewResearch, coins: viewCoins, wallets: viewWallets, narratives: viewNarratives, briefs: viewBriefs, record: viewRecord, health: viewHealth, api: viewApi, mcp: viewMcp, settings: viewSettings };
 const route = () => location.hash.replace(/^#\/?/, "").split("/")[0];
 // Each view renders into an off-screen node; only the latest navigation is shown, and a skeleton
 // appears right away if the data takes more than a moment.
@@ -2667,9 +2760,9 @@ function connect() {
   const es = new EventSource("/api/stream");
   connect.source = es;
   const live = $("#live");
-  // "connected" is about this page's link to the radar, nothing more. Whether the data behind it is
+  // "connected" is about this page's link to Blix, nothing more. Whether the data behind it is
   // current is what the Health page (and the Health cell above) reports.
-  es.addEventListener("hello", () => { clearTimeout(connect.fallback); clearTimeout(connect.retry); connect.fallback = null; pulseState.polling = false; live.classList.add("on"); live.querySelector("span").textContent = "connected"; live.title = "This page is connected to the radar. See Health for whether prices, wallets and AI are current."; });
+  es.addEventListener("hello", () => { clearTimeout(connect.fallback); clearTimeout(connect.retry); connect.fallback = null; pulseState.polling = false; live.classList.add("on"); live.querySelector("span").textContent = "connected"; live.title = "This page is connected to Blix. See Health for whether prices, wallets and AI are current."; });
   // Through some proxies (the public tunnel) the event stream never opens. The page then works by polling:
   // rows refresh every 2 seconds without the per-trade flashes, and the stream is tried again every minute.
   const fallback = () => {

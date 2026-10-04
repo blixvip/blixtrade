@@ -1,5 +1,5 @@
 // The coin page's trading terminal: a candlestick chart (TradingView Lightweight Charts, vendored) and an
-// Axiom-style buy/sell panel. Every number comes from the radar: candles from real trades (live feed for
+// Axiom-style buy/sell panel. Every number comes from Blix: candles from real trades (live feed for
 // coins on the curve, GeckoTerminal for history and bonded coins), quotes from the exact pump.fun curve or
 // Jupiter's route. Fills are paper: nothing is sent to the chain.
 const $q = (s, el = document) => el.querySelector(s);
@@ -111,7 +111,7 @@ async function loadCandles(first) {
   if (o && chart.last) o.innerHTML = `C <b class="${chart.last.close >= chart.last.open ? "up" : "down"}">${usdC(chart.last.close)}</b> <span class="dim">market cap</span>`;
   const src = $q("#tcSrc", chart.el); if (src) src.textContent = d.source ? `${d.live ? "● " : ""}${d.source}` : "";
   const note = $q("#tcNote", chart.el);
-  if (note) note.textContent = rows.length ? "" : d.note ? `No candles yet (${d.note}).` : "No trades in this window yet. Candles appear with the first trade the radar sees.";
+  if (note) note.textContent = rows.length ? "" : d.note ? `No candles yet (${d.note}).` : "No trades in this window yet. Candles appear with the first trade Blix sees.";
   if (first) setMarkers();
 }
 

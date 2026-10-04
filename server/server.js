@@ -323,6 +323,10 @@ function healthReport() {
   add("stability", "Radar process", cr.h6 >= 2 ? "degraded" : "ok",
     `Running for ${upFor} · crashed ${cr.h24}× in the last 24h${cr.last ? ` (last ${ago(cr.last)})` : ""}${cr.h24 ? " · it restarts itself in about 2 seconds and picks up its recordings" : ""}`,
     { lastFail: cr.last, crashes24h: cr.h24, sql: dbStats, runtime: process.version });
+  const fileMb = (f) => { try { return fs.statSync(f).size / 1048576; } catch { return 0; } };
+  const dbMb = fileMb(DB_FILE), walMb = fileMb(`${DB_FILE}-wal`);
+  add("database", "Database", dbMb > 1500 ? "degraded" : "ok",
+    `${dbMb.toFixed(0)} MB on disk${walMb > 1 ? ` (+${walMb.toFixed(0)} MB not yet folded in)` : ""} · price history older than a day is thinned to 5-minute highs and lows, gone after 3 days`, { mb: Math.round(dbMb) });
 
   const pumpAge = stats.pumpLast ? now - stats.pumpLast : null;
   add("launches", "Launch feed (PumpPortal)", stats.pump !== "connected" ? "down" : pumpAge != null && pumpAge > 90_000 ? "degraded" : "ok",

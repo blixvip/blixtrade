@@ -1,5 +1,5 @@
 // Keeps the radar running: restarts it if it exits, backing off if it keeps crashing.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 fs.mkdirSync(path.join(ROOT, "data"), { recursive: true });
 const logFile = path.join(ROOT, "data", "server.log");
 let delay = 2000;
+
+// Which Node the radar ran on, so a crash in the log can be tied to a runtime.
+const versions = new Map();
+function runtimeVersion(exe) {
+  if (!versions.has(exe)) {
+    let v = "?";
+    try { v = exe === process.execPath ? process.version : spawnSync(exe, ["--version"], { windowsHide: true, encoding: "utf8" }).stdout.trim(); } catch {}
+    versions.set(exe, v);
+  }
+  return versions.get(exe);
+}
 
 const up = () => fetch("http://localhost:4420/api/overview", { signal: AbortSignal.timeout(4000) }).then((r) => r.ok).catch(() => false);
 
@@ -29,7 +40,9 @@ async function run() {
   });
   child.on("exit", (code) => {
     fs.closeSync(log);
-    fs.appendFileSync(logFile, `[supervisor] radar exited with ${code} at ${new Date().toISOString()} after ${Math.round((Date.now() - started) / 60_000)}m\n`);
+    // A native fault (0xC0000000 and up) or an abort is a crash; anything else is the radar being stopped on purpose.
+    const kind = code === 134 || (code >= 0xC0000000 && code < 0xFFFFFFFF) ? `crash 0x${code.toString(16).toUpperCase()}` : "stopped";
+    fs.appendFileSync(logFile, `[supervisor] radar exited with ${code} at ${new Date().toISOString()} after ${Math.round((Date.now() - started) / 60_000)}m (${kind}, node ${runtimeVersion(runtime)})\n`);
     delay = Date.now() - started > 60_000 ? 2000 : Math.min(delay * 2, 60_000);
     setTimeout(run, delay);
   });

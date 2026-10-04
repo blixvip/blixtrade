@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS research (
 try { db.exec("ALTER TABLE tokens ADD COLUMN uri TEXT"); } catch {}
 // enq_t: when the coin really joined the queue (`queued` is a sort key: now minus priority).
 for (const c of ["tier TEXT", "model TEXT", "ms INTEGER", "fast TEXT", "enq_t INTEGER", "reads INTEGER DEFAULT 1", "enq_mcap REAL"]) try { db.exec(`ALTER TABLE research ADD COLUMN ${c}`); } catch {}
+// The queue is asked "what is waiting?" every second. Without these, each ask walked every stored report.
+db.exec("CREATE INDEX IF NOT EXISTS research_status ON research(status, queued); CREATE INDEX IF NOT EXISTS research_t ON research(t);");
 
 const MIN = 60_000;
 const now = () => Date.now();

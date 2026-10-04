@@ -1494,3 +1494,21 @@ body.pulse-compact .pr { contain-intrinsic-size: auto 62px; }
   .pf-foot { flex-wrap: wrap; }
   .pf-foot > .dim { flex-basis: 100%; }
 }
+
+/* API reference page. */
+.apidoc td, .apidoc th { text-align: left; }
+.apidoc td { white-space: normal; color: var(--ink-2); }
+.apidoc td:first-child { width: 1%; white-space: nowrap; font-weight: 600; color: var(--ink); }
+.apidoc td:nth-child(2) { white-space: nowrap; }
+.apidoc td:last-child { width: 1%; text-align: right; }
+.apidoc code[data-copy], .apidoc .pill[data-copy] { cursor: pointer; }
+.apidoc code[data-copy]:hover { color: var(--info); }
+.apidoc pre { margin: 0; padding: var(--space-sm) var(--space-md); font: 12px/1.55 var(--font-outlier); color: var(--ink-2); overflow: auto; max-height: 360px; white-space: pre; }
+.apidoc .api-res td { background: var(--card-2); padding: 0; text-align: left; width: auto; font-weight: 400; }
+.apidoc .api-res small { display: block; padding: var(--space-xs) var(--space-md) 0; color: var(--muted); }
+.apidoc pre[data-copy] { cursor: pointer; }
+.apidoc pre[data-copy]:hover { color: var(--ink); }
+.mcp-setup { padding: var(--space-sm) 0 0; border-bottom: 1px solid var(--line); }
+.mcp-setup > b { margin-left: var(--space-md); font-size: 13px; }
+.mcp-setup > small { margin-left: var(--space-xs); color: var(--muted); }
+.apidoc td:nth-child(2) code { margin-right: 2px; }
