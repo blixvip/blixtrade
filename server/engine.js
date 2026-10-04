@@ -36,6 +36,8 @@ db.exec("CREATE INDEX IF NOT EXISTS launches_t ON launches(t)");
 // The mint and metadata link are kept too, so a restart does not forget the name of every coin launched in
 // the last 6 hours (a coin that wakes up later would otherwise show up nameless, or not at all).
 for (const col of ["mint TEXT", "uri TEXT"]) { try { db.exec(`ALTER TABLE launches ADD COLUMN ${col}`); } catch {} }
+// "Every coin this dev made" (the coin page) is asked by creator.
+try { db.exec("CREATE INDEX IF NOT EXISTS tokens_creator ON tokens(creator); CREATE INDEX IF NOT EXISTS launches_creator ON launches(creator);"); } catch {}
 for (const l of db.prepare("SELECT t, name, symbol, creator, mint, uri FROM launches WHERE t > ? ORDER BY t").all(Date.now() - 6 * 3600e3)) {
   launchLog.push({ t: l.t, name: l.name, symbol: l.symbol, creator: l.creator });
   if (l.creator) devLaunches.set(l.creator, (devLaunches.get(l.creator) || 0) + 1);

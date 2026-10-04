@@ -352,5 +352,6 @@ export function startEarly({ enqueue, earlyPick }) {
   setInterval(safe(scanWinners, "winners"), 15_000);
   const retrain = () => trainAll().catch((e) => logEvent("error", `early model: ${e.message}`));
   setInterval(retrain, 10 * MIN);
-  setTimeout(retrain, 5000);
+  // The first fit waits until the radar's busy first minute is over (the stored model answers until then: none).
+  setTimeout(retrain, 90_000);
 }

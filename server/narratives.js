@@ -41,15 +41,28 @@ export function themesFor(t) {
 // Rising = share of recent launches carrying a theme vs. its share over the prior window.
 // Only real memecoins with believable prices count: a tokenized Apple share is not a Food meme, and an
 // emptied pool's quoted volume is not money flowing into a theme.
-export function computeNarratives({ recentMin = 60, baseMin = 6 * 60, launches = [] } = {}) {
+// Every AI read asks for this (to tell the model which themes are running), several a second when the
+// queue is busy, and each answer walked six hours of coins once per theme. The plain question (no launch
+// list, default windows) is answered once every 20 seconds and shared.
+let shared = { t: 0, v: null };
+export function computeNarratives(opts = {}) {
+  const plain = !opts.launches?.length && opts.recentMin == null && opts.baseMin == null;
+  if (plain && shared.v && Date.now() - shared.t < 20_000) return shared.v;
+  const v = buildNarratives(opts);
+  if (plain) shared = { t: Date.now(), v };
+  return v;
+}
+function buildNarratives({ recentMin = 60, baseMin = 6 * 60, launches = [] } = {}) {
   const now = Date.now();
   const rows = db.prepare(`SELECT mint, symbol, name, description, image, first_seen, mcap, vol_h1, chg_h1, score, themes, safety_score, status
     FROM tokens WHERE first_seen > ? AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'`).all(now - baseMin * 60_000);
+  // Each coin's themes are worked out once, not once per theme.
+  const themeSets = new Map(rows.map((r) => [r.mint, json(r.themes, null) || themesFor(r)]));
   const recent = rows.filter((r) => r.first_seen > now - recentMin * 60_000);
   const older = rows.filter((r) => r.first_seen <= now - recentMin * 60_000);
 
   const themes = THEMES.map(([name]) => {
-    const inTheme = (r) => (json(r.themes, null) || themesFor(r)).includes(name);
+    const inTheme = (r) => themeSets.get(r.mint).includes(name);
     const rNow = recent.filter(inTheme), rOld = older.filter(inTheme);
     const shareNow = rNow.length / Math.max(recent.length, 1);
     const shareOld = rOld.length / Math.max(older.length, 1);
