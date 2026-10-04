@@ -25,6 +25,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS early (
   res TEXT, fill REAL, maxm REAL, endm REAL, done_t INTEGER, PRIMARY KEY (mint, cp)
 )`);
 db.exec("CREATE INDEX IF NOT EXISTS early_t ON early(t)");
+// The unanswered checkpoints, asked for at every start: a small index of just those rows (the table itself is tens of MB).
+db.exec("CREATE INDEX IF NOT EXISTS early_open ON early(mint, cp) WHERE res IS NULL");
 db.exec(`CREATE TABLE IF NOT EXISTS launch_winners (mint TEXT PRIMARY KEY, symbol TEXT, t0 INTEGER, start REAL, ath REAL, ath_t INTEGER)`);
 
 const now = () => Date.now();

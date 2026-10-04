@@ -325,13 +325,15 @@ export function listWallets() {
 // Three "smart" wallets in one group are one opinion, not three.
 let groupCache = { t: 0, v: new Map() };
 export function clusters() {
-  if (now() - groupCache.t < 5 * MIN) return groupCache.v;
+  // Written as a time range (not ABS) so the (mint, t) index finds each coin's nearby buys directly: as a
+  // full comparison this one query held the radar up for two seconds every time it ran.
+  if (now() - groupCache.t < 15 * MIN) return groupCache.v;
   const since = now() - 3 * 24 * 60 * MIN;
   const parent = new Map(), why = new Map();
   const find = (a) => { while (parent.get(a) !== a) { parent.set(a, parent.get(parent.get(a))); a = parent.get(a); } return a; };
   const join = (a, b, reason) => { for (const x of [a, b]) if (!parent.has(x)) parent.set(x, x); const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); why.set(`${a}|${b}`, reason); };
   const co = db.prepare(`SELECT a.wallet w1, b.wallet w2, COUNT(DISTINCT a.mint) n FROM wallet_trades a JOIN wallet_trades b
-    ON a.mint = b.mint AND a.wallet < b.wallet AND b.side = 'buy' AND ABS(a.t - b.t) < 120000
+    ON a.mint = b.mint AND a.wallet < b.wallet AND b.side = 'buy' AND b.t > a.t - 120000 AND b.t < a.t + 120000
     JOIN wallets x ON x.address = a.wallet JOIN wallets y ON y.address = b.wallet
     WHERE a.side = 'buy' AND a.t > ? GROUP BY a.wallet, b.wallet HAVING n >= 3`).all(since);
   for (const r of co) join(r.w1, r.w2, `bought ${r.n} of the same coins within 2 minutes of each other`);
