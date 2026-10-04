@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS tokens (
 );
 CREATE INDEX IF NOT EXISTS tokens_status ON tokens(status, updated);
 CREATE INDEX IF NOT EXISTS tokens_score ON tokens(score);
+-- "other coins with this ticker" (every coin page asks): without it each ask reads the whole table
+CREATE INDEX IF NOT EXISTS tokens_symbol_lc ON tokens(lower(symbol));
 
 CREATE TABLE IF NOT EXISTS snapshots (
   mint TEXT, t INTEGER, price REAL, mcap REAL, liquidity REAL, vol_m5 REAL
