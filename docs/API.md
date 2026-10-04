@@ -73,17 +73,17 @@ es.addEventListener("signal", (e) => console.log(JSON.parse(e.data)));
 
 ## Paper desk
 
-Nothing is ever bought. Positions are filled at the real Jupiter quote (`/quoted`, `/sellq`) or at the radar's last price (`/api/paper`, `/sell`).
+Nothing is ever bought. The UI uses curve or Jupiter quotes (`/quoted`, `/sellq`) for buys and manual sells. Legacy endpoints (`/api/paper`, `/sell`) retain the older price model. Automatic exits and open valuations may use estimates. Closed history is limited to 60 rows; summary totals cover the entire history. `summary.openPnl` is null when any open position is unpriced; `summary.openUnpriced` gives that count.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/paper` | – | The desk: open and closed positions, today's PnL, risk guard |
-| POST | `/api/paper/quoted` | `{ mint, sol, slip?, rule? }` | Open at the real quote |
-| POST | `/api/paper` | `{ mint, sol, rule? }` | Open at the last price |
+| GET | `/api/paper` | – | The desk: positions, today's and lifetime PnL |
+| POST | `/api/paper/quoted` | `{ mint, sol, slippageBps?, tp?, sl?, trail? }` | Open at the real quote |
+| POST | `/api/paper` | `{ mint, sol, tp?, sl?, trail? }` | Open at the last price |
 | GET | `/api/paper/<id>/preview?pct=100` | – | What selling would return at the real quote |
 | POST | `/api/paper/<id>/sellq` | `{ pct?, why? }` | Sell all or part at the real quote |
 | POST | `/api/paper/<id>/sell` | `{ pct?, why? }` | Sell at the last price |
-| POST | `/api/paper/<id>/rule` | `{ tp?, trail?, stop?, timeStop? }` | Change the position's exit rule |
+| POST | `/api/paper/<id>/rule` | `{ tp?, sl?, trail? }` | Set take-profit multiple, stop-loss %, trailing %; omitted or zero fields clear that rule |
 | DELETE | `/api/paper/<id>` | – | Forget a closed position |
 
 ## Wallets and Fomo

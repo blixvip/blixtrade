@@ -37,7 +37,8 @@ function start(port) {
   tunnelStats.exe = bin;
   if (!bin) { tunnelStats.lastError = "cloudflared is not installed"; health.fail("tunnel", tunnelStats.lastError); return; }
   tunnelStats.on = true;
-  child = spawn(bin, ["tunnel", "--no-autoupdate", "--url", `http://localhost:${port}`], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  // http2 rather than the default QUIC transport: the live event stream never came through QUIC (held back until close).
+  child = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", `http://localhost:${port}`], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   const started = now();
   let buf = "";
   const onLine = (chunk) => {

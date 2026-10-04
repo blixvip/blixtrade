@@ -32,6 +32,7 @@ export const DEFAULTS = {
   // wallets
   rpcUrl: "",               // blank = free public Solana RPC (slow). A free Helius URL is ~10x faster.
   rpcWsUrl: "",             // websocket for the live pump.fun trade feed; blank = derived from rpcUrl, else the public one
+  jupiterKey: "",           // optional: increases the shared quote/price request allowance
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert
@@ -117,7 +118,7 @@ function load() {
 export const settings = load();
 
 // Never sent to the browser: the page only learns whether each one is set, and its last 4 characters.
-export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "remoteKey", "tunnelKey"];
+export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "jupiterKey", "remoteKey", "tunnelKey"];
 
 function coerce(k, v) {
   const d = DEFAULTS[k];

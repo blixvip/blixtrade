@@ -109,6 +109,7 @@ export async function openQuoted(mint, sol, { symbol, name, tp, sl, trail, note,
 // math, every second), else the last Jupiter quote scaled by how far the price moved since (refreshed every
 // 10 seconds by tick()), else an estimate from the market cap.
 const exitQuotes = new Map();   // position id -> { outSol, mcap, t }
+const nextExitQuote = new Map();
 // The position's own buy, for valuing it as if it had really happened (see curveQuoteNow): the SOL that went
 // into the curve (after the fee) and the tokens it took out, for whatever is still held.
 function ownBuy(p) {
@@ -127,17 +128,19 @@ function exitSol(p, part = 1) {
   return null;
 }
 let refreshing = false;
-async function refreshExitQuotes() {
+export async function refreshExitQuotes(getQuote = quote) {
   if (refreshing) return;
   refreshing = true;
-  try { await refreshAll(); } finally { refreshing = false; }
+  try { await refreshAll(getQuote); } finally { refreshing = false; }
 }
-async function refreshAll() {
+async function refreshAll(getQuote) {
   for (const p of db.prepare("SELECT * FROM paper WHERE status = 'open' AND tokens > 0").all()) {
     if (curveQuoteNow(p.mint, "sell", p.tokens)) continue;
+    if (now() < (nextExitQuote.get(p.id) || 0)) continue;
     const e = exitQuotes.get(p.id);
     if (e && now() - e.t < 10_000) continue;
-    try { const q = await quote(p.mint, "sell", p.tokens); exitQuotes.set(p.id, { outSol: q.outSol, mcap: priceNow(p.mint)?.mcap || null, t: now() }); } catch {}
+    try { const q = await getQuote(p.mint, "sell", p.tokens); exitQuotes.set(p.id, { outSol: q.outSol, mcap: priceNow(p.mint)?.mcap || null, t: now() }); nextExitQuote.delete(p.id); }
+    catch (e) { nextExitQuote.set(p.id, now() + (e.status === 409 ? 60_000 : 15_000)); }
   }
 }
 
@@ -154,8 +157,13 @@ async function quoteSell(p, part) {
 export async function previewSell(id, pct = 100) {
   const p = db.prepare("SELECT * FROM paper WHERE id = ? AND status = 'open'").get(id);
   if (!p) throw Object.assign(new Error("No open paper position with that id."), { status: 404 });
-  if (!(p.tokens > 0)) { const o = out(p); return { id, pct, outSol: o.mult != null ? p.sol * (pct / 100) * o.mult : null, src: "flat", solIn: p.sol * (pct / 100) }; }
-  const part = Math.max(1, Math.min(100, Number(pct) || 100)) / 100;
+  pct = Math.max(1, Math.min(100, Number(pct) || 100));
+  const part = pct / 100;
+  if (!(p.tokens > 0)) {
+    const o = out(p);
+    if (o.stale || o.mult == null) throw Object.assign(new Error("No live price for this coin right now."), { status: 409 });
+    return { id, pct, outSol: p.sol * part * o.mult, src: "flat", solIn: p.sol * part, solUsd: feed.solUsd };
+  }
   const q = await quoteSell(p, part);
   return { id, pct, outSol: q.outSol, solIn: p.sol * part, tokens: p.tokens * part, src: q.src, route: q.route, impactPct: q.impactPct, feeSol: q.feeSol ?? null, solUsd: feed.solUsd };
 }
@@ -173,7 +181,12 @@ export async function sellQuoted(id, pct = 100, { why = "sold" } = {}) {
 
 // Book `part` of a quoted position as sold for `outSol`.
 function closePart(p, part, outSol, mcap, why, fillOut = null) {
+  const current = db.prepare("SELECT status, sol, tokens FROM paper WHERE id = ?").get(p.id);
+  if (!current || current.status !== "open" || current.sol !== p.sol || current.tokens !== p.tokens) {
+    throw Object.assign(new Error("This position changed while the sell was quoting. Refresh and try again."), { status: 409 });
+  }
   const solIn = p.sol * part, usdIn = p.usd * part;
+  nextExitQuote.delete(p.id);
   const pnl = (outSol - solIn) * feed.solUsd;
   const fill = JSON.stringify({ ...(JSON.parse(p.fill || "{}")), exit: fillOut });
   if (part >= 0.999) {
@@ -239,7 +252,7 @@ function out(p) {
   }
   const live = p.status === "open" ? priceNow(p.mint) : null;
   const mcapNow = live ? live.mcap : p.status === "open" ? p.last : p.exit_mcap;
-  const mult = p.mcap0 > 0 && mcapNow > 0 ? (mcapNow / p.mcap0) * (p.status === "open" ? COST : 1) : null;
+  const mult = live && p.mcap0 > 0 && mcapNow > 0 ? (mcapNow / p.mcap0) * COST : null;
   const raw = p.status === "open" ? mult : (p.exit_mcap / p.mcap0) * COST;
   return { ...p, mcapNow, src: live ? live.src : p.src, mult: raw, pnl: p.status === "open" ? (mult != null ? p.usd * (mult - 1) : null) : p.pnl,
     peakX: p.peak > 0 ? p.peak / p.mcap0 : null, lowX: p.low > 0 ? p.low / p.mcap0 : null, stale: p.status === "open" && !live };
@@ -281,13 +294,18 @@ export function desk() {
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
   const open = db.prepare("SELECT * FROM paper WHERE status = 'open' ORDER BY t DESC").all().map(out);
   const closed = db.prepare("SELECT * FROM paper WHERE status = 'closed' ORDER BY exit_t DESC LIMIT 60").all().map(out);
-  const today = closed.filter((p) => p.exit_t >= d0.getTime());
+  const totals = db.prepare(`SELECT COUNT(*) allN, COALESCE(SUM(pnl), 0) allPnl,
+    COUNT(CASE WHEN exit_t >= ? THEN 1 END) todayN,
+    COALESCE(SUM(CASE WHEN exit_t >= ? THEN pnl END), 0) todayPnl,
+    COUNT(CASE WHEN exit_t >= ? AND pnl > 0 THEN 1 END) todayWins
+    FROM paper WHERE status = 'closed'`).get(d0.getTime(), d0.getTime(), d0.getTime());
+  const openUnpriced = open.filter(p => p.stale || p.pnl == null).length;
   const sum = (list, f) => list.reduce((s, p) => s + (f(p) || 0), 0);
   return {
     open, closed, sol: feed.solUsd, sizes: sizes(),
     rule: { tp: settings.paperTake || 0, sl: settings.paperStop || 0, trail: settings.paperTrail || 0 }, cost: PAPER.costPctPerSide,
-    summary: { open: open.length, openUsd: sum(open, (p) => p.usd), openPnl: sum(open, (p) => p.pnl), todayN: today.length, todayPnl: sum(today, (p) => p.pnl),
-      todayWins: today.filter((p) => p.pnl > 0).length, allPnl: sum(closed, (p) => p.pnl), allN: db.prepare("SELECT COUNT(*) n FROM paper WHERE status = 'closed'").get().n },
+    summary: { ...totals, open: open.length, openUsd: sum(open, (p) => p.usd), openUnpriced,
+      openPnl: openUnpriced ? null : sum(open, (p) => p.pnl) },
   };
 }
 

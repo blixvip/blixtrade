@@ -97,7 +97,7 @@ Feature check as of October 2026. "Hosted" terminals change fast; corrections we
 
 ## Quick start
 
-Requirements: **Node 24+**. No native modules, no package install.
+Requirements: **Node 24.16+**. No native modules, no package install.
 
 ```bash
 git clone https://github.com/blixvip/blixtrade.git
@@ -113,6 +113,7 @@ Everything below is optional and configured on the **Settings** page:
 | Add | Why | Cost |
 |---|---|---|
 | **Helius RPC URL** | ~10x faster wallet tracking; the free public RPC reads ~1 tx/s | free tier |
+| **Jupiter API key** | more capacity for shared quotes and market prices; keyless access works by default | free tier |
 | **Discord webhook / Telegram bot** | alerts reach you when the page is closed | free |
 | **Claude Code login** (`claude` CLI on this PC) | briefs, deep reads, "Ask Claude" | your Claude plan |
 | **Grok CLI login** (`~/.grok/auth.json`) | fast reads with live X search, narrative scout, picks | SuperGrok |
@@ -121,7 +122,15 @@ Everything below is optional and configured on the **Settings** page:
 
 Run a second isolated copy: `RADAR_DATA=<folder> RADAR_PORT=<port> npm start`.
 
-Tests: `npm test` (Node's built-in runner, 30 tests, no network).
+Tests: `npm test` (Node's built-in runner, no network).
+
+Browser regressions: start Blix, then run `node scripts/browser-check.mjs`. Set `PLAYWRIGHT_PATH` to an existing Playwright installation if it is not installed locally; Chrome is used headlessly. Trade requests are mocked and do not change your positions. Set `BLIX_SCREENSHOTS` to keep the screenshots.
+
+Use Node 24.16 or newer. Windows Node 24.15 has a [reported native TCP crash](https://github.com/nodejs/node/issues/63620) matching Blix's silent exits. `node bin/supervise.mjs` prefers a verified Windows runtime at `data/runtime/node.exe`, when present, or the executable set in `BLIX_NODE`. Otherwise it uses the Node running the supervisor. This runtime choice is local to Blix; `npm start` uses the Node on your PATH.
+
+All UI paper buys and manual sells use quotes. The desk keeps unsaved exit-rule edits through refreshes, prevents duplicate pending submissions, shows missing valuations explicitly, and calculates lifetime totals over the complete history. Older positions and automatic exits can still use the documented estimate model.
+
+Quotes use [Jupiter's current API](https://developers.jup.ag/docs/api-reference/swap/v1/quote). Price reads and quotes share a paced request queue. Rate limits appear as retryable errors, and an unavailable token precision blocks the quote instead of guessing an amount. The optional API key stays on the server.
 
 ## Integrations
 

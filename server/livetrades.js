@@ -7,6 +7,8 @@ import path from "node:path";
 import { DATA } from "./db.js";
 import { settings } from "./settings.js";
 import { setSolPrice } from "./research.js";
+import { jupiterGet } from "./jupiter.js";
+import { startRpcStream } from "./rpc-stream.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const TRADE = "bddb7fd34ee661ee";           // anchor discriminator of pump.fun's TradeEvent
@@ -120,35 +122,23 @@ export function drainUpdates(watched) {
 }
 
 function connect() {
-  const url = settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : PUBLIC_WS);
-  feed.url = url.replace(/api-key=[^&]+/, "api-key=…");
-  let ws;
-  try { ws = new WebSocket(url); } catch { return setTimeout(connect, 5000); }
-  ws.onopen = () => {
-    feed.connected = true;
-    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] }));
-  };
-  ws.onmessage = (m) => {
-    feed.lastMsg = now();
-    const raw = typeof m.data === "string" ? m.data : "";
-    // Cheap pre-filter: most messages carry several program logs; only parse those with event data.
-    if (!raw.includes("Program data: ")) return;
-    let d; try { d = JSON.parse(raw); } catch { return; }
-    const slot = d.params?.result?.context?.slot ?? null;
-    for (const l of d.params?.result?.value?.logs || []) {
-      if (!l.startsWith("Program data: ")) continue;
-      const buf = Buffer.from(l.slice(14), "base64");
-      if (buf.length <= 8) continue;
-      const disc = buf.toString("hex", 0, 8);
-      if (disc === TRADE) onTrade(buf, slot);
-      else if (disc === CREATE) onCreate(buf);
-    }
-  };
-  ws.onclose = () => { feed.connected = false; setTimeout(connect, 3000); };
-  ws.onerror = () => { try { ws.close(); } catch {} };
-  // Watchdog: a silent socket for 30s gets replaced.
-  const dog = setInterval(() => { if (ws.readyState === 1 && now() - feed.lastMsg > 30_000) { clearInterval(dog); try { ws.close(); } catch {} } }, 10_000);
-  ws.addEventListener("close", () => clearInterval(dog));
+  startRpcStream({
+    url: () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : PUBLIC_WS),
+    request: { method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] },
+    onStatus: ({ connected, error }) => { feed.connected = connected; feed.lastError = error; if (connected) feed.lastMsg = now(); },
+    onEvent: (d) => {
+      feed.lastMsg = now();
+      const slot = d.params?.result?.context?.slot ?? null;
+      for (const l of d.params?.result?.value?.logs || []) {
+        if (!l.startsWith("Program data: ")) continue;
+        const buf = Buffer.from(l.slice(14), "base64");
+        if (buf.length <= 8) continue;
+        const disc = buf.toString("hex", 0, 8);
+        if (disc === TRADE) onTrade(buf, slot);
+        else if (disc === CREATE) onCreate(buf);
+      }
+    },
+  });
 }
 
 // The SOL price turns every SOL figure into dollars, so it must be real: Jupiter's price first, DexScreener's
@@ -157,7 +147,7 @@ function connect() {
 async function solPrice() {
   let px = null;
   try {
-    const j = await fetch("https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112", { signal: AbortSignal.timeout(6000) }).then((r) => r.json());
+    const j = await jupiterGet("/price/v3?ids=So11111111111111111111111111111111111111112", { timeout: 6000, cacheMs: 30_000 });
     px = +j["So11111111111111111111111111111111111111112"]?.usdPrice || null;
   } catch {}
   if (!(px > 0)) try {

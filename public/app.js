@@ -2,7 +2,8 @@
 import { mountChart, mountPanel } from "./trade.js";
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const api = (p, opt) => fetch(`/api/${p}`, opt).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.error || r.status); return b; });
+let lastApiOk = 0;
+const api = (p, opt) => fetch(`/api/${p}`, { signal: AbortSignal.timeout(opt?.method ? 120_000 : 20_000), ...opt }).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.error || r.status); lastApiOk = Date.now(); return b; });
 const post = (p, body) => api(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
 
 // ---------- formatting ----------
@@ -1169,7 +1170,10 @@ function pfPass(t, f) {
     const lo = f[k + "Min"], hi = f[k + "Max"];
     if (!val || (!pfHas(lo) && !pfHas(hi))) continue;
     const v = val(t);
-    if (v == null || (pfHas(lo) && v < +lo) || (pfHas(hi) && v > +hi)) return false;
+    // No reading yet (a coin seconds old, or a ledger that joined late) does not disqualify: Axiom and GMGN
+    // filter on what is known, and hiding every unknown emptied the New pairs column for new visitors.
+    if (v == null) continue;
+    if ((pfHas(lo) && v < +lo) || (pfHas(hi) && v > +hi)) return false;
   }
   for (const [k, , test] of PF_BOOLS) if (f[k] && test && !test(t)) return false;
   const handles = pfWords(f.handles);
@@ -1245,7 +1249,7 @@ function pfRender() {
       <div class="pf-tabs">${[["protocols", "Protocols"], ["audit", "Audit"], ["metrics", "$ Metrics"], ["socials", "Socials"]].map(([k, l]) => `<button class="${pf.tab === k ? "on" : ""}" data-pftab="${k}">${l}${badge(pfCount(f, k))}</button>`).join("")}</div>
       <div class="pf-body">${pfBody(f)}</div>
     </div>
-    <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source.</span><button class="btn sm-btn" data-pfrec title="Put back the researched ${PF_SLOT_NAMES[pf.slot]} set in this slot (Axiom and GMGN guide settings for pump.fun)">Recommended: ${PF_SLOT_NAMES[pf.slot]}</button><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
+    <div class="pf-foot"><span class="dim">Greyed-out fields have no free data source. A coin with no reading yet for a field passes it.</span><button class="btn sm-btn" data-pfrec title="Put back the researched ${PF_SLOT_NAMES[pf.slot]} set in this slot (Axiom and GMGN guide settings for pump.fun)">Recommended: ${PF_SLOT_NAMES[pf.slot]}</button><button class="btn primary" data-pfapply>Apply All</button></div></div>`;
   host.querySelector(".pf-scroll").scrollTop = keep;
   if (pf.origin) host.querySelector(".pf-win").style.transformOrigin = pf.origin;
 }
@@ -1337,9 +1341,11 @@ function rowSig(t) {
 function softUpdate(el, t) {
   const rk = el.querySelector(".rk");
   if (rk && t.tr != null) { const txt = String(t.tr); if (rk.textContent !== txt) rk.textContent = txt; rk.className = `rk ${t.tr >= 60 ? "hi" : t.tr >= 40 ? "mid" : "lo"}`; }
-  if (!t.live) {
+  if (!t.live || pulseState.polling) {
     const mc = el.querySelector(".lv-mc"), mcTxt = t.mcap ? compact(t.mcap) : t.startMcapSol ? compact(t.startMcapSol * (pulseState.sol || 150)) : "—";
-    if (mc && mc.textContent !== mcTxt && !mc.dataset.v) mc.textContent = mcTxt;
+    if (mc && mc.textContent !== mcTxt && (pulseState.polling || !mc.dataset.v)) { const prev = Number(mc.dataset.v || 0); mc.textContent = mcTxt; if (pulseState.polling && t.mcap) { flash(mc, t.mcap >= prev); mc.dataset.v = t.mcap; } }
+    if (pulseState.polling && t.hl) applyHolders(el, t.hl.h, t.hl.t10, t.hl.dev, t.hl.ds === "all" ? 2 : t.hl.ds === "part" ? 1 : 0, t.hl.sn, t.hl.bd);
+    if (pulseState.polling && t.live) { const tr = el.querySelector(".lv-tr"); if (tr && t.traders != null) tr.textContent = t.traders; const tx = el.querySelector(".lv-tx"); if (tx) tx.textContent = (t.buys || 0) + (t.sells || 0); const c = el.querySelector(".lv-chg"); if (c && t.chg1m != null) { c.textContent = pct(t.chg1m); c.className = `num lv-chg ${cls(t.chg1m)}`; } const pp = el.querySelector(".lv-pct"); if (pp && t.progress != null) { pp.textContent = `${Math.round(t.progress * 100)}%`; el.style.setProperty("--ring", Math.round(t.progress * 100)); } }
     const v = el.querySelector(".lv-v"), vTxt = compact(t.vol ?? t.liveVol);
     if (v && v.textContent !== vTxt) v.textContent = vTxt;
     const c5 = el.querySelector(".lv-c5");
@@ -1409,6 +1415,7 @@ async function pulseTick() {
     $(`#prating-${k}`).title = reading ? `${reading} being rated by the AI right now` : "";
   }
   pulseState.first = false;
+  paperButtons();
   const L = d.live;
   pulseState.sol = L.solUsd;
   deskTick();
@@ -1602,23 +1609,39 @@ function beep(kind = "buy") {
 
 const usdSigned = (n) => n == null ? "—" : `${n >= 0 ? "+" : "−"}$${Math.abs(n) >= 1000 ? (Math.abs(n) / 1000).toFixed(1) + "k" : Math.abs(n).toFixed(0)}`;
 const srcName = { live: "live feed", jupiter: "Jupiter", dex: "DexScreener", radar: "radar", rule: "rule" };
+const pendingPaper = new Set(), ruleDrafts = new Map();
+function paperButtons() {
+  document.querySelectorAll("[data-pbuy], [data-psell]").forEach(button => {
+    const key = button.dataset.pbuy ? `buy:${button.dataset.pbuy}` : `sell:${button.dataset.psell}`;
+    button.disabled = pendingPaper.has(key);
+    button.setAttribute("aria-busy", String(button.disabled));
+  });
+}
 async function paperBuy(mint, sol) {
+  const key = `buy:${mint}`;
+  if (pendingPaper.has(key)) return;
+  pendingPaper.add(key); paperButtons();
   try {
-    const r = await post("paper", { mint, sol });
+    const r = await post("paper/quoted", { mint, sol });
     const p = r.position;
     toast(`Paper buy $${p.symbol || shortAddr(mint)} · ${p.sol} SOL at ${compact(p.mcap0)} mcap (${srcName[p.src] || p.src})`);
     beep("buy");
     pulseState.desk = r.desk; renderDesk();
   } catch (e) { toast(e.message); }
+  finally { pendingPaper.delete(key); paperButtons(); }
 }
 async function paperSell(id, pct, why = "sold") {
+  const key = `sell:${id}`;
+  if (pendingPaper.has(key)) return;
+  pendingPaper.add(key); paperButtons();
   try {
-    const r = await post(`paper/${id}/sell`, { pct, why });
+    const r = await post(`paper/${id}/sellq`, { pct, why });
     const p = r.position;
-    toast(`Paper sell $${p.symbol || ""} ${pct}% at ${mult(p.status === "open" ? p.mult : (p.exit_mcap / p.mcap0))}`);
+    toast(`Paper sell $${p.symbol || ""} · ${pct}% sold`);
     beep("sell");
     pulseState.desk = r.desk; renderDesk();
   } catch (e) { toast(e.message); }
+  finally { pendingPaper.delete(key); paperButtons(); }
 }
 async function deskTick(force) {
   // The desk strip only needs a fresh read every few seconds unless the desk is open or positions are live.
@@ -1636,18 +1659,24 @@ function renderDesk() {
   const s = d.summary, el = $("#deskStrip");
   if (el) el.innerHTML = `<button class="desk-strip" data-pdesk title="The paper desk: open positions, P&L, exits (hotkey d)"><b>Desk</b><span class="num">${s.open} open</span><span class="num ${s.open ? cls(s.openPnl) : "dim"}">${s.open ? usdSigned(s.openPnl) : "—"}</span><span class="dim">today</span><span class="num ${s.todayN ? cls(s.todayPnl) : "dim"}">${s.todayN ? usdSigned(s.todayPnl) : "—"}</span>${s.todayN ? `<span class="dim">${s.todayWins}/${s.todayN}</span>` : ""}</button>`;
   const body = $("#deskBody");
-  if (body) { const top = $("#panel").scrollTop; body.outerHTML = deskHtml(d); $("#panel").scrollTop = top; }
+  if (body && !body.contains(document.activeElement?.closest("input"))) {
+    const top = $("#panel").scrollTop; body.outerHTML = deskHtml(d); $("#panel").scrollTop = top;
+  }
+  for (const id of ruleDrafts.keys()) if (!d.open?.some(p => String(p.id) === id)) ruleDrafts.delete(id);
+  paperButtons();
 }
 function posRow(p) {
   const open = p.status === "open";
-  const x = open ? p.mult : p.exit_mcap && p.mcap0 ? (p.exit_mcap / p.mcap0) * ((100 - (pulseState.desk?.cost ?? 3)) / (100 + (pulseState.desk?.cost ?? 3))) : null;
+  const x = p.mult;
+  const draft = ruleDrafts.get(String(p.id)) || {};
+  const ruleValue = key => esc(draft[key] ?? p[key] ?? "");
   return `<div class="pos ${open ? "" : "closed"} ${x != null ? xCls(x) : ""}">
     <div class="pos-top"><span class="pos-coin" data-mint="${esc(p.mint)}">${av(p, "sm")}<b>$${esc(p.symbol || shortAddr(p.mint))}</b><small class="dim">${esc(p.name || "")}</small></span>
       <span class="num">${p.sol} SOL <small class="dim">$${Math.round(p.usd)}</small></span>
       <span class="num"><small class="dim">in</small> ${compact(p.mcap0)} <small class="dim">→</small> ${compact(p.mcapNow)}${open ? `<small class="dim ${p.stale ? "down" : ""}">${p.stale ? " no live price" : ` ${srcName[p.src] || p.src}`}</small>` : ""}</span>
       <b class="num pos-x ${x != null ? xCls(x) : ""}">${x != null ? mult(x) : "—"}</b><span class="num ${p.pnl != null ? cls(p.pnl) : ""}">${usdSigned(p.pnl)}</span>
       <small class="dim">${open ? `${ago(p.t)} · peak ${mult(p.peakX)} · low ${mult(p.lowX)}` : `${esc(p.exit_why || "")} · ${ago(p.exit_t)} ago`}</small></div>
-    ${open ? `<div class="pos-acts"><label>TP <input class="input num" type="number" step="any" placeholder="x" value="${p.tp ?? ""}" data-prule-tp="${p.id}"></label><label>SL <input class="input num" type="number" step="any" placeholder="%" value="${p.sl ?? ""}" data-prule-sl="${p.id}"></label><label>Trail <input class="input num" type="number" step="any" placeholder="%" value="${p.trail ?? ""}" data-prule-trail="${p.id}"></label><button class="btn sm-btn" data-prule="${p.id}">Set rule</button>
+    ${open ? `<div class="pos-acts"><label>TP <input class="input num" type="number" step="any" placeholder="x" value="${ruleValue("tp")}" data-prule-tp="${p.id}"></label><label>SL <input class="input num" type="number" step="any" placeholder="%" value="${ruleValue("sl")}" data-prule-sl="${p.id}"></label><label>Trail <input class="input num" type="number" step="any" placeholder="%" value="${ruleValue("trail")}" data-prule-trail="${p.id}"></label><button class="btn sm-btn" data-prule="${p.id}">Set rule</button>
       <span class="grow"></span><button class="btn sm-btn" data-psell="${p.id}" data-pct="50">Sell 50%</button><button class="btn sm-btn primary" data-psell="${p.id}" data-pct="100">Sell all</button></div>`
       : `<div class="pos-acts"><span class="grow"></span><button class="btn sm-btn" data-pdrop="${p.id}" title="Forget this closed position">Remove</button></div>`}
   </div>`;
@@ -1657,10 +1686,10 @@ function deskHtml(d) {
   return `<div id="deskBody">
     <div class="p-sec"><div class="facts">
       <div class="fact"><b>Open</b><span>${s.open} <small class="dim">· $${Math.round(s.openUsd)}</small></span></div>
-      <div class="fact"><b>Open P&amp;L</b><span class="${s.open ? cls(s.openPnl) : ""}">${s.open ? usdSigned(s.openPnl) : "—"}</span></div>
+      <div class="fact"><b>Open P&amp;L</b><span class="${s.open ? cls(s.openPnl) : ""} ${s.openUnpriced ? "unpriced" : ""}">${s.openUnpriced ? `Unavailable <small class="dim">· ${s.openUnpriced} unpriced</small>` : s.open ? usdSigned(s.openPnl) : "—"}</span></div>
       <div class="fact"><b>Today</b><span class="${s.todayN ? cls(s.todayPnl) : ""}">${s.todayN ? usdSigned(s.todayPnl) : "—"} <small class="dim">· ${s.todayWins}/${s.todayN} won</small></span></div>
       <div class="fact"><b>All time</b><span class="${s.allN ? cls(s.allPnl) : ""}">${s.allN ? usdSigned(s.allPnl) : "—"} <small class="dim">· ${s.allN} closed</small></span></div>
-    </div><p class="note" style="margin:10px 0 0">Paper only: nothing is sent to the chain. Entries and exits take the market cap of that second (live trade feed on the curve, Jupiter or DexScreener after bonding) less ${d.cost}% each way. Sizes come from Settings (${d.sizes.join(" / ")} SOL); a new position starts with the exit rule set there${d.rule.tp || d.rule.sl || d.rule.trail ? ` (${[d.rule.tp && `TP ${d.rule.tp}x`, d.rule.sl && `SL −${d.rule.sl}%`, d.rule.trail && `trail ${d.rule.trail}%`].filter(Boolean).join(", ")})` : " (none)"}. Rule exits are checked every second.</p></div>
+    </div><p class="note" style="margin:10px 0 0">Paper only: nothing is sent to the chain. New buys and manual sells use curve or Jupiter quotes, including fees and price impact. Live valuations and automatic exits may use estimates; older positions use a ${d.cost}% cost model each way. Sizes come from Settings (${d.sizes.join(" / ")} SOL); a new position starts with the exit rule set there${d.rule.tp || d.rule.sl || d.rule.trail ? ` (${[d.rule.tp && `TP ${d.rule.tp}x`, d.rule.sl && `SL −${d.rule.sl}%`, d.rule.trail && `trail ${d.rule.trail}%`].filter(Boolean).join(", ")})` : " (none)"}. Rule exits are checked every second.</p></div>
     <div class="p-sec"><h3>Open positions <span class="dim">· ${d.open.length}</span></h3>${d.open.length ? d.open.map(posRow).join("") : `<p class="note">None. Press <b>B</b> on any Pulse row, or the size buttons that appear when you hover one.</p>`}</div>
     <div class="p-sec"><h3>Closed <span class="dim">· last ${d.closed.length}</span></h3>${d.closed.length ? d.closed.map(posRow).join("") : `<p class="note">Nothing closed yet.</p>`}</div>
   </div>`;
@@ -1973,8 +2002,8 @@ async function viewSettings(main) {
   const clear = new Set();
   const num = (k, label, help) => `<div class="field"><label for="s-${k}">${label}</label><input class="input num" id="s-${k}" name="${k}" type="number" value="${esc(s[k])}"><small>${help}</small></div>`;
   // Secrets are never sent back to this page: the field shows whether one is saved, and typing replaces it.
-  const secret = (k, label, ph, help, extra = "", wide = false) => `<div class="field" ${wide ? 'style="grid-column:1/-1"' : ""}><label for="s-${k}">${label}${S[k].set ? ` <span class="st top">saved ${esc(S[k].hint)}</span>` : ""}</label>
-    <div style="display:flex;gap:8px"><input class="input num" id="s-${k}" name="${k}" type="password" autocomplete="new-password" spellcheck="false" value="" placeholder="${S[k].set ? "Leave blank to keep the saved one, or type to replace it" : ph}" style="flex:1">${S[k].set ? `<button class="btn" type="button" data-secret-clear="${k}">Remove</button>` : ""}${extra}</div><small>${help}</small></div>`;
+  const secret = (k, label, ph, help, extra = "", wide = false) => `<div class="field" ${wide ? 'style="grid-column:1/-1"' : ""}><label for="s-${k}">${label}${S[k]?.set ? ` <span class="st top">saved ${esc(S[k].hint)}</span>` : ""}</label>
+    <div style="display:flex;gap:8px"><input class="input num" id="s-${k}" name="${k}" type="password" autocomplete="new-password" spellcheck="false" value="" placeholder="${S[k]?.set ? "Leave blank to keep the saved one, or type to replace it" : ph}" style="flex:1">${S[k]?.set ? `<button class="btn" type="button" data-secret-clear="${k}">Remove</button>` : ""}${extra}</div><small>${help}</small></div>`;
   const mb = (n) => `${(n / 1e6).toFixed(0)} MB`;
   main.innerHTML = `<div class="page-head"><div><h1>Settings</h1><p>Where updates go and how picky the radar is. Everything is saved on this PC only (data/settings.json). Saved keys and webhook URLs are never shown again or sent back to this page.</p></div><button class="btn primary" id="save">Save</button></div>
   <form id="sform" class="stack">
@@ -2069,9 +2098,10 @@ async function viewSettings(main) {
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="fomoAutoFollow" ${s.fomoAutoFollow ? "checked" : ""}> Auto-follow the best Fomo traders</label><small>Traders the radar watched make money on Fomo (3+ closed coins, $300+ profit, 50%+ win rate).</small></div>
         ${num("fomoFollowTop", "Max Fomo traders to follow", "Each followed wallet costs RPC calls.")}
       </div></div>
-    <div class="card"><div class="card-head"><h2>Wallets</h2></div>
+    <div class="card"><div class="card-head"><h2>Market data &amp; wallets</h2></div>
       <div class="form">
         ${secret("rpcUrl", "Solana RPC URL", "Blank = free public RPC (slow, rate limited)", "For fast, complete wallet tracking, make a free account at helius.dev and paste its mainnet RPC URL here. The URL contains your key, so it is treated as a secret.", "", true)}
+        ${secret("jupiterKey", "Jupiter API key (optional)", "Blank = keyless access", "Quotes and prices share a request allowance. Add a key from developers.jup.ag/portal for more capacity.", "", true)}
         <div class="field"><label class="check" style="width:max-content"><input type="checkbox" name="autoFollowSmart" ${s.autoFollowSmart ? "checked" : ""}> Auto-follow discovered early wallets</label><small>Adds the best wallets the radar finds, up to the limit below.</small></div>
         ${num("maxSmartWallets", "Max auto-followed wallets", "More wallets means more RPC calls.")}
         ${num("walletMinSol", "Wallet alert minimum (SOL)", "Buys by auto-followed wallets below this are logged but not alerted. Wallets you add always alert.")}
@@ -2545,13 +2575,13 @@ document.addEventListener("click", async (e) => {
   }
   // The terminal controls: paper buys and sells, the desk, the watchlist star, density and sound.
   const pb = el.closest("[data-pbuy]");
-  if (pb) { pb.disabled = true; setTimeout(() => { pb.disabled = false; }, 800); return paperBuy(pb.dataset.pbuy, +pb.dataset.sol); }
+  if (pb) return paperBuy(pb.dataset.pbuy, +pb.dataset.sol);
   const ps = el.closest("[data-psell]");
-  if (ps) { ps.disabled = true; return paperSell(+ps.dataset.psell, +ps.dataset.pct); }
+  if (ps) return paperSell(+ps.dataset.psell, +ps.dataset.pct);
   const pr = el.closest("[data-prule]");
   if (pr) {
     const id = pr.dataset.prule, v = (k) => $(`[data-prule-${k}="${id}"]`)?.value;
-    try { const r = await post(`paper/${id}/rule`, { tp: v("tp"), sl: v("sl"), trail: v("trail") }); pulseState.desk = r.desk; renderDesk(); toast("Exit rule set"); } catch (e) { toast(e.message); }
+    try { const r = await post(`paper/${id}/rule`, { tp: v("tp"), sl: v("sl"), trail: v("trail") }); ruleDrafts.delete(id); pulseState.desk = r.desk; renderDesk(); toast("Exit rule set"); } catch (e) { toast(e.message); }
     return;
   }
   const pd = el.closest("[data-pdrop]");
@@ -2576,6 +2606,10 @@ document.addEventListener("click", async (e) => {
   if (m && !el.closest("a")) openCoin(m.dataset.mint);
 });
 document.addEventListener("input", (e) => {
+  for (const key of ["tp", "sl", "trail"]) {
+    const id = e.target.getAttribute(`data-prule-${key}`);
+    if (id) ruleDrafts.set(id, { ...ruleDrafts.get(id), [key]: e.target.value });
+  }
   if (e.target.id === "pq") { pulseState.q = e.target.value.trim(); pulseState.first = true; pulseTick(); }
   if (e.target.id === "cq") { coinState.q = e.target.value.trim(); clearTimeout(window._cq); window._cq = setTimeout(() => loadCoins(), 250); }
   // A number typed into a filter panel applies after a short pause; the field keeps focus.
@@ -2627,11 +2661,28 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- live stream ----------
 function connect() {
+  connect.source?.close();
+  clearTimeout(connect.fallback); clearTimeout(connect.retry);
+  connect.fallback = null;
   const es = new EventSource("/api/stream");
+  connect.source = es;
   const live = $("#live");
   // "connected" is about this page's link to the radar, nothing more. Whether the data behind it is
   // current is what the Health page (and the Health cell above) reports.
-  es.addEventListener("hello", () => { live.classList.add("on"); live.querySelector("span").textContent = "connected"; live.title = "This page is connected to the radar. See Health for whether prices, wallets and AI are current."; });
+  es.addEventListener("hello", () => { clearTimeout(connect.fallback); clearTimeout(connect.retry); connect.fallback = null; pulseState.polling = false; live.classList.add("on"); live.querySelector("span").textContent = "connected"; live.title = "This page is connected to the radar. See Health for whether prices, wallets and AI are current."; });
+  // Through some proxies (the public tunnel) the event stream never opens. The page then works by polling:
+  // rows refresh every 2 seconds without the per-trade flashes, and the stream is tried again every minute.
+  const fallback = () => {
+    if (connect.fallback) return;
+    connect.fallback = setTimeout(() => {
+      connect.fallback = null;
+      pulseState.polling = true;
+      pollingStatus();
+      clearTimeout(connect.retry);
+      connect.retry = setTimeout(() => { if (pulseState.polling) connect(); }, 60_000);
+    }, 8000);
+  };
+  fallback();
   es.addEventListener("tick", async () => {
     if (route() === "") {
       const o = await api("overview").catch(() => null);
@@ -2671,8 +2722,25 @@ function connect() {
     if (route() === "") deskTick();
   });
   es.addEventListener("brief", (ev) => { const b = JSON.parse(ev.data); const c = $("#briefCard"); if (c) c.innerHTML = briefCard(b); toast("New AI brief"); });
-  es.onerror = () => { live.classList.remove("on"); live.querySelector("span").textContent = "reconnecting"; };
+  es.onerror = () => {
+    if (pulseState.polling) pollingStatus();
+    else { live.classList.remove("on"); live.querySelector("span").textContent = "reconnecting"; }
+    fallback();
+  };
 }
+
+function pollingStatus() {
+  const live = $("#live"), fresh = Date.now() - lastApiOk < 25_000;
+  live.classList.toggle("on", fresh);
+  live.querySelector("span").textContent = fresh ? "live · polling" : "reconnecting";
+  live.title = fresh ? "The event stream is unavailable. Pulse refreshes every 2 seconds; other views refresh on their normal schedule." : "The server is not responding. Retrying automatically.";
+}
+setInterval(async () => {
+  if (!pulseState.polling || document.hidden) return;
+  const o = await api("overview").catch(() => null);
+  if (o) renderStrip(o);
+  if (pulseState.polling) pollingStatus();
+}, 10_000);
 
 if ("Notification" in window && Notification.permission === "default") setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
 api("overview").then(renderStrip).catch(() => {});

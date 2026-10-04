@@ -494,3 +494,186 @@ test("paper desk: trade-panel fills use the real curve quote (fee + price impact
   assert.ok(Math.abs(sold.pnl - (sold.exit_sol - 1) * 100) < 1e-6);
   L.live.delete(mint);
 });
+
+test("quotes use the current Jupiter host and the token's actual decimals", async (t) => {
+  const { quote } = await import("../server/quote.js");
+  const L = await import("../server/livetrades.js");
+  const mint = "JupTest" + "1".repeat(33);
+  L.feed.solKnown = true; L.feed.solUsd = 100;
+  t.mock.method(globalThis, "fetch", async (input) => {
+    const u = new URL(input);
+    assert.equal(u.hostname, "api.jup.ag");
+    if (u.pathname === "/price/v3") return Response.json({ [mint]: { decimals: 9, usdPrice: 2 } });
+    assert.equal(u.searchParams.get("amount"), "100000000");
+    return Response.json({ outAmount: "5000000000", otherAmountThreshold: "4850000000", priceImpactPct: "0.01", routePlan: [] });
+  });
+  const q = await quote(mint, "buy", 0.1);
+  assert.equal(q.outTokens, 5);
+  assert.equal(q.minOut, 4.85);
+});
+
+test("quotes reject unknown decimals rather than inventing token amounts", async (t) => {
+  const { quote } = await import("../server/quote.js");
+  t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  await assert.rejects(quote("UnknownTest" + "1".repeat(30), "buy", 0.1), /decimals|precision/i);
+});
+
+test("Jupiter rate limits are reported as rate limits, not a missing route", async (t) => {
+  const { quote } = await import("../server/quote.js");
+  const mint = "RateTest" + "1".repeat(32);
+  t.mock.method(globalThis, "fetch", async (input) => new URL(input).pathname === "/price/v3"
+    ? Response.json({ [mint]: { decimals: 6, usdPrice: 1 } })
+    : new Response("Rate limit exceeded", { status: 429 }));
+  await assert.rejects(quote(mint, "buy", 0.1), (e) => e.status === 429 && /rate limit/i.test(e.message));
+});
+
+test("quotes reject infinite amounts before contacting a provider", async (t) => {
+  const { quote } = await import("../server/quote.js");
+  t.mock.method(globalThis, "fetch", async () => { assert.fail("invalid sizes must not reach the provider"); });
+  await assert.rejects(quote("FiniteTest" + "1".repeat(30), "buy", Infinity), (e) => e.status === 400);
+});
+
+test("simultaneous paper sells cannot spend the same position twice", async () => {
+  const P = await import("../server/paper.js");
+  const L = await import("../server/livetrades.js");
+  const mint = "RaceTest" + "1".repeat(32);
+  L.live.set(mint, { mint, mc: 28, progress: 0, vSol: 30, vTok: 1_073_000_000, feeBps: 125, resT: Date.now(), last: Date.now(), buys: 0, sells: 0, traders: new Set(), hist: [] });
+  L.feed.connected = true; L.feed.lastMsg = Date.now(); L.feed.solUsd = 100; L.feed.solKnown = true;
+  try {
+    const pos = await P.openQuoted(mint, 1);
+    const result = await Promise.allSettled([P.sellQuoted(pos.id, 50), P.sellQuoted(pos.id, 50)]);
+    assert.equal(result.filter((r) => r.status === "fulfilled").length, 1);
+    assert.equal(result.find((r) => r.status === "rejected").reason.status, 409);
+    const rows = P.positionsFor(mint);
+    assert.equal(rows.filter((p) => p.status === "closed").length, 1);
+    assert.equal(rows.find((p) => p.status === "open").sol, 0.5);
+    assert.equal(rows.reduce((s, p) => s + p.sol, 0), 1);
+  } finally { L.live.delete(mint); }
+});
+
+test("Jupiter requests share pacing, coalesce duplicates and honor cooldown", async () => {
+  const { createJupiterClient } = await import("../server/jupiter.js");
+  let time = 1000, limited = false;
+  const calls = [];
+  const get = createJupiterClient({ clock: () => time, sleep: async (ms) => { time += ms; }, key: () => "",
+    request: async (url) => { calls.push({ url, time }); return limited ? new Response("limit", { status: 429, headers: { "retry-after": "5" } }) : Response.json({ price: 10 }); },
+  });
+  const [a, b] = await Promise.all([get("/price/v3?ids=A", { cacheMs: 30000 }), get("/price/v3?ids=A", { cacheMs: 30000 })]);
+  assert.deepEqual(a, b);
+  assert.equal(calls.length, 1);
+  await get("/price/v3?ids=A", { cacheMs: 30000 });
+  assert.equal(calls.length, 1, "fresh prices are reused");
+  await get("/swap/v1/quote?amount=1");
+  assert.ok(calls[1].time - calls[0].time >= 2000);
+  limited = true;
+  await assert.rejects(get("/swap/v1/quote?amount=2"), (e) => e.status === 429);
+  const count = calls.length;
+  await assert.rejects(get("/swap/v1/quote?amount=3"), (e) => e.status === 429);
+  assert.equal(calls.length, count, "cooldown prevents another upstream request");
+  time += 5000; limited = false;
+  assert.deepEqual(await get("/swap/v1/quote?amount=3"), { price: 10 });
+});
+
+test("Jupiter API keys remain secret and are sent only to the Jupiter API", async () => {
+  const { createJupiterClient } = await import("../server/jupiter.js");
+  S.saveSettings({ jupiterKey: "test-jupiter-key" });
+  assert.equal(S.publicSettings().settings.jupiterKey, "");
+  assert.equal(S.publicSettings().secrets.jupiterKey.set, true);
+  S.saveSettings({ jupiterKey: "" });
+  assert.equal(S.settings.jupiterKey, "test-jupiter-key");
+  const get = createJupiterClient({ request: async (url, opts) => {
+    assert.equal(new URL(url).origin, "https://api.jup.ag");
+    assert.equal(opts.headers["x-api-key"], "test-jupiter-key");
+    return Response.json({ ok: true });
+  } });
+  await get("/price/v3?ids=A");
+  S.saveSettings({}, { clear: ["jupiterKey"] });
+  assert.equal(S.settings.jupiterKey, "");
+});
+
+test("legacy paper sell previews include dollar conversion and reject stale prices", async () => {
+  const P = await import("../server/paper.js");
+  const L = await import("../server/livetrades.js");
+  L.feed.solKnown = true; L.feed.solUsd = 120;
+  const mint = "PreviewTest" + "1".repeat(29), now = Date.now();
+  db.prepare("INSERT INTO tokens (mint, mcap, price_t, updated) VALUES (?, 50000, ?, ?)").run(mint, now, now);
+  const p = P.open(mint, 1);
+  const q = await P.previewSell(p.id, 50);
+  assert.equal(q.solUsd, 120);
+  assert.equal(q.solIn, 0.5);
+  assert.ok(q.outSol > 0 && q.outSol < 0.5);
+  db.prepare("UPDATE tokens SET price_t = 1, updated = 1 WHERE mint = ?").run(mint);
+  await assert.rejects(P.previewSell(p.id), (e) => e.status === 409);
+});
+
+test("startup history lookup uses a coin index instead of scanning every prior grade", () => {
+  const plan = db.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM outcomes WHERE kind = 'grade' AND mint = ?").all("StartupMint");
+  assert.ok(plan.some((step) => /SEARCH.*mint=\?/.test(step.detail)), JSON.stringify(plan));
+});
+
+test("a coin without a Jupiter route does not mark the provider offline", async () => {
+  const { createJupiterClient } = await import("../server/jupiter.js");
+  const health = await import("../server/health.js");
+  const before = health.part("jupiter");
+  const get = createJupiterClient({ request: async () => Response.json({ error: "No routes found" }, { status: 400 }) });
+  await assert.rejects(get("/swap/v1/quote?amount=1"), (e) => e.status === 409);
+  assert.equal(health.part("jupiter").fail, before.fail);
+  assert.equal(health.part("jupiter").ok, before.ok + 1);
+});
+
+test("unquotable paper positions back off instead of exhausting the quote allowance", async () => {
+  const P = await import("../server/paper.js");
+  const mint = "RetryTest" + "1".repeat(31);
+  db.prepare("INSERT INTO paper (mint, sol, usd, tokens, status) VALUES (?, 1, 100, 1000, 'open')").run(mint);
+  let calls = 0;
+  const unavailable = async (m) => { if (m === mint) calls++; throw Object.assign(new Error("No routes found"), { status: 409 }); };
+  await P.refreshExitQuotes(unavailable);
+  await P.refreshExitQuotes(unavailable);
+  assert.equal(calls, 1);
+});
+
+test("paper totals include the complete history and disclose unavailable valuations", async () => {
+  const P = await import("../server/paper.js");
+  const insert = db.prepare("INSERT INTO paper (mint, status, exit_t, pnl, sol, usd) VALUES ('SummaryTest', 'closed', ?, 2, 1, 100)");
+  for (let i = 0; i < 65; i++) insert.run(Date.now() - i);
+  const d = P.desk(), today = new Date(); today.setHours(0, 0, 0, 0);
+  assert.equal(d.closed.length, 60, "the displayed history stays bounded");
+  assert.equal(d.summary.allPnl, db.prepare("SELECT SUM(pnl) n FROM paper WHERE status = 'closed'").get().n);
+  assert.equal(d.summary.todayN, db.prepare("SELECT COUNT(*) n FROM paper WHERE status = 'closed' AND exit_t >= ?").get(today.getTime()).n);
+  assert.equal(d.summary.openUnpriced, d.open.filter(p => p.stale || p.pnl == null).length);
+  if (d.summary.openUnpriced) assert.equal(d.summary.openPnl, null, "a missing valuation is not zero profit");
+});
+
+test("RPC stream recovers from a stalled handshake and a missing close event", async (t) => {
+  const { startRpcStream } = await import("../server/rpc-stream.js");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const sockets = [], states = [];
+  class Socket { constructor() { this.readyState = 0; sockets.push(this); } close() {} send() {} }
+  const stop = startRpcStream({ url: () => "wss://rpc.example", request: {}, WebSocketImpl: Socket, onStatus: s => states.push(s) });
+  t.mock.timers.tick(10_000); t.mock.timers.tick(3000);
+  assert.equal(sockets.length, 2, "a handshake cannot hang forever");
+  sockets[1].onerror(); t.mock.timers.tick(3000);
+  assert.equal(sockets.length, 3, "recovery must not depend on close firing");
+  stop(); t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 3, "stopping cancels pending reconnects");
+  assert.ok(states.some(s => s.error));
+});
+
+test("RPC stream requires subscription acknowledgement and rejects provider errors", async (t) => {
+  const { startRpcStream } = await import("../server/rpc-stream.js");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const sockets = [], states = [], events = [];
+  class Socket { constructor() { sockets.push(this); } close() {} send() {} }
+  const stop = startRpcStream({ url: () => "wss://rpc.example", request: {}, WebSocketImpl: Socket, onStatus: s => states.push(s), onEvent: d => events.push(d) });
+  sockets[0].onopen();
+  assert.equal(states.at(-1).connected, false);
+  sockets[0].onmessage({ data: JSON.stringify({ id: 1, error: { code: -32005, message: "rate limited" } }) });
+  assert.equal(states.at(-1).connected, false);
+  t.mock.timers.tick(3000);
+  sockets[1].onopen();
+  sockets[1].onmessage({ data: JSON.stringify({ id: 1, result: 42 }) });
+  assert.equal(states.at(-1).connected, true);
+  sockets[1].onmessage({ data: JSON.stringify({ method: "logsNotification", params: { result: {} } }) });
+  assert.equal(events.length, 1);
+  stop();
+});

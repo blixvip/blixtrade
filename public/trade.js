@@ -5,7 +5,7 @@
 const $q = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 async function api(path, opts = {}) {
-  const r = await fetch(`/api/${path}`, { ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
+  const r = await fetch(`/api/${path}`, { signal: AbortSignal.timeout(opts.method ? 60_000 : 30_000), ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
@@ -37,6 +37,8 @@ let tfPref = (() => { try { return +localStorage.getItem("trade:tf") || 0; } cat
 export function unmountTrade() {
   clearInterval(chart.timer); chart.timer = null;
   clearInterval(panel.timer); panel.timer = null;
+  clearTimeout(onInput.t);
+  panel.seq++; panel.epoch++; panel.el = null; panel.quote = null; panel.busy = false;
   try { chart.ro?.disconnect(); } catch {}
   try { chart.api?.remove(); } catch {}
   Object.assign(chart, { el: null, api: null, candles: null, vol: null, markers: null, mint: null, last: null, r: null, ro: null });
@@ -90,7 +92,7 @@ export function mountChart(el, r) {
 async function loadCandles(first) {
   const mint = chart.mint, tf = chart.tf;
   let d;
-  try { d = await api(`candles/${mint}?tf=${tf}`); } catch (e) { if (first) $q("#tcNote", chart.el).textContent = `No candles: ${e.message}`; return; }
+  try { d = await api(`candles/${mint}?tf=${tf}`); } catch (e) { const note = chart.mint === mint && chart.tf === tf && chart.el && $q("#tcNote", chart.el); if (first && note) note.textContent = `No candles: ${e.message}`; return; }
   if (!chart.candles || chart.mint !== mint || chart.tf !== tf) return;
   const up = cssColor("--color-up", "#2ebd85"), down = cssColor("--color-down", "#f6465d");
   const rows = d.rows.filter((x) => x.open > 0 && x.close > 0);
@@ -130,7 +132,7 @@ function setMarkers() {
 }
 
 // ---------- buy / sell panel ----------
-const panel = { el: null, r: null, side: "buy", sol: null, pct: 100, slip: 300, timer: null, quote: null, seq: 0, sizes: [0.1, 0.25, 0.5, 1, 2], positions: [] };
+const panel = { el: null, r: null, side: "buy", sol: null, pct: 100, slip: 300, timer: null, quote: null, seq: 0, epoch: 0, submitting: false, sizes: [0.1, 0.25, 0.5, 1, 2], positions: [] };
 try { panel.slip = +localStorage.getItem("trade:slip") || 300; panel.sol = +localStorage.getItem("trade:sol") || null; } catch {}
 let remount = null;
 function mountPanelAgain() { remount?.(); }
@@ -138,20 +140,24 @@ function mountPanelAgain() { remount?.(); }
 export function mountPanel(el, r, { onTrade } = {}) {
   if (!el) return;
   panel.el = el; panel.r = r; panel.onTrade = onTrade;
+  const epoch = ++panel.epoch;
+  panel.seq++; panel.quote = null; panel.busy = false;
+  clearTimeout(onInput.t);
   remount = () => mountPanel(el, panel.r, { onTrade });
   panel.positions = (r.paper || []).filter((p) => p.status === "open");
   if (panel.side === "sell" && !panel.positions.length) panel.side = "buy";
-  api("paper").then((d) => { if (d.sizes?.length) panel.sizes = d.sizes; if (!panel.sol) panel.sol = d.sizes?.[1] ?? d.sizes?.[0] ?? 0.25; draw(); }).catch(() => {});
+  api("paper").then((d) => { if (panel.epoch !== epoch || !el.isConnected || panel.submitting) return; if (d.sizes?.length) panel.sizes = d.sizes; if (!panel.sol) panel.sol = d.sizes?.[1] ?? d.sizes?.[0] ?? 0.25; draw(); }).catch(() => {});
   if (!panel.sol) panel.sol = 0.25;
   draw();
   clearInterval(panel.timer);
   // A Jupiter quote can take a couple of seconds: the timed refresh waits for the one in flight instead of
   // cancelling it (a quote box stuck on "Quoting…" otherwise).
-  panel.timer = setInterval(() => { if (!panel.el?.isConnected) { clearInterval(panel.timer); return; } if (!document.hidden && !panel.busy) requote(); }, 2000);
+  panel.timer = setInterval(() => { if (!panel.el?.isConnected) { clearInterval(panel.timer); return; } if (!document.hidden && !panel.busy && !panel.submitting) requote(); }, 2000);
   el.onclick = onClick; el.oninput = onInput;
 }
 
 function draw() {
+  if (!panel.el?.isConnected) return;
   const el = panel.el, t = panel.r.token, sym = esc(t.symbol || "?");
   const pos = panel.positions;
   el.innerHTML = `<div class="tp">
@@ -166,13 +172,18 @@ function draw() {
     <button class="tp-go ${panel.side}" id="tpGo" disabled>${panel.side === "buy" ? `Paper buy ${panel.sol ?? "?"} SOL of $${sym}` : `Paper sell ${panel.pct}% of $${sym}`}</button>
     ${pos.length ? `<div class="tp-pos">${pos.map((p) => `<div><span>${solF(p.sol)} in · ${p.tokens ? `${tokC(p.tokens)} ${sym}` : "flat-cost position"}</span><b class="num ${p.mult >= 1 ? "up" : "down"}">${p.mult != null ? `${p.mult.toFixed(2)}x` : "—"}</b><span class="num ${p.pnl >= 0 ? "up" : "down"}">${p.pnl == null ? "—" : `${p.pnl >= 0 ? "+" : "−"}$${Math.abs(p.pnl).toFixed(2)}`}</span></div>`).join("")}</div>` : ""}
   </div>`;
-  requote();
+  if (panel.submitting) {
+    el.querySelectorAll("button, input").forEach((x) => { x.disabled = true; });
+    $q("#tpQuote", el).textContent = "Submitting paper trade…";
+  } else requote();
 }
 
 async function requote() {
+  if (!panel.el?.isConnected || panel.submitting) return;
   const box = $q("#tpQuote", panel.el), go = $q("#tpGo", panel.el);
   if (!box) return;
   const seq = ++panel.seq, t = panel.r.token;
+  panel.quote = null; go.disabled = true;
   panel.busy = true;
   try {
     let q;
@@ -195,7 +206,7 @@ async function requote() {
           <span>Price impact</span><b class="num">${q.impactPct != null ? pctF(q.impactPct) : "—"}</b><span>Fee</span><b class="num">${q.feeSol != null ? solF(q.feeSol) : q.src === "flat" ? "3% (old position)" : "in route"}</b>
           <span>Route</span><b>${esc((q.route || []).join(" → ") || q.src)}</b><span></span><b></b></div>`;
     }
-    panel.quote = q; go.disabled = false;
+    panel.quote = q; go.disabled = panel.submitting;
   } catch (e) {
     if (seq !== panel.seq) return;
     box.innerHTML = `<span class="down">${esc(e.message)}</span>`; go.disabled = true;
@@ -204,31 +215,46 @@ async function requote() {
 
 async function onClick(e) {
   const b = e.target.closest("button"); if (!b) return;
+  if (b.disabled || panel.submitting) return;
   if (b.dataset.tpside) { panel.side = b.dataset.tpside; return draw(); }
   if (b.dataset.tpsol) { panel.sol = +b.dataset.tpsol; try { localStorage.setItem("trade:sol", panel.sol); } catch {} return draw(); }
   if (b.dataset.tppct) { panel.pct = +b.dataset.tppct; return draw(); }
   if (b.dataset.tpslip) { panel.slip = +b.dataset.tpslip; try { localStorage.setItem("trade:slip", panel.slip); } catch {} return draw(); }
   if (b.id === "tpGo") {
-    b.disabled = true;
-    const t = panel.r.token;
+    if (!panel.quote) return;
+    panel.submitting = true; panel.seq++; panel.busy = false;
+    clearTimeout(onInput.t);
+    panel.el.querySelectorAll("button, input").forEach((x) => { x.disabled = true; });
+    const t = panel.r.token, epoch = panel.epoch, side = panel.side, onTrade = panel.onTrade;
     try {
-      const res = panel.side === "buy"
+      const res = side === "buy"
         ? await post("paper/quoted", { mint: t.mint, sol: panel.sol, slippageBps: panel.slip })
         : await post(`paper/${panel.positions[0].id}/sellq`, { pct: panel.pct });
       const p = res.position;
-      panel.onTrade?.(panel.side, p, res.desk);
+      onTrade?.(side, p, res.desk);
       const fresh = await api(`token/${t.mint}`).catch(() => null);
+      if (epoch !== panel.epoch || !panel.el?.isConnected) return;
       if (fresh) { panel.r = fresh; chart.r = fresh; panel.positions = (fresh.paper || []).filter((x) => x.status === "open"); setMarkers(); }
       if (panel.side === "sell" && !panel.positions.length) panel.side = "buy";
-      draw();
-    } catch (err) { $q("#tpQuote", panel.el).innerHTML = `<span class="down">${esc(err.message)}</span>`; b.disabled = false; }
+    } catch (err) {
+      if (epoch === panel.epoch && panel.el?.isConnected) panel.tradeError = err.message;
+    } finally {
+      panel.submitting = false;
+      if (panel.el?.isConnected) {
+        draw();
+        if (panel.tradeError) { $q("#tpQuote", panel.el).innerHTML = `<span class="down">${esc(panel.tradeError)}</span>`; panel.tradeError = null; }
+      }
+    }
   }
 }
 function onInput(e) {
   if (e.target.matches("[data-tpsolin]")) {
+    if (panel.submitting) return;
+    panel.seq++; panel.quote = null; panel.busy = false;
     panel.sol = +e.target.value || null;
     panel.el.querySelectorAll("[data-tpsol]").forEach((x) => x.classList.toggle("on", +x.dataset.tpsol === panel.sol));
-    const go = $q("#tpGo", panel.el); if (go) go.textContent = `Paper buy ${panel.sol ?? "?"} SOL of $${panel.r.token.symbol || "?"}`;
+    const go = $q("#tpGo", panel.el); if (go) { go.disabled = true; go.textContent = `Paper buy ${panel.sol ?? "?"} SOL of $${panel.r.token.symbol || "?"}`; }
+    $q("#tpQuote", panel.el).innerHTML = `<span class="dim">${panel.sol > 0 ? "Quoting…" : "Enter an amount."}</span>`;
     clearTimeout(onInput.t); onInput.t = setTimeout(requote, 250);
   }
 }

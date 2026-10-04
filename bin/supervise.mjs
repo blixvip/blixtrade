@@ -21,7 +21,10 @@ async function run() {
   // If Node itself gives up (out of memory, an internal fatal error) it leaves a report saying where.
   const reports = path.join(ROOT, "data", "reports");
   fs.mkdirSync(reports, { recursive: true });
-  const child = spawn(process.execPath, ["--no-warnings", "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
+  // A project-local Windows runtime lets Blix receive Node fixes without changing other apps.
+  const localNode = path.join(ROOT, "data", "runtime", "node.exe");
+  const runtime = process.env.BLIX_NODE || (process.platform === "win32" && fs.existsSync(localNode) ? localNode : process.execPath);
+  const child = spawn(runtime, ["--no-warnings", "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
     cwd: ROOT, windowsHide: true, stdio: ["ignore", log, log],
   });
   child.on("exit", (code) => {

@@ -6,6 +6,7 @@
 // the chain to ~1e-7; fee 95 bps protocol + 30 bps creator). Bonded coins are quoted by Jupiter's swap
 // router (the same route a real swap would take), free and keyless.
 import { live, feed } from "./livetrades.js";
+import { jupiterGet } from "./jupiter.js";
 
 const WSOL = "So11111111111111111111111111111111111111112";
 const now = () => Date.now();
@@ -48,14 +49,18 @@ export function curveQuoteNow(mint, side, amount, slippageBps = 300, own = null)
 const decimalsCache = new Map();
 async function jupiterQuote(mint, side, amount, slippageBps) {
   let dec = decimalsCache.get(mint);
-  const px = await fetch(`https://lite-api.jup.ag/price/v3?ids=${mint}`, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+  const px = await jupiterGet(`/price/v3?ids=${mint}`, { timeout: 5000, cacheMs: 30_000 });
   const info = px[mint];
-  if (dec == null) { dec = info?.decimals ?? 6; decimalsCache.set(mint, dec); }
+  if (dec == null) {
+    dec = info?.decimals;
+    if (!Number.isInteger(dec) || dec < 0 || dec > 18) throw err(503, "Token decimals are unavailable, so its quote cannot be sized safely. Try again shortly.");
+    decimalsCache.set(mint, dec);
+    if (decimalsCache.size > 2000) decimalsCache.delete(decimalsCache.keys().next().value);
+  }
   const [inMint, outMint, raw] = side === "buy" ? [WSOL, mint, Math.round(amount * 1e9)] : [mint, WSOL, Math.round(amount * 10 ** dec)];
-  if (!(raw > 0)) throw err(400, "Amount too small.");
-  const r = await fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${raw}&slippageBps=${slippageBps}`, { signal: AbortSignal.timeout(8000) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.outAmount) throw err(409, `No route on Jupiter right now${j.error ? `: ${j.error}` : ""}.`);
+  if (!(raw > 0) || !Number.isSafeInteger(raw)) throw err(400, "Amount is too small or too large to quote precisely.");
+  const j = await jupiterGet(`/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${raw}&slippageBps=${slippageBps}`);
+  if (!(Number(j.outAmount) > 0) || !Number.isFinite(Number(j.outAmount)) || !Number.isFinite(Number(j.otherAmountThreshold))) throw err(409, "No valid route on Jupiter right now.");
   const out = side === "buy" ? Number(j.outAmount) / 10 ** dec : Number(j.outAmount) / 1e9;
   const route = (j.routePlan || []).map((x) => x.swapInfo?.label).filter(Boolean);
   const spotSol = info?.usdPrice && feed.solUsd ? info.usdPrice / feed.solUsd : null;
@@ -70,7 +75,8 @@ export async function quote(mint, side, amount, { slippageBps = 300 } = {}) {
   amount = Number(amount);
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw err(400, "That is not a Solana address.");
   if (!["buy", "sell"].includes(side)) throw err(400, "side must be buy or sell.");
-  if (!(amount > 0)) throw err(400, "Amount must be above zero.");
+  if (!(amount > 0) || !Number.isFinite(amount)) throw err(400, "Amount must be finite and above zero.");
+  if (!feed.solKnown) throw err(503, "Waiting for the SOL price, so dollar figures would be wrong. Try again in a few seconds.");
   slippageBps = Math.max(1, Math.min(5000, Math.round(Number(slippageBps) || 300)));
   const s = live.get(mint);
   const onCurve = s && s.vSol > 0 && s.vTok > 0 && (s.progress ?? 0) < 0.995 && now() - (s.resT || 0) < CURVE_FRESH_MS;

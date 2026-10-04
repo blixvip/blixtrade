@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS outcomes (
   PRIMARY KEY (kind, ref)
 );
 CREATE INDEX IF NOT EXISTS outcomes_open ON outcomes(done, t0);
+CREATE INDEX IF NOT EXISTS outcomes_mint_kind ON outcomes(mint, kind, t0);
 CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT, mint TEXT, symbol TEXT, name TEXT, image TEXT, t INTEGER, stage TEXT,
   grade TEXT, score INTEGER, conviction INTEGER, entry_mcap REAL, plan TEXT, thesis TEXT, theme TEXT, tag TEXT,

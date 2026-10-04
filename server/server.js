@@ -322,19 +322,20 @@ function healthReport() {
   const upFor = upMs < HOUR ? `${Math.max(1, Math.round(upMs / MIN))}m` : `${(upMs / HOUR).toFixed(1)}h`;
   add("stability", "Radar process", cr.h6 >= 2 ? "degraded" : "ok",
     `Running for ${upFor} · crashed ${cr.h24}× in the last 24h${cr.last ? ` (last ${ago(cr.last)})` : ""}${cr.h24 ? " · it restarts itself in about 2 seconds and picks up its recordings" : ""}`,
-    { lastFail: cr.last, crashes24h: cr.h24, sql: dbStats });
+    { lastFail: cr.last, crashes24h: cr.h24, sql: dbStats, runtime: process.version });
 
   const pumpAge = stats.pumpLast ? now - stats.pumpLast : null;
   add("launches", "Launch feed (PumpPortal)", stats.pump !== "connected" ? "down" : pumpAge != null && pumpAge > 90_000 ? "degraded" : "ok",
     stats.pump !== "connected" ? `Socket is ${stats.pump}` : `${stats.launchesSeen.toLocaleString()} launches this session, last one ${ago(stats.pumpLast)}`, { ...hp("pumpportal"), lastOk: stats.pumpLast || null });
   add("trades", "Live pump.fun trades (RPC websocket)", !liveFeed.connected ? "down" : now - liveFeed.lastMsg > 30_000 ? "degraded" : "ok",
-    liveFeed.connected ? `${liveFeed.perSec} trades/s, last message ${ago(liveFeed.lastMsg)}` : "Disconnected; reconnecting every 3s", { lastOk: liveFeed.lastMsg || null });
+    liveFeed.connected ? `${liveFeed.perSec} trades/s, last message ${ago(liveFeed.lastMsg)}` : `${liveFeed.lastError || "Connecting to RPC"}; retry every 3s`, { lastOk: liveFeed.lastMsg || null });
   const scanAge = stats.lastCycle ? now - stats.lastCycle : null;
   add("scan", "Scan loop", scanAge == null ? "idle" : scanAge > 3 * MIN ? "down" : scanAge > 90_000 ? "degraded" : "ok",
     `Last full scan ${ago(stats.lastCycle)} · ${stats.errors} error${stats.errors === 1 ? "" : "s"} this session${health.gaps.length ? ` · paused ${health.gaps.length}× (PC asleep or stopped), last for ${Math.round((health.gaps.at(-1).to - health.gaps.at(-1).from) / MIN)}m` : ""}`,
     { ...hp("scan"), gaps: health.gaps.slice(-5) });
   const svc = (key, name, staleMs) => { const p = hp(key); add(key, name, health.stateOf(key, staleMs), p.lastOk ? `Last answer ${ago(p.lastOk)} · ${p.ok.toLocaleString()} ok, ${p.fail} failed${p.lastFail && p.lastFail > p.lastOk ? ` · failing: ${p.lastError}` : ""}` : p.lastError ? `Never answered: ${p.lastError}` : "Not used yet", p); };
   svc("dexscreener", "Prices (DexScreener)", 3 * MIN);
+  svc("jupiter", "Quotes and prices (Jupiter)", 3 * MIN);
   svc("geckoterminal", "Discovery (GeckoTerminal)", 10 * MIN);
   svc("rugcheck", "Safety checks (RugCheck)", 30 * MIN);
 
@@ -545,8 +546,11 @@ const server = http.createServer(async (req, res) => {
       return res.end(staticFile(file));
     }
     if (p === "/api/stream") {
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
-      res.write(`event: hello\ndata: {}\n\n`);
+      // no-transform keeps proxies from compressing the stream; the 2 KB comment pushes it through any proxy
+      // that waits for a first block. (The public quick tunnel still holds streamed bodies back ~20 s whatever
+      // is sent, so the page falls back to polling there; see connect() in app.js.)
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+      res.write(`:${" ".repeat(2048)}\n\nevent: hello\ndata: {}\n\n`);
       clients.add(res);
       req.on("close", () => clients.delete(res));
       return;

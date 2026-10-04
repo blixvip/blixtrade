@@ -14,6 +14,7 @@ import { runners, windowStats } from "./coverage.js";
 import { traction } from "./quality.js";
 import { adoptLaunch, adoptMint, vet } from "./engine.js";
 import { enqueue } from "./research.js";
+import { jupiterGet } from "./jupiter.js";
 
 // Every row carries a live rank: the traction score (0-100) measured on this radar's own past reads as the
 // one ranking that predicted winners, computed this second from the trade feed (5-minute volume, traders,
@@ -175,9 +176,8 @@ async function priceMigrated() {
   migBusy = true;
   try {
     const ids = migMints.slice(0, 50);
-    const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${ids.join(",")}`, { signal: AbortSignal.timeout(5000), headers: { accept: "application/json" } });
-    if (!r.ok) { const e = new Error(`jupiter ${r.status}`); e.status = r.status; throw e; }
-    const got = await r.json();
+    const got = await jupiterGet(`/price/v3?ids=${ids.join(",")}`, { timeout: 5000 });
+    migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes.
     migStats.calls++; migStats.last = now();
     const out = [];
     for (const m of ids) {
