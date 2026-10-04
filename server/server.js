@@ -511,6 +511,8 @@ function remoteGate(req, res, url) {
     return true;
   }
   if (safeEq(cookieOf(req, "blix_key"), settings.remoteKey)) return false;
+  // Open to everyone: no key needed, but this request is a visitor's and may only read (access.js).
+  if (settings.publicMode) { req.visitor = true; return false; }
   if (url.pathname.startsWith("/api/")) { send(res, 401, { error: "Blix remote: key required." }); return true; }
   res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" });
   res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Blix</title>
@@ -556,6 +558,9 @@ const server = http.createServer(async (req, res) => {
   try {
     if (!allowed(req)) return send(res, 403, { error: "Blix only answers this PC and its own public hostname." });
     if (remoteGate(req, res, url)) return;
+    if (req.visitor && !visitorMay(req.method, p)) return send(res, 403, { error: "This is the public view of Blix: it is read-only." });
+    if (p === "/api/me") return send(res, 200, { readonly: Boolean(req.visitor) });
+    if (req.visitor && p === "/api/health") return send(res, 200, visitorHealth(cached("health", 4000, healthReport)));
     if (p === "/api/remote-link") return LOCAL.has(hostOf(req)) ? send(res, 200, { host: settings.publicHost || null, link: remoteLink() }) : send(res, 403, { error: "local only" });
     const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (pic) return await images.serve(pic[1], res);

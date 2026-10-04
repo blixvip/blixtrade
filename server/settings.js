@@ -102,6 +102,7 @@ export const DEFAULTS = {
   // remote access: the public hostname a Cloudflare Tunnel points at this PC, and the key a browser must present once
   // (as ?key=… ; it is then kept in a cookie). Blank key = generated on first start. Local pages never need it.
   publicHost: "trade.blixvip.com",
+  publicMode: false,         // true = anyone may open the public hostname, read-only (access.js); false = access key required
   remoteKey: "",
   tunnelKey: "",             // shared with the Worker on the public hostname (its REG_KEY secret); blank = no tunnel
   // paper desk: the one-click buy buttons on every Pulse row (SOL sizes) and the exit rule each new paper position starts with (0 = none)
