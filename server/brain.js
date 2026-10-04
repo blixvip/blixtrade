@@ -885,29 +885,50 @@ export async function scout() {
 
 // Words too generic to tie a coin to one narrative on their own.
 const GENERIC = new Set("ai cat cats dog dogs coin token sol solana meme memes pump fun the moon pepe frog inu baby king man the official new bot agent agents chinese china usa trump elon x".split(" "));
-function matchCoins(keywords, since) {
+// Real memecoins with believable prices only: one emptied pool once made a narrative look like a $3 trillion run.
+const coinPool = (since) => db.prepare(`SELECT mint, symbol, name, description, mcap, peak_mcap, first_seen, graduated, image, status, liquidity, dex FROM tokens
+    WHERE first_seen > ? AND mcap > 0 AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'`).all(since)
+  .map((t) => { const name = `${t.symbol} ${t.name}`, desc = t.description || ""; return { t, name, desc, text: `${name} \n ${desc}` }; });
+// `pool` lets a caller checking many narratives read the coins once instead of once per narrative.
+function matchCoins(keywords, since, pool = null) {
   const kws = keywords.filter((k) => k.length >= 3 && !GENERIC.has(k));
   if (!kws.length) return [];
   const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s_-]*");
   const res = kws.map((k) => new RegExp(`(^|[^a-z0-9])${esc(k)}($|[^a-z0-9])`, "i"));
-  // Real memecoins with believable prices only: one emptied pool once made a narrative look like a $3 trillion run.
-  return db.prepare(`SELECT mint, symbol, name, description, mcap, peak_mcap, first_seen, graduated, image, status, liquidity, dex FROM tokens
-    WHERE first_seen > ? AND mcap > 0 AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'`).all(since)
-    .map((t) => {
-      const name = `${t.symbol} ${t.name}`, desc = t.description || "";
-      // A hit in the ticker/name counts double; description-only hits need two keywords.
-      const hits = res.reduce((n, re) => n + (re.test(name) ? 2 : re.test(desc) ? 1 : 0), 0);
-      return { ...t, hits };
-    })
-    .filter((t) => t.hits >= 2).sort((a, b) => b.hits - a.hits || (b.mcap || 0) - (a.mcap || 0)).slice(0, 12);
+  // One pass with every keyword at once rules most coins out before the per-keyword count.
+  const any = new RegExp(`(^|[^a-z0-9])(?:${kws.map(esc).join("|")})($|[^a-z0-9])`, "i");
+  const out = [];
+  for (const c of pool || coinPool(since)) {
+    if (c.t.first_seen <= since || !any.test(c.text)) continue;
+    // A hit in the ticker/name counts double; description-only hits need two keywords.
+    const hits = res.reduce((n, re) => n + (re.test(c.name) ? 2 : re.test(c.desc) ? 1 : 0), 0);
+    if (hits >= 2) out.push({ ...c.t, hits });
+  }
+  return out.sort((a, b) => b.hits - a.hits || (b.mcap || 0) - (a.mcap || 0)).slice(0, 12);
 }
 
 // 24h after a narrative call: did it run? Best multiple among coins that fit it, and how many launched after the call.
 // The coins and prices under a thesis refresh every 10 minutes; the thesis itself does not (see NARRATIVE_EXPIRES).
-function scoreNarratives() {
-  for (const c of db.prepare("SELECT * FROM narrative_calls WHERE status = 'open'").all()) {
+// With hundreds of open calls this used to read every recent coin once per call and held the whole radar
+// up for about a minute: the coins are now read once, and the radar gets a turn between calls.
+let scoringNarratives = false;
+async function scoreNarratives() {
+  if (scoringNarratives) return;
+  scoringNarratives = true;
+  try {
+    const calls = db.prepare("SELECT * FROM narrative_calls WHERE status = 'open'").all();
+    if (!calls.length) return;
+    const pool = coinPool(Math.min(...calls.map((c) => c.t)) - 24 * H);
+    for (const c of calls) {
+      await new Promise((r) => setImmediate(r));
+      try { scoreNarrative(c, pool); } catch (e) { logEvent("error", `narrative score: ${e.message}`); }
+    }
+  } finally { scoringNarratives = false; }
+}
+function scoreNarrative(c, pool) {
+  {
     const kw = json(c.keywords, []);
-    const coins = matchCoins(kw, c.t - 24 * H);
+    const coins = matchCoins(kw, c.t - 24 * H, pool);
     // The market cap each coin had when the call was made; kept from the first match onward.
     const before = new Map(json(c.matches, []).map((m) => [m.mint, "base" in m ? m.base : m.mcap]));
     let bestMult = 0, bestPeak = 0, after = 0;
