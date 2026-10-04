@@ -649,6 +649,9 @@ const server = http.createServer(async (req, res) => {
     // The full coin page (coin.js): live ledger, top traders, early buyers, the dev's coins, recent trades.
     const cpm = p.match(new RegExp(`^/api/coin/(${MINT})(/trades)?$`));
     if (cpm) return send(res, 200, cpm[2] ? await coin.coinTrades(cpm[1], params) : coin.coinPage(cpm[1], params));
+    // The paper wallet: how much fake SOL is left, and starting over.
+    if (p === "/api/paper/wallet") return send(res, 200, cached("paper-wallet", 1000, paper.wallet));
+    if (p === "/api/paper/reset" && POST) { const b = await readBody(req); forget("paper-wallet"); return send(res, 200, { wallet: paper.resetWallet(b.sol), desk: paper.desk() }); }
     if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
     if (p === "/api/paper") {
       if (POST) { const b = await readBody(req); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }

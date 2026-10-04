@@ -8,8 +8,8 @@
 // curve math with its real fee for coins on the curve, Jupiter's route for bonded coins. Such a position
 // holds a token amount and is valued at what selling it would return right now, price impact and fees
 // included. Older positions without a token amount keep the flat model (3% cost each way).
-import { db, logEvent } from "./db.js";
-import { settings } from "./settings.js";
+import { db, logEvent, meta } from "./db.js";
+import { settings, saveSettings } from "./settings.js";
 import { liveStats, feed } from "./livetrades.js";
 import { dexTokens } from "./sources.js";
 import { fastMcap } from "./pulse.js";
@@ -61,6 +61,44 @@ async function pollDex(mints) {
   } catch (e) { dexNext = now() + (e.status === 429 ? 15_000 : 5000); } finally { dexBusy = false; }
 }
 
+// ---------- the paper wallet ----------
+// Paper trading uses fake money, but a limited amount of it, so results mean something: the wallet starts
+// with settings.paperStartSol, every buy takes SOL out, every sell puts back what the sale returned. A reset
+// closes whatever is open and starts the count again from now (older trades stay in the history).
+const epoch = () => Number(meta.get("paper_epoch", 0)) || 0;
+const returned = (p) => p.exit_sol > 0 ? p.exit_sol : p.usd > 0 ? p.sol * (1 + (p.pnl || 0) / p.usd) : p.sol;
+export function wallet() {
+  const since = epoch(), start = Number(settings.paperStartSol) > 0 ? Number(settings.paperStartSol) : 10;
+  const rows = db.prepare("SELECT * FROM paper WHERE t >= ?").all(since);
+  let cash = start, openCost = 0, openValue = 0, unpriced = 0, realized = 0;
+  for (const p of rows) {
+    cash -= p.sol;
+    if (p.status === "closed") { const back = Math.max(0, returned(p)); cash += back; realized += back - p.sol; }
+    else {
+      openCost += p.sol;
+      const o = out(p), v = o.valueSol ?? (o.mult != null ? p.sol * o.mult : null);
+      if (v == null) { unpriced++; openValue += p.sol; } else openValue += v;
+    }
+  }
+  cash = Math.max(0, cash);
+  return { start, cash: +cash.toFixed(6), equity: +(cash + openValue).toFixed(6), openCost: +openCost.toFixed(6), realized: +realized.toFixed(6),
+    pnl: +(cash + openValue - start).toFixed(6), open: rows.filter((p) => p.status === "open").length, trades: rows.length, unpriced, since: since || null, solUsd: feed.solUsd };
+}
+function spend(sol) {
+  const w = wallet();
+  if (sol > w.cash + 1e-9) throw Object.assign(new Error(`Not enough paper SOL: you have ${w.cash.toFixed(3)} and this buy needs ${sol}. Sell something, or reset the paper wallet in Settings.`), { status: 409 });
+}
+export function resetWallet(startSol) {
+  for (const p of db.prepare("SELECT id FROM paper WHERE status = 'open'").all()) {
+    try { sell(p.id, 100, { why: "paper wallet reset" }); }
+    catch { db.prepare("UPDATE paper SET status = 'closed', exit_t = ?, exit_why = 'paper wallet reset (no price)', pnl = 0, exit_mcap = last WHERE id = ?").run(now(), p.id); }
+  }
+  if (Number(startSol) > 0 && Number(startSol) <= 100000) saveSettings({ paperStartSol: Number(startSol) });
+  meta.set("paper_epoch", now());
+  logEvent("paper", `Paper wallet reset to ${settings.paperStartSol} SOL`);
+  return wallet();
+}
+
 // ---------- positions ----------
 const sym = (mint) => db.prepare("SELECT symbol, name FROM tokens WHERE mint = ?").get(mint) || {};
 let names = () => ({});
@@ -70,6 +108,7 @@ export function open(mint, sol, { symbol, name, tp, sl, trail, note } = {}) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw Object.assign(new Error("That is not a Solana address."), { status: 400 });
   sol = Number(sol);
   if (!(sol > 0) || sol > 1000) throw Object.assign(new Error("Size must be between 0 and 1000 SOL."), { status: 400 });
+  spend(sol);
   const px = priceNow(mint);
   if (!px) throw Object.assign(new Error("No live price for this coin right now, so a paper buy would be a guess."), { status: 409 });
   const t = sym(mint), n = names(mint) || {};
@@ -89,6 +128,7 @@ export async function openQuoted(mint, sol, { symbol, name, tp, sl, trail, note,
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw Object.assign(new Error("That is not a Solana address."), { status: 400 });
   sol = Number(sol);
   if (!(sol > 0) || sol > 1000) throw Object.assign(new Error("Size must be between 0 and 1000 SOL."), { status: 400 });
+  spend(sol);
   const q = await quote(mint, "buy", sol, { slippageBps });
   // Coins with a near-empty curve quote absurd price impact (thousands of %): a fill there is meaningless.
   if (q.impactPct > 50) throw Object.assign(new Error(`This buy would move the price ${Math.round(q.impactPct)}%: too thin to trade at this size.`), { status: 409 });
@@ -302,7 +342,7 @@ export function desk() {
   const openUnpriced = open.filter(p => p.stale || p.pnl == null).length;
   const sum = (list, f) => list.reduce((s, p) => s + (f(p) || 0), 0);
   return {
-    open, closed, sol: feed.solUsd, sizes: sizes(),
+    open, closed, sol: feed.solUsd, sizes: sizes(), wallet: wallet(),
     rule: { tp: settings.paperTake || 0, sl: settings.paperStop || 0, trail: settings.paperTrail || 0 }, cost: PAPER.costPctPerSide,
     summary: { ...totals, open: open.length, openUsd: sum(open, (p) => p.usd), openUnpriced,
       openPnl: openUnpriced ? null : sum(open, (p) => p.pnl) },

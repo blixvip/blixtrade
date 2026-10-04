@@ -1,5 +1,6 @@
 // The right column: 5-minute flow, the paper trade panel at real quotes, your paper position,
 // token info (an icon and a figure each, green when clean, red when not), addresses and links.
+import { loadPaperWallet, paperReady, useTrade } from "@/lib/mode";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
@@ -67,12 +68,14 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
     return () => { alive = false; clearTimeout(t); clearTimeout(timer); };
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  const wallet = useTrade((st) => st.wallet), paperOn = useTrade((st) => st.paper);
   const submit = async () => {
+    if (!paperReady()) return;
     setBusy(true);
     try {
       if (s === "buy") { const d = await post<{ position: { sol: number } }>("paper/quoted", { mint, sol, slippageBps: slip }); toast(`Paper buy $${symbol}: ${d.position.sol} SOL`); }
       else { await post(`paper/${open[0].id}/sellq`, { pct, why: "coin page" }); toast(`Paper sell $${symbol}: ${pct}%`); }
-      onDone();
+      onDone(); loadPaperWallet();
     } catch (e) { toast((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -83,7 +86,11 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
       <div className="flex items-center gap-1.5">
         <button onClick={() => setSide("buy")} className={cn("h-7 rounded-control px-4 text-sm font-bold", s === "buy" ? "bg-up text-on-fill" : "text-muted hover:text-ink")}>Buy</button>
         <button onClick={() => setSide("sell")} disabled={!open.length} className={cn("h-7 rounded-control px-4 text-sm font-bold disabled:opacity-40", s === "sell" ? "bg-down text-on-fill" : "text-muted hover:text-ink")}>Sell</button>
-        <span className="ml-auto"><PaperTag /></span>
+        <span className="ml-auto flex items-center gap-2">
+          {paperOn && wallet && <span className="num text-xs text-muted" title={`Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}`}>{wallet.cash.toFixed(3)} SOL</span>}
+          {!paperOn && <span className="text-xs text-muted">off</span>}
+          <PaperTag />
+        </span>
       </div>
       {s === "buy" ? (
         <div className="flex flex-wrap gap-1.5">

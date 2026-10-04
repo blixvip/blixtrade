@@ -895,3 +895,28 @@ test("chart candles: one-second buckets, and a refresh that asks only for the ne
     assert.equal(rows[5].close, 15);
   }
 });
+
+test("paper wallet: fake SOL is limited, buys spend it, sells return it, a reset starts over", async () => {
+  const P = await import("../server/paper.js");
+  const L = await import("../server/livetrades.js");
+  S.saveSettings({ paperStartSol: 2 });
+  P.resetWallet();
+  L.feed.solUsd = 200; L.feed.connected = true; L.feed.lastMsg = Date.now();
+  const mint = "PaperWa11etTest1111111111111111111111pump";
+  L.recordTrade({ mint, sol: 1, tokens: 1000, buy: true, user: "u", mcSol: 50, progress: 0.2, vSol: 30, vTok: 1e9 });
+  assert.deepEqual([P.wallet().start, P.wallet().cash, P.wallet().open], [2, 2, 0]);
+  const pos = P.open(mint, 1.5);
+  assert.equal(P.wallet().cash, 0.5);
+  assert.throws(() => P.open(mint, 1), /Not enough paper SOL: you have 0\.500/);
+  // The coin doubles; selling puts the proceeds (after the paper costs) back in the wallet.
+  L.recordTrade({ mint, sol: 1, tokens: 1000, buy: true, user: "u", mcSol: 100, progress: 0.3, vSol: 30, vTok: 1e9 });
+  assert.ok(P.wallet().equity > 3, "open positions count at what they would sell for");
+  P.sell(pos.id, 100);
+  const w = P.wallet();
+  assert.ok(w.cash > 3 && w.cash < 3.5, `cash ${w.cash}`); assert.equal(w.open, 0); assert.ok(Math.abs(w.pnl - (w.cash - 2)) < 1e-6);
+  // Reset: back to the starting amount (a new one if given), old trades no longer counted.
+  P.open(mint, 1);
+  const r = P.resetWallet(5);
+  assert.deepEqual([r.start, r.cash, r.open, r.trades], [5, 5, 0, 0]);
+  S.saveSettings({ paperStartSol: 1000 }); P.resetWallet();
+});

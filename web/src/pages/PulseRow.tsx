@@ -5,6 +5,7 @@ import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
 import { ageStr, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
+import { loadPaperWallet, paperReady } from "@/lib/mode";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -154,7 +155,8 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
   const buy = async () => {
-    try { await post("paper/quoted", { mint, sol }); toast(`Paper bought ${sol} SOL of ${t.symbol || "coin"}`); } catch (e) { toast((e as Error).message); }
+    if (!paperReady()) return;
+    try { await post("paper/quoted", { mint, sol }); toast(`Paper bought ${sol} SOL of ${t.symbol || "coin"}`); loadPaperWallet(); } catch (e) { toast((e as Error).message); }
   };
   const copy = () => { navigator.clipboard?.writeText(mint); toast("Contract copied"); };
 

@@ -3,6 +3,7 @@ import { openExchange } from "@/components/Exchange";
 import { compact, pct, tone } from "@/lib/format";
 import { usePulse } from "@/lib/pulse";
 import { loadMe, useMe, useUi } from "@/lib/ui";
+import { loadPaperWallet, setPaper, useTrade } from "@/lib/mode";
 import { cn } from "@/lib/utils";
 import { useFx, type FxMode } from "@/shader/ShaderField";
 import { useShallow } from "zustand/react/shallow";
@@ -138,13 +139,38 @@ export function Rail({ route }: { route: string }) {
   );
 }
 
-// Across the top of the page: what is moving, then the search, Deposit and the wallet.
+// The paper-trading switch: on, every buy and sell button trades fake SOL from the paper wallet, and the
+// SOL left in it shows here. Remembered in this browser.
+function PaperSwitch() {
+  const paper = useTrade((s) => s.paper), w = useTrade((s) => s.wallet);
+  useEffect(() => {
+    if (!paper) return;
+    loadPaperWallet();
+    const t = window.setInterval(() => { if (!document.hidden) loadPaperWallet(); }, 8000);
+    return () => clearInterval(t);
+  }, [paper]);
+  return (
+    <button role="switch" aria-checked={paper} onClick={() => setPaper(!paper)}
+      title={paper ? `Paper trading is on: buys and sells use fake SOL (${w ? w.cash.toFixed(3) : "…"} left of ${w ? w.start : "…"}). Click to switch it off.` : "Paper trading is off. Click to trade with fake SOL."}
+      className={cn("flex h-8 shrink-0 items-center gap-2 rounded-full border px-2.5 text-md font-semibold whitespace-nowrap transition-colors duration-100",
+        paper ? "border-warn/60 text-warn" : "border-rule-2 text-muted hover:text-ink-2")}>
+      <i className={cn("relative block h-4 w-7 rounded-full transition-colors duration-100", paper ? "bg-warn" : "bg-paper-5")}>
+        <i className={cn("absolute top-0.5 block size-3 rounded-full bg-paper transition-[left] duration-100", paper ? "left-3.5" : "left-0.5")} />
+      </i>
+      Paper
+      {paper && w && <span className="num flex items-center gap-1 text-ink"><SolanaLogo className="size-3" />{w.cash.toFixed(2)}</span>}
+    </button>
+  );
+}
+
+// Across the top of the page: what is moving, then the search, the paper switch, Deposit and the wallet.
 export function TopBar() {
   return (
     <header className="flex h-13 shrink-0 items-center gap-3 border-b border-rule bg-paper/80 px-3">
       <Tape />
       <div className="ml-auto flex shrink-0 items-center gap-2.5">
         <Search />
+        <PaperSwitch />
         <Wallet />
       </div>
     </header>

@@ -1,5 +1,6 @@
 // The coin page header: the picture inside its bonding ring with the contract under the name, the live
 // figures (market cap first), and quick paper buys plus the real-money route (Fomo).
+import { loadPaperWallet, paperReady } from "@/lib/mode";
 import { useState, type ReactNode } from "react";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
 import { toast } from "@/components/ui/toast";
@@ -30,7 +31,8 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
   const [busy, setBusy] = useState<number | null>(null);
   const buy = async (sol: number) => {
     setBusy(sol);
-    try { await post("paper/quoted", { mint: t.mint, sol }); toast(`Paper buy $${t.symbol || ""}: ${sol} SOL`); onPaper(); }
+    if (!paperReady()) return;
+    try { await post("paper/quoted", { mint: t.mint, sol }); toast(`Paper buy $${t.symbol || ""}: ${sol} SOL`); onPaper(); loadPaperWallet(); }
     catch (e) { toast((e as Error).message); }
     finally { setBusy(null); }
   };
