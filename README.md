@@ -16,7 +16,7 @@ Axiom / GMGN-style Pulse, live pump.fun feed, holder ledgers, real Jupiter quote
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](CONTRIBUTING.md)
 [![GitHub stars](https://img.shields.io/github/stars/blixvip/blixtrade?style=social)](https://github.com/blixvip/blixtrade/stargazers)
 
-[**Quick start**](#quick-start) · [**Screenshots**](#screenshots) · [**Features**](#what-you-get) · [**vs Axiom / GMGN / Photon**](#how-it-compares) · [**API**](#api) · [**Architecture**](#architecture) · [**Docs**](docs/) · [**Contributing**](CONTRIBUTING.md)
+[**Quick start**](#quick-start) · [**Screenshots**](#screenshots) · [**Features**](#what-you-get) · [**vs Axiom / GMGN / Photon**](#how-it-compares) · [**API**](#api) · [**MCP**](#mcp-server) · [**Architecture**](#architecture) · [**Docs**](docs/) · [**Contributing**](CONTRIBUTING.md)
 
 </div>
 
@@ -93,6 +93,7 @@ Feature check as of October 2026. "Hosted" terminals change fast; corrections we
 | Real quotes (Jupiter) in the trade panel | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Discord + Telegram alerts you fully control | **✓** | partial | ✓ | – | ✓ |
 | REST + SSE API for your own bots | **✓** | – | partial | – | – |
+| MCP server for AI agents (Claude, Cursor, Codex) | **✓** | – | partial | – | – |
 | Hackable: add a column, a filter, a model | **✓** | – | – | – | – |
 
 ## Quick start
@@ -184,7 +185,7 @@ The full stage-by-stage write-up, with every threshold, lives in [docs/HOW-IT-WO
 
 ## API
 
-Blix is a plain HTTP + Server-Sent-Events server on `localhost:4420`. Everything the UI shows is available as JSON, so you can build bots, Discord cogs or your own front end on top. Full reference: [docs/API.md](docs/API.md).
+Blix is a plain HTTP + Server-Sent-Events server on `localhost:4420`. Everything the UI shows is available as JSON, so you can build bots, Discord cogs or your own front end on top. Full reference: [docs/API.md](docs/API.md), or on the web at [trade.blixvip.com/api](https://trade.blixvip.com/api).
 
 ```bash
 # live stream: launches, signals, trades, migrations, paper fills, briefs
@@ -223,6 +224,16 @@ curl -X POST http://localhost:4420/api/paper/quoted -H 'content-type: applicatio
 | `GET /api/perf` · `/api/health` · `/api/events` | track record, health, event log |
 | `GET\|POST /api/settings` · `/api/alerts` · `/api/export` · `POST /api/import` · `/api/backup` · `/api/repair` | configuration and ops |
 
+## MCP server
+
+`mcp/blix-mcp.mjs` turns the API into 20 tools for any MCP client (Claude Code, Claude Desktop, Cursor, Codex, VS Code): market snapshot, Pulse, signals, coins, holders, candles, Jupiter quotes, narratives, AI reads, wallets, Fomo flow, track record, health, and a paper desk. It reads only, plus paper trades; nothing can spend real funds. No dependencies; Blix must be running.
+
+```bash
+claude mcp add blix -- node /path/to/blixtrade/mcp/blix-mcp.mjs
+```
+
+Other clients and the full tool list: [trade.blixvip.com/mcp](https://trade.blixvip.com/mcp). Set `BLIX_URL` if Blix runs on another port or machine.
+
 ## Architecture
 
 Vanilla Node 24 ESM, Node's built-in SQLite, no framework, no bundler, no dependencies. ~12.5k lines.
@@ -258,7 +269,9 @@ server/
   db.js · settings.js · images.js · tape.js · coverage.js
 public/
   index.html · app.js · trade.js · styles.css · tokens.css · trade.css
-worker/          Cloudflare Worker that fronts the tunnel (trade.<yourdomain>)
+  api-docs.js · mcp-tools.js   endpoint and MCP tool lists, shared by the app, the MCP server and the public docs
+mcp/             blix-mcp.mjs: the MCP server (stdio, no dependencies)
+worker/          Cloudflare Worker that fronts the tunnel (trade.<yourdomain>) and serves the public docs pages (site/)
 bin/             supervise.mjs (auto-restart) · open.mjs (open the window) · replay.mjs (backtest exit rules on recorded tapes) · grok-bench.mjs
 test/            radar.test.mjs (npm test)
 data/            SQLite db, settings, logs, backups (git-ignored)

@@ -2138,85 +2138,9 @@ async function viewHealth(main) {
 setInterval(() => { if (route() === "health" && !document.hidden) viewHealth($("#main")).catch(() => {}); }, 10_000);
 
 // ---------- API ----------
-// The reference for the local HTTP API (docs/API.md). Rows are [method, path, what it returns, runnable]:
-// a GET that takes no arguments and has no side effects can be run in place.
-const API_DOCS = [
-  ["Market", [
-    ["GET", "/api/overview", "KPIs: launches per hour, tracking, pass-safety, signals 24h, graduations, health issues", 1],
-    ["GET", "/api/pulse", "The four Pulse columns (new, final stretch, migrated, running) with per-coin stats and AI verdicts", 1],
-    ["GET", "/api/bot", "Anti-slop filter state, today's desk, live counters, narrative scout, early-launch model", 1],
-    ["GET", "/api/tokens?…", "Coins table. Query params mirror the Coins page filters (sort, safety, stage, search)"],
-    ["GET", "/api/token/<mint>", "Full coin detail: price history, safety report, holders summary, socials, research, signals"],
-    ["GET", "/api/token/<mint>/explain", "Claude's explanation of the coin from Blix's data"],
-    ["POST", "/api/token/<mint>/classify", "{ themes, assetClass }. Your correction wins over the automatic classification; null puts it back on automatic"],
-    ["GET", "/api/holders/<mint>?top=25", "Live holder ledger: top holders tagged dev / sniper / bundle, each position, top-10 share"],
-    ["GET", "/api/candles/<mint>?tf=5s|15s|1m|5m|15m|1h", "Market-cap candles built from real trades, with volume"],
-    ["GET", "/api/quote?mint=<mint>&side=buy|sell&amount=<n>&slip=<bps>", "A real Jupiter quote: out amount, price impact, route"],
-  ]],
-  ["Signals, narratives, briefs", [
-    ["GET", "/api/signals?…", "Signals feed. Params: type, safety=passed|unscreened|all, group=coin, limit", 1],
-    ["GET", "/api/narratives", "Themes with heat, launch share, lift vs previous hours, emerging words, lead coins", 1],
-    ["GET", "/api/clusters", "Narrative bursts (same word or same X post within minutes) and Grok's calls on them", 1],
-    ["GET", "/api/briefs", "Last 20 market briefs", 1],
-    ["POST", "/api/brief", "Write a brief now"],
-    ["GET", "/api/events", "Last 80 system events", 1],
-  ]],
-  ["Research and picks", [
-    ["GET", "/api/research", "Research desk status: providers, queue, reads this hour, narratives the AI rates", 1],
-    ["GET", "/api/research/<mint>", "The coin's reads: first read, deep read, grade, thesis, plan, sources"],
-    ["POST", "/api/research/<mint>", "Queue the coin for a fresh read at top priority"],
-    ["GET", "/api/triage", "The first-read gate's record", 1],
-    ["GET", "/api/picks", "Picks scorecard: by stage, by AI call, by reason, by day, running result", 1],
-    ["GET", "/api/picks/all", "Every pick with entry, exit, peak, rule result", 1],
-    ["POST", "/api/picks/review", "Start a self-review (Grok studies the scorecard and rewrites the playbook)"],
-    ["POST", "/api/picks/scout", "Run the narrative scout now"],
-  ]],
-  ["Paper desk", [
-    ["GET", "/api/paper", "The desk: positions, today's and lifetime PnL", 1],
-    ["POST", "/api/paper/quoted", "{ mint, sol, slippageBps?, tp?, sl?, trail? }. Open at the real quote"],
-    ["POST", "/api/paper", "{ mint, sol, tp?, sl?, trail? }. Open at the last price"],
-    ["GET", "/api/paper/<id>/preview?pct=100", "What selling would return at the real quote"],
-    ["POST", "/api/paper/<id>/sellq", "{ pct?, why? }. Sell all or part at the real quote"],
-    ["POST", "/api/paper/<id>/sell", "{ pct?, why? }. Sell at the last price"],
-    ["POST", "/api/paper/<id>/rule", "{ tp?, sl?, trail? }. Take-profit multiple, stop-loss %, trailing %; omitted or zero clears"],
-    ["DELETE", "/api/paper/<id>", "Forget a closed position"],
-  ]],
-  ["Wallets and Fomo", [
-    ["GET", "/api/wallets", "Followed wallets with PnL, smart-money ranking, recent activity, RPC tracking stats", 1],
-    ["POST", "/api/wallets", "{ address, label? }. Follow a wallet"],
-    ["GET", "/api/wallet/<address>", "Wallet detail: swaps, realized / open / sellable PnL, positions, linked wallets, alert rule"],
-    ["POST", "/api/wallet/<address>", "{ scan: true } scans without following; { follow: true, label? } follows; { label?, muted? } updates"],
-    ["DELETE", "/api/wallet/<address>", "Unfollow"],
-    ["GET", "/api/fomo", "Fomo overview: learned fee payer, what Fomo is buying, top Fomo traders", 1],
-    ["POST", "/api/fomo/trader", "{ wallet, handle? }. Mark a wallet as a Fomo wallet"],
-  ]],
-  ["Track record, health, ops", [
-    ["GET", "/api/perf", "Track record per signal type: checked, up 20%+, down 50%+, unsellable, median, worst, reached 2x", 1],
-    ["GET", "/api/health", "Every dependency with last success, last failure, what to do", 1],
-    ["GET", "/api/settings", "Public settings (secrets never returned)", 1],
-    ["POST", "/api/settings", "{ settings: {…}, clear: [\"discordWebhook\", …] }"],
-    ["POST", "/api/test-notify · /api/test-grok · /api/test-fast", "Test a destination or provider with the body's values, without saving"],
-    ["GET", "/api/alerts", "Alert rules (mute / quiet / cooldown), destinations, last 80 deliveries", 1],
-    ["POST", "/api/alerts", "{ scope: \"coin\"|\"wallet\"|\"type\", target, effect, note } or { clear: true, scope, target }"],
-    ["DELETE", "/api/alerts/<id>", "Remove a rule"],
-    ["GET", "/api/export?secrets=1", "One JSON file: settings, wallets, rules, playbook (secrets only with secrets=1)"],
-    ["POST", "/api/import", "The export file"],
-    ["GET · POST", "/api/backup", "List backups · write one now"],
-    ["POST", "/api/repair", "Rebuild derived tables from snapshots"],
-    ["GET", "/api/remote-link", "Local only: the tunnel URL with the remote key"],
-  ]],
-];
-const API_EVENTS = [
-  ["tick", "{ tracking, launchesPerHour, tradesPerSecond, … }", "every few seconds"],
-  ["launch", "a new pump.fun launch (mint, name, symbol, dev, uri)", "sub-second after the chain"],
-  ["live", "live price / mcap / flow updates for coins on the Pulse", "per trade batch"],
-  ["signal", "a new signal (type, mint, symbol, text, safety, score)", "when raised"],
-  ["mig", "a pump.fun graduation / migration", "when detected"],
-  ["pic", "coin image became available", "when fetched"],
-  ["paper", "paper desk changed (fill, sell, rule, stop)", "on change"],
-  ["brief", "a new market brief", "hourly or on demand"],
-];
+// The endpoint list lives in api-docs.js, shared with the public docs page (worker/).
 async function viewApi(main) {
+  const { API_DOCS, API_EVENTS } = await import("/api-docs.js");
   const base = location.origin, n = API_DOCS.reduce((a, [, rows]) => a + rows.length, 0);
   const row = ([m, p, d, run]) => `<tr><td class="mono">${m}</td><td><code data-copy="${esc(base + p)}" title="Copy URL">${esc(p)}</code></td><td>${esc(d)}</td><td>${run ? `<button class="btn sm-btn" data-run="${esc(p.split("?")[0])}">Run</button>` : ""}</td></tr>`;
   const wrap = document.createElement("div");
