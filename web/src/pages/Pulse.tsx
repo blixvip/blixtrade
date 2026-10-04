@@ -15,8 +15,19 @@ const TITLES: Record<string, string> = { new: "New Pairs", stretch: "Final Stret
 const SHOWN = COLS.filter(([col]) => col !== "running");
 const SHOW: [Show, string][] = [["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["buy", "Buy calls"]];
 
-const passes = (t: Coin, show: Show, q: string) => {
-  if (q && !`${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q)) return false;
+// A coin that is already a rug, or cannot end any other way: its pool was emptied, the dev sold everything before it went anywhere,
+// a handful of wallets hold nearly all of it, or the AI failed it outright. These never show on the Pulse,
+// in any display mode. Searching a ticker or contract still finds one.
+export const isRug = (t: Coin) => {
+  const H = t.hl || {}, top10 = H.t10 ?? t.top10 ?? 0, dev = H.dev ?? t.dev ?? 0, holders = H.h ?? t.holders ?? 0, old = Date.now() - t.born > 90_000;
+  // A dev selling out kills a coin that has not gone anywhere; one that kept running after it is a community coin, not a rug.
+  const devDumped = (H.ds === "all" || H.ds === 2) && !t.graduated && (t.mcap ?? 0) < 10_000;
+  return t.warn?.kind === "emptied" || devDumped || (holders >= 15 && top10 >= 80) || (old && dev >= 50) || (H.bd ?? 0) >= 50 || (H.sn ?? 0) >= 50 || t.ai?.grade === "F";
+};
+
+const passes = (t: Coin, show: Show, q: string): boolean => {
+  if (q) return `${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q) && (show === "all" || show === "noslop" || passes(t, show, ""));
+  if (isRug(t)) return false;
   if (show === "noslop") return !(t.tri?.label === "slop" && !t.ai);
   if (show === "rated") return Boolean(t.ai?.rated);
   if (show === "buy") return t.ai?.action === "buy";
@@ -33,7 +44,7 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
   const [preset, setPresetState] = useState<Preset>(() => store.get<Preset>(`pulse:buy:${col}`, PRESET0));
   const setPreset = (p: Preset) => { store.set(`pulse:buy:${col}`, p); setPresetState(p); };
   const q = (own || globalQ).trim().toLowerCase(), sol = preset.sizes[preset.p] || 0.25;
-  const mints = usePulse(useShallow((s) => (show === "all" && !q ? s.cols[col] : s.cols[col].filter((m) => s.coins[m] && passes(s.coins[m], show, q)))));
+  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && passes(s.coins[m], show, q))));
   const loaded = usePulse((s) => s.loaded);
   const scroller = useRef<HTMLDivElement>(null);
   const v = useVirtualizer({ count: mints.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_H, overscan: 6, getItemKey: (i) => mints[i] });
