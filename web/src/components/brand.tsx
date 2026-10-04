@@ -28,7 +28,7 @@ function GrokMark() {
 export function PoweredBy() {
   const line = "h-px flex-1 bg-gradient-to-r from-transparent via-ink/15 to-transparent";
   return (
-    <div aria-label="Powered by Jev and Grok" className="mx-1.5 mb-3 grid gap-[7px]">
+    <div aria-label="Powered by Jev and Grok" className="mb-3 grid gap-[7px]">
       <small className="flex items-center gap-2 text-[9px] font-semibold tracking-[0.18em] text-[oklch(62%_0_0)] uppercase"><i className={line} />Powered by<i className={line} /></small>
       <div className="grid grid-cols-2 overflow-hidden rounded-[9px] border border-ink/10 shadow-[inset_0_1px_0_oklch(100%_0_0/0.06)]"
         style={{ background: "linear-gradient(180deg, oklch(100% 0 0 / 0.045), oklch(100% 0 0 / 0.015))" }}>

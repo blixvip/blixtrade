@@ -78,7 +78,7 @@ function Wallet() {
 
 // What is moving right now: the first few coins of the "running" list.
 function Tape() {
-  const coins = usePulse(useShallow((s) => s.cols.running.slice(0, 10).map((m) => s.coins[m]).filter(Boolean)));
+  const coins = usePulse(useShallow((s) => s.cols.running.slice(0, 24).map((m) => s.coins[m]).filter(Boolean)));
   if (!coins.length) return <div className="min-w-0 flex-1" />;
   return (
     <div className="flex min-w-0 flex-1 items-center gap-5 overflow-hidden text-md whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] max-md:hidden">
@@ -119,7 +119,7 @@ export function Rail({ route }: { route: string }) {
   const { mode, auto, set } = useFx();
   return (
     <aside className="flex h-dvh w-48 shrink-0 flex-col gap-1 border-r border-rule bg-paper/80 px-2 py-3 max-md:hidden">
-      <a href="#/" aria-label="Blix, home" className="mb-2 block px-2"><Mark /></a>
+      <a href="#/" aria-label="Blix, home" className="mb-2 block px-1"><Mark /></a>
       <PoweredBy />
       <nav aria-label="Pages" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {SIDE.map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
@@ -152,7 +152,7 @@ function PaperSwitch() {
   return (
     <button role="switch" aria-checked={paper} onClick={() => setPaper(!paper)}
       title={paper ? `Paper trading is on: buys and sells use fake SOL (${w ? w.cash.toFixed(3) : "…"} left of ${w ? w.start : "…"}). Click to switch it off.` : "Paper trading is off. Click to trade with fake SOL."}
-      className={cn("flex h-8 shrink-0 items-center gap-2 rounded-full border px-2.5 text-md font-semibold whitespace-nowrap transition-colors duration-100",
+      className={cn("flex h-9 shrink-0 items-center gap-2 rounded-full border px-3 text-md font-semibold whitespace-nowrap transition-colors duration-100",
         paper ? "border-warn/60 text-warn" : "border-rule-2 text-muted hover:text-ink-2")}>
       <i className={cn("relative block h-4 w-7 rounded-full transition-colors duration-100", paper ? "bg-warn" : "bg-paper-5")}>
         <i className={cn("absolute top-0.5 block size-3 rounded-full bg-paper transition-[left] duration-100", paper ? "left-3.5" : "left-0.5")} />

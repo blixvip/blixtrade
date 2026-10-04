@@ -63,7 +63,7 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
           </span>
         </div>
       </header>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-width:none]">
         {!loaded ? <p className="p-4 text-md text-muted">Loading…</p>
           : !mints.length ? <p className="p-4 text-md text-muted">{q || show !== "all" ? "Nothing matches the filter." : "Nothing here right now."}</p>
           : (
@@ -85,7 +85,7 @@ export function Pulse() {
   const [show, setShowState] = useState<Show>(() => store.get<Show>("pulse:show", "noslop"));
   const setShow = (v: Show) => { store.set("pulse:show", v); setShowState(v); };
   return (
-    <div className="flex h-full min-w-0 flex-col gap-3 px-3 pt-3 pb-2 max-md:h-auto">
+    <div className="flex h-full min-w-0 flex-col gap-3 p-3 max-md:h-auto">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl leading-none font-bold tracking-tight text-ink">Pulse</h1>
         <span className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper px-3 text-md font-medium text-ink" title="Blix is Solana only"><Sol className="size-3.5" />Solana</span>
