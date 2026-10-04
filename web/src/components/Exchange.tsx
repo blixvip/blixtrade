@@ -37,10 +37,27 @@ function Qr({ text }: { text: string }) {
     return { n, d };
   }, [text]);
   return (
-    <span className="relative block size-40 shrink-0 rounded-[14px] bg-white p-2.5 max-sm:size-32">
+    <span className="relative block size-48 shrink-0 rounded-[14px] bg-white p-3 max-sm:size-36 max-sm:p-2.5">
       <svg viewBox={`0 0 ${n} ${n}`} shapeRendering="crispEdges" role="img" aria-label="QR code of your deposit address" className="size-full"><path d={d} fill="#000" /></svg>
-      <span className="absolute top-1/2 left-1/2 grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black ring-[3px] ring-white"><SolanaLogo className="w-4.5" /></span>
+      <span className="absolute top-1/2 left-1/2 grid size-11 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black ring-[3px] ring-white max-sm:size-9"><SolanaLogo className="w-5.5 max-sm:w-4.5" /></span>
     </span>
+  );
+}
+
+// The window's left side (its top on a phone): a Solana coin in hand, falling to the window's colour at the
+// edge so the picture sits in the window rather than on it, with a caption over its foot.
+function Art() {
+  return (
+    <>
+      <img src="/brand/deposit-sol.webp" alt="" draggable={false} className="absolute inset-0 size-full object-cover object-[50%_36%] select-none" />
+      <span aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/15 to-transparent" />
+      <span aria-hidden className="absolute inset-y-0 right-0 w-16 bg-gradient-to-r from-transparent to-paper-2 max-md:hidden" />
+      <div className="absolute inset-x-0 bottom-0 p-7 max-md:hidden">
+        <span className="label tracking-[0.16em] text-ink-2">Your Blix wallet</span>
+        <p className="chrome-text mt-1.5 font-display text-[28px] leading-tight font-bold tracking-tight">Fund it in a minute</p>
+        <p className="mt-2 max-w-[32ch] text-md leading-relaxed text-ink-2">Send SOL, USDC or any Solana token, or buy SOL with a card. It shows in your wallet within a minute.</p>
+      </div>
+    </>
   );
 }
 
@@ -143,7 +160,7 @@ export function Exchange() {
   useEffect(() => { if (tab) loadMe(); }, [tab]);
   const usdc = me?.wallet?.tokens?.find((t) => t.mint === USDC)?.ui ?? 0;
   return (
-    <Dialog open={tab !== null} onOpenChange={(o) => !o && useExchange.setState({ tab: null })} title="Exchange">
+    <Dialog open={tab !== null} onOpenChange={(o) => !o && useExchange.setState({ tab: null })} title="Exchange" wide aside={<Art />}>
       {tab && (!me ? <div className="h-40 animate-pulse rounded-card bg-paper-3" /> : !me.signedIn || !me.address ? (
         <>
           <p className="text-md text-ink-2">Sign in to get your wallet. Your first sign-in creates it.</p>

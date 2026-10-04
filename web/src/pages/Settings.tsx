@@ -19,7 +19,10 @@ const GROUPS: [name: string, match: RegExp][] = [
   ["Trading", /^(quickSizes|paper)/],
   ["AI reads", /^(research|queueMax|fast|grok|triage|earlyAuto|claudeFast|deep|quick|aiInGate|scout|narrative|reviewMinNew)/],
 ];
-const label = (k: string) => k.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/\b(Mcap|Pct|Min|Pwin|Ai|Rpc|Liq|Vol)\b/gi, (w) => (({ mcap: "market cap", pct: "%", min: "min", pwin: "win chance", ai: "AI", rpc: "RPC", liq: "liquidity", vol: "volume" }) as Record<string, string>)[w.toLowerCase()]);
+// A setting's key as a plain label: "nurseryMinVol5m" reads "Nursery min volume 5m".
+const WORDS: Record<string, string> = { mcap: "market cap", pct: "%", pwin: "win chance", ai: "AI", rpc: "RPC", liq: "liquidity", vol: "volume", sol: "SOL", fomo: "Fomo", grok: "Grok", claude: "Claude",
+  telegram: "Telegram", discord: "Discord", jupiter: "Jupiter", groq: "Groq", ws: "websocket", url: "URL" };
+const label = (k: string) => k.replace(/([a-z])([A-Z0-9])/g, "$1 $2").toLowerCase().split(" ").map((w) => WORDS[w] ?? w).join(" ").replace(/^[a-z]/, (c) => c.toUpperCase());
 const same = (a: J, b: J) => JSON.stringify(a) === JSON.stringify(b);
 const field = "h-8 rounded-control border border-rule-2 bg-paper px-2.5 text-md text-ink outline-none focus:border-accent-dim";
 
@@ -27,12 +30,12 @@ function Field({ k, v, def, on }: { k: string; v: J; def: J; on: (v: J) => void 
   const changed = def !== undefined && !same(v, def);
   return (
     <label className="flex min-h-11 items-center justify-between gap-4 border-t border-rule px-4 py-1.5 first:border-t-0">
-      <span className="min-w-0 text-md text-ink-2">{label(k)}{changed && <span className="ml-2 text-sm text-muted">default {Array.isArray(def) ? def.join(", ") : String(def === "" ? "empty" : def)}</span>}</span>
+      <span className="min-w-0 text-md text-ink-2">{label(k)}{changed && !Array.isArray(def) && <span className="ml-2 text-sm whitespace-nowrap text-muted">default {String(def === "" ? "empty" : def)}</span>}</span>
       {typeof v === "boolean" ? (
         <button type="button" role="switch" aria-checked={v} aria-label={label(k)} onClick={() => on(!v)} className={cn("relative h-6 w-10 shrink-0 rounded-full border transition-colors", v ? "border-accent bg-accent" : "border-rule-2 bg-paper-4")}>
           <i className={cn("absolute top-0.5 size-4.5 rounded-full transition-[left]", v ? "left-[18px] bg-accent-ink" : "left-0.5 bg-ink-2")} /></button>
       ) : typeof v === "number" ? <input type="number" step="any" value={v} onChange={(e) => on(e.target.value === "" ? 0 : +e.target.value)} className={cn(field, "num w-28 text-right")} />
-        : Array.isArray(v) ? <input value={v.join(", ")} onChange={(e) => on(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} className={cn(field, "w-[min(28rem,55%)]")} />
+        : Array.isArray(v) ? <input value={v.join(", ")} onChange={(e) => on(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} className={cn(field, "w-[min(30rem,70%)]")} />
         : <input value={v ?? ""} onChange={(e) => on(e.target.value)} className={cn(field, "w-56")} />}
     </label>
   );
@@ -91,7 +94,7 @@ export function Settings() {
     <Page title="Settings" sub="Changes apply as soon as they are saved."
       right={<span className="flex items-center gap-2">{dirty.length > 0 && <Tag tone="warn">{dirty.length} unsaved</Tag>}<Button size="lg" disabled={!dirty.length || busy} onClick={() => setDraft({})}>Discard</Button>
         <Button size="lg" variant="primary" disabled={!dirty.length || busy} onClick={save}>{busy ? "Saving…" : "Save"}</Button></span>}>
-      <div className="grid items-start gap-3 grid-cols-[repeat(2,minmax(0,1fr))] max-xl:grid-cols-[minmax(0,1fr)]">
+      <div className="columns-2 gap-3 max-xl:columns-1 [&>*]:mb-3 [&>*]:break-inside-avoid">
         <PaperCard />
         {groups.map(([name, ks]) => (
           <Panel key={name} title={name}>{ks.map((k) => <Field key={k} k={k} v={k in draft ? draft[k] : res.settings[k]} def={res.defaults?.[k]} on={(v) => setDraft((d) => ({ ...d, [k]: v }))} />)}</Panel>))}

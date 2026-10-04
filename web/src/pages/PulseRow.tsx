@@ -5,7 +5,8 @@ import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
 import { ageStr, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
-import { loadPaperWallet, paperReady } from "@/lib/mode";
+import { useTrade } from "@/lib/mode";
+import { trade } from "@/lib/trade";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -154,9 +155,14 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const handle = xHandle(t.x);
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
+  const paper = useTrade((st) => st.paper);
+  const [buying, setBuying] = useState<null | "busy" | "filled">(null);
   const buy = async () => {
-    if (!paperReady()) return;
-    try { await post("paper/quoted", { mint, sol }); toast(`Paper bought ${sol} SOL of ${t.symbol || "coin"}`); loadPaperWallet(); } catch (e) { toast((e as Error).message); }
+    if (buying) return;
+    setBuying("busy");
+    const ok = await trade({ side: "buy", mint, symbol: t.symbol || "", sol }, () => post("paper/quoted", { mint, sol }));
+    setBuying(ok ? "filled" : null);
+    if (ok) setTimeout(() => setBuying(null), 900);
   };
   const copy = () => { navigator.clipboard?.writeText(mint); toast("Contract copied"); };
 
@@ -171,7 +177,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
 
       <div className="flex min-w-0 flex-1 flex-col justify-between">
         <div className="flex items-center gap-1.5">
-          <b className="text-lg leading-tight font-bold whitespace-nowrap text-ink">{t.symbol || "?"}</b>
+          <b className="text-lg leading-tight font-bold whitespace-nowrap text-ink">{(t.symbol || "").trim() || "?"}</b>
           <span className="min-w-0 truncate text-lg leading-tight text-muted">{t.name}</span>
           <Tip tip="Copy contract address"><button onClick={copy} aria-label="Copy contract address" className="shrink-0 text-muted hover:text-ink [&_svg]:size-3.5"><Icon.copy /></button></Tip>
           <span className="ml-auto flex shrink-0 items-baseline gap-2.5 pl-2 whitespace-nowrap">
@@ -223,8 +229,8 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {(t.devCount ?? 0) >= 4 && <Chip icon={<Icon.ghost />} text={`×${t.devCount}`} state={(t.devCount ?? 0) >= 10 ? "bad" : "info"} tip="Coins this dev wallet launched in the last 6 hours" />}
             {t.win && <Chip icon={<Icon.curve />} text={`${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}`} state={t.win.netSol < 0 ? "bad" : "ok"} tip={`Last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, net SOL bought`} />}
           </div>
-          <Tip tip={`Paper buy ${sol} SOL at the price this second. Nothing is really bought.`}>
-            <button onClick={buy} className="num flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink-2 px-3 text-md font-bold whitespace-nowrap text-on-fill transition-[background-color,transform] duration-100 hover:bg-ink active:scale-95 [&_svg]:size-3.5 [&_svg]:fill-current">
+          <Tip tip={paper ? `Paper buy ${sol} SOL at the price this second. Nothing is really bought.` : `Buy ${sol} SOL of it now with real SOL from your wallet.`}>
+            <button onClick={buy} aria-busy={buying === "busy"} className={cn(buying === "filled" && "animate-tx-fill", buying === "busy" && "[&_svg]:animate-pulse", "num flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink-2 px-3 text-md font-bold whitespace-nowrap text-on-fill transition-[background-color,transform] duration-100 hover:bg-ink active:scale-95 [&_svg]:size-3.5 [&_svg]:fill-current")}>
               <Icon.bolt />{sol} SOL
             </button>
           </Tip>

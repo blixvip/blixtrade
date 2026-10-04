@@ -5,7 +5,7 @@ export const useUi = create<{ q: string }>(() => ({ q: "" }));
 
 // Who is signed in and what their wallet holds, for the top bar. Asked again every half minute.
 export interface Me { signedIn: boolean; email?: string; name?: string | null; picture?: string | null; address?: string;
-  wallet?: { sol: number; tokens?: { mint: string; ui: number }[] } | null; onramp?: { stripe?: boolean } }
+  wallet?: { sol: number; solUsd?: number; tokens?: { mint: string; ui: number; usd?: number | null }[] } | null; onramp?: { stripe?: boolean } }
 export const useMe = create<{ me: Me | null }>(() => ({ me: null }));
 export async function loadMe() {
   try {

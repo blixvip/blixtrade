@@ -75,6 +75,19 @@
   @keyframes flash-down { from { color: var(--color-down); } }
   @keyframes row-in { from { opacity: 0; transform: translateY(-6px); } }
   @keyframes sweep { to { transform: rotate(360deg); } }
+  /* A transaction: its toast drops in, the tick draws itself, a failure shakes, a fill lights the button. */
+  --animate-tx-in: tx-in 260ms var(--ease-out);
+  --animate-tx-shake: tx-in 260ms var(--ease-out), tx-shake 360ms 120ms ease-in-out;
+  --animate-tx-ring: tx-draw 380ms var(--ease-out) both;
+  --animate-tx-tick: tx-draw 260ms 240ms var(--ease-out) both;
+  --animate-tx-bar-ok: tx-bar 5s linear forwards;
+  --animate-tx-bar-fail: tx-bar 7s linear forwards;
+  --animate-tx-fill: tx-fill 900ms var(--ease-out);
+  @keyframes tx-in { from { opacity: 0; transform: translateY(-14px) scale(0.96); } }
+  @keyframes tx-shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+  @keyframes tx-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes tx-bar { to { transform: scaleX(0); } }
+  @keyframes tx-fill { from { box-shadow: 0 0 0 0 var(--color-up), inset 0 0 0 99px color-mix(in oklch, var(--color-up) 45%, transparent); } to { box-shadow: 0 0 0 10px transparent, inset 0 0 0 99px transparent; } }
 }
 
 @layer base {

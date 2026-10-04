@@ -69,8 +69,8 @@ function Wallet() {
         <Icon.wallets className="size-4 text-muted" />
         {me?.signedIn ? <><Sol className="size-3.5 text-ink-2" /><span className="num">{me.wallet ? me.wallet.sol.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "—"}</span></> : "Sign in"}
       </a>
-      <a href="#/account" aria-label="Account" className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-rule-2 bg-paper-3 text-md font-semibold text-ink-2 hover:border-muted">
-        {me?.signedIn && me.picture ? <img src={me.picture} alt="" referrerPolicy="no-referrer" className="size-full object-cover" /> : me?.signedIn ? initial : <Icon.user className="size-4" />}
+      <a href="#/account" aria-label="Account" title={me?.signedIn ? me.name || me.email || "Account" : "Sign in"} className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-rule-2 bg-black transition-colors duration-100 hover:border-muted">
+        <picture><source srcSet="/brand/bx.webp" type="image/webp" /><img src="/brand/bx.png" alt="" width={36} height={36} draggable={false} className="size-full scale-[1.3] object-cover select-none" /></picture>
       </a>
     </>
   );
@@ -99,7 +99,7 @@ function Tape() {
 
 // The rail, in the same order as classic Blix. Settings sits apart at the bottom.
 const SIDE: (Item | [...Item, string])[] = [["", "Pulse", Icon.pulse, "LIVE"], ["signals", "Signals", Icon.signals], ["picks", "Picks", Icon.picks, "AI"], ["research", "Research", Icon.research],
-  ["narratives", "Narratives", Icon.narratives], ["coins", "Coins", Icon.coins], ["wallets", "Wallets", Icon.wallets], ["briefs", "Briefs", Icon.briefs], ["record", "Track record", Icon.record],
+  ["narratives", "Narratives", Icon.narratives], ["coins", "Discover", Icon.coins], ["wallets", "Trackers", Icon.wallets], ["briefs", "Briefs", Icon.briefs], ["record", "Track record", Icon.record],
   ["health", "Health", Icon.health], ["api", "API", Icon.api], ["mcp", "MCP", Icon.mcp], ["account", "Account", Icon.user]];
 
 function RailLink({ item: [route, label, Ic, badge], active }: { item: Item | [...Item, string]; active: boolean }) {
@@ -180,10 +180,11 @@ export function TopBar() {
 // Phones: the rail does not fit, so the main pages sit along the bottom.
 export function BottomBar({ route }: { route: string }) {
   return (
-    <nav aria-label="Pages" className="hidden shrink-0 border-t border-rule bg-paper-2 max-md:flex">
-      {([["", "Pulse", Icon.pulse], ["signals", "Signals", Icon.signals], ["picks", "Picks", Icon.picks], ["coins", "Coins", Icon.coins], ["account", "Account", Icon.user]] as Item[]).map(([r, label, Ic]) => (
+    <nav aria-label="Pages" className="hidden shrink-0 overflow-x-auto border-t border-rule bg-paper-2 [scrollbar-width:none] max-md:flex">
+      {/* Every page, the main ones first; it scrolls sideways for the rest. */}
+      {([...SIDE, ["settings", "Settings", Icon.settings]] as Item[]).map(([r, label, Ic]) => (
         <a key={r} href={`#/${r}`} aria-current={route === r ? "page" : undefined}
-          className={cn("flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-2xs whitespace-nowrap", route === r ? "text-ink" : "text-muted")}>
+          className={cn("flex w-[4.6rem] shrink-0 flex-col items-center gap-1 py-2 text-2xs whitespace-nowrap", route === r ? "text-ink" : "text-muted")}>
           <Ic className="size-4.5" />{label}
         </a>
       ))}

@@ -19,7 +19,7 @@ export function Briefs() {
     <Page title="Briefs" sub="The AI's read of the market, written every hour." right={<Button size="lg" variant="primary" className="rounded-full" disabled={busy} onClick={write}>{busy ? "Writing…" : "Write one now"}</Button>}>
       {!d ? (error ? <Problem text={error} /> : <Loading />) : d.length ? d.map((b) => (
         <Panel key={b.id} title={new Date(b.t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} aside={`${providerOf(b.model)} · ${ago(b.t)}${b.status !== "complete" ? ` · ${b.status}` : ""}`}>
-          <div className="max-w-[80ch] p-4"><Markdown src={b.body || ""} /></div>
+          <div className="p-4 xl:columns-2 xl:gap-10 [&_h3]:break-after-avoid [&_li]:break-inside-avoid [&_p]:break-inside-avoid"><Markdown src={b.body || ""} /></div>
         </Panel>)) : <Panel><Empty>No briefs yet.</Empty></Panel>}
     </Page>
   );
@@ -52,7 +52,7 @@ export function Record() {
               <td className={cn(tdR, "font-semibold", toneX(r.median1h))}>{mult(r.median1h)}</td><td className={tdR}>{share(r.twoX, r.peaks)}</td></tr>); })}
         </tbody></table></Scroll>
       </Panel>
-      <div className="grid items-start gap-3 grid-cols-[repeat(2,minmax(0,1fr))] max-xl:grid-cols-[minmax(0,1fr)]">
+      <div className="grid items-start gap-3 grid-cols-[repeat(2,minmax(0,1fr))] max-2xl:grid-cols-[minmax(0,1fr)]">
         {([["Best calls", d.best], ["Worst calls", d.worst]] as [string, J[]][]).map(([title, rows]) => (
           <Panel key={title} title={title}>
             <Scroll><table className="w-full text-md"><thead><tr><th className={th}>Coin</th><th className={th}>Alert</th><th className={thR}>Peak</th><th className={thR}>After 1h</th><th className={thR}>Now</th><th className={thR}>When</th></tr></thead><tbody>
@@ -83,7 +83,7 @@ export function Health() {
             <div key={p.key} className="flex flex-wrap items-start gap-x-4 gap-y-1 border-t border-rule px-4 py-3 first:border-t-0">
               <span className="w-24 shrink-0"><Tag tone={tone}>{label}</Tag></span>
               <div className="min-w-0 flex-1 basis-80"><b className="font-semibold">{p.name}</b><p className="text-md text-ink-2">{p.summary}</p>{p.fix && p.state !== "ok" && <p className="mt-1 text-md text-ink"><b className="font-semibold">What to do:</b> {p.fix}</p>}</div>
-              <div className="num flex shrink-0 flex-col items-end text-sm text-muted">{(p.lastOk || p.lastFail) && <span>last success {ago(p.lastOk)}</span>}{p.lastFail && <span>last failure {ago(p.lastFail)}</span>}</div>
+              <div className="num flex shrink-0 flex-col items-end text-sm text-muted">{p.lastOk && <span>last success {ago(p.lastOk)}</span>}{p.lastFail && <span>last failure {ago(p.lastFail)}</span>}</div>
             </div>);
         })}
       </Panel>
