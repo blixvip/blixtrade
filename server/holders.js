@@ -140,9 +140,16 @@ async function saveState() {
   if (saving || !books.size) return;
   saving = true;
   try {
-    const out = [];
-    for (const b of books.values()) if (now() - b.last < QUIET) out.push({ ...b, sum: undefined, bal: [...b.bal], snipers: [...b.snipers], bundle: [...b.bundle] });
-    await fs.promises.writeFile(STATE_FILE + ".tmp", JSON.stringify({ t: now(), books: out }));
+    // Written a few books at a time: turning the whole ledger (tens of thousands of wallets) into text in
+    // one go held the radar up for most of a second, every time.
+    const out = [], t = now();
+    let n = 0;
+    for (const b of books.values()) {
+      if (t - b.last >= QUIET) continue;
+      out.push(JSON.stringify({ ...b, sum: undefined, bal: [...b.bal], snipers: [...b.snipers], bundle: [...b.bundle] }));
+      if (++n % 40 === 0) await new Promise((go) => setImmediate(go));
+    }
+    await fs.promises.writeFile(STATE_FILE + ".tmp", `{"t":${t},"books":[${out.join(",")}]}`);
     await fs.promises.rename(STATE_FILE + ".tmp", STATE_FILE);
   } catch {} finally { saving = false; }
 }
@@ -162,7 +169,7 @@ export function startHolders() {
   loadState();
   onLiveTrade(onTrade);
   setInterval(prune, 30_000);
-  setInterval(saveState, 10_000);
+  setInterval(saveState, 20_000);
 }
 
 export const solUsd = () => feed.solUsd;

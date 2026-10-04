@@ -626,7 +626,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
     if (p === "/api/research") return send(res, 200, cached("research", 6000, research.desk));
     if (p === "/api/pulse") return send(res, 200, pulseData());
-    if (p === "/api/bot") return send(res, 200, cached("bot", 1000, () => ({ anti: antiSlop(), day: brain.dayData(), live: pulseData().live, scout: research.scoutStats, early: earlyData() })));
+    if (p === "/api/bot") return send(res, 200, cached("bot", 3000, () => ({ anti: antiSlop(), day: brain.dayData(), live: pulseData().live, scout: research.scoutStats, early: earlyData() })));
     if (p === "/api/triage") return send(res, 200, cached("triage", 30000, triageRecord));
     if (p === "/api/picks") return send(res, 200, cached("picks", 8000, brain.picksData));
     if (p === "/api/picks/all") return send(res, 200, cached("picks-all", 3000, brain.allPicks));

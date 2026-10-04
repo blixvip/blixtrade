@@ -76,7 +76,15 @@ export function bondingProgress(t) {
 
 // Real memecoins with a believable price only.
 const MEME = "quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'";
+// Asked for by the scout, the research desk and every Pulse refresh; the answer only changes when stored
+// prices do, so one reading is shared for three seconds.
+let candCache = { t: 0, v: null };
 export function candidates() {
+  if (candCache.v && Date.now() - candCache.t < 3000) return candCache.v;
+  candCache = { t: Date.now(), v: readCandidates() };
+  return candCache.v;
+}
+function readCandidates() {
   const near = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND pair IS NOT NULL AND ${MEME} ORDER BY mcap DESC LIMIT 200`).all()
     .map((t) => ({ ...t, progress: bondingProgress(t) })).filter((t) => t.progress >= 0.6 && t.progress < 0.995).sort((a, b) => b.progress - a.progress);
   const bonded = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND ${MEME}
@@ -659,6 +667,9 @@ function scoutOnce() {
       logEvent("research", `$${t.symbol} is taking off (traction ${tr}, ${r.mcap_at > 0 ? `${(m / r.mcap_at).toFixed(1)}x since its last read` : "no price at its last read"}): reading it again`);
     }
   }
+  // The stored-price view of the same market moves every half minute at best, so it is read every fifth
+  // second, not every second (each read walks the tracked coins and was the scout's whole cost).
+  if (scoutStats.runs % 5 !== 0) return;
   const { near, bonded } = candidates();
   for (const t of near) {
     if (t.progress < (fast ? 0.6 : 0.8) || (t.vol_h1 || 0) < (fast ? 3000 : 8000) || json(t.safety)?.danger > 0) continue;
