@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Segmented } from "@/components/ui/segmented";
 import { COLS, usePulse, type Coin, type ColKey } from "@/lib/pulse";
@@ -7,7 +7,9 @@ import { useUi } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { Sol } from "@/shell/Rail";
-import { PulseRow, ROW_H } from "./PulseRow";
+import { rowHeight, usePrefs, type PulseCol, type PulsePrefs } from "@/lib/prefs";
+import { PulseRow } from "./PulseRow";
+import { PulseSettings } from "./PulseSettings";
 
 type Show = "all" | "noslop" | "rated" | "buy";
 // The columns on this page. "Running now" is left out: New Pairs, Final Stretch and Migrated are the page.
@@ -25,9 +27,23 @@ export const isRug = (t: Coin) => {
   return t.warn?.kind === "emptied" || devDumped || (holders >= 15 && top10 >= 80) || (old && dev >= 50) || (H.bd ?? 0) >= 50 || (H.sn ?? 0) >= 50 || t.ai?.grade === "F";
 };
 
-const passes = (t: Coin, show: Show, q: string): boolean => {
-  if (q) return `${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q) && (show === "all" || show === "noslop" || passes(t, show, ""));
-  if (isRug(t)) return false;
+// The visitor's own filters (Pulse settings). A figure that is not known yet passes a "most" limit and fails a "least" one.
+const fits = (t: Coin, f: PulsePrefs) => {
+  const H = t.hl || {}, mcap = t.mcap ?? 0, vol = t.vol ?? t.liveVol ?? 0, holders = H.h ?? t.holders ?? 0, top10 = H.t10 ?? t.top10, dev = H.dev ?? t.dev;
+  if (f.minMcap != null && mcap < f.minMcap) return false;
+  if (f.maxMcap != null && mcap > f.maxMcap) return false;
+  if (f.minVol != null && vol < f.minVol) return false;
+  if (f.minHolders != null && holders < f.minHolders) return false;
+  if (f.maxTop10 != null && top10 != null && top10 > f.maxTop10) return false;
+  if (f.maxDev != null && dev != null && dev > f.maxDev) return false;
+  if (f.maxAgeMin != null && Date.now() - t.born > f.maxAgeMin * 60_000) return false;
+  if (f.socials && !(t.x || t.web || t.tg)) return false;
+  return true;
+};
+
+const passes = (t: Coin, show: Show, q: string, f: PulsePrefs): boolean => {
+  if (q) return `${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q) && (show === "all" || show === "noslop" || passes(t, show, "", f));
+  if (isRug(t) || !fits(t, f)) return false;
   if (show === "noslop") return !(t.tri?.label === "slop" && !t.ai);
   if (show === "rated") return Boolean(t.ai?.rated);
   if (show === "buy") return t.ai?.action === "buy";
@@ -39,15 +55,15 @@ interface Preset { p: number; sizes: number[] }
 const PRESET0: Preset = { p: 0, sizes: [0.25, 0.5, 1] };
 
 function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: string }) {
-  const title = TITLES[col];
+  const title = TITLES[col], prefs = usePrefs(), rowH = rowHeight(prefs);
   const [own, setOwn] = useState("");
   const [preset, setPresetState] = useState<Preset>(() => store.get<Preset>(`pulse:buy:${col}`, PRESET0));
   const setPreset = (p: Preset) => { store.set(`pulse:buy:${col}`, p); setPresetState(p); };
   const q = (own || globalQ).trim().toLowerCase(), sol = preset.sizes[preset.p] || 0.25;
-  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && passes(s.coins[m], show, q))));
+  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && passes(s.coins[m], show, q, prefs))));
   const loaded = usePulse((s) => s.loaded);
   const scroller = useRef<HTMLDivElement>(null);
-  const v = useVirtualizer({ count: mints.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_H, overscan: 6, getItemKey: (i) => mints[i] });
+  const v = useVirtualizer({ count: mints.length, getScrollElement: () => scroller.current, estimateSize: () => rowH, overscan: 6, getItemKey: (i) => mints[i] });
 
   return (
     <section aria-label={title} className="flex min-h-0 min-w-0 flex-col">
@@ -80,7 +96,7 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
           : (
             <div className="relative" style={{ height: v.getTotalSize() }}>
               {v.getVirtualItems().map((it) => (
-                <div key={it.key} className="absolute inset-x-0 top-0" style={{ height: ROW_H, transform: `translateY(${it.start}px)` }}>
+                <div key={it.key} className="absolute inset-x-0 top-0" style={{ height: rowH, transform: `translateY(${it.start}px)` }}>
                   <PulseRow mint={mints[it.index]} col={col} sol={+sol || 0.25} />
                 </div>
               ))}
@@ -95,6 +111,7 @@ export function Pulse() {
   const globalQ = useUi((s) => s.q);
   const [show, setShowState] = useState<Show>(() => store.get<Show>("pulse:show", "noslop"));
   const setShow = (v: Show) => { store.set("pulse:show", v); setShowState(v); };
+  const prefs = usePrefs(), rowH = rowHeight(prefs), open = SHOWN.filter(([col]) => prefs.cols[col as PulseCol]);
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 p-3 max-md:h-auto">
       <header className="flex flex-wrap items-center gap-3">
@@ -103,10 +120,11 @@ export function Pulse() {
         <div className="ml-auto flex items-center gap-2.5">
           <span className="text-sm text-muted max-md:hidden">Display</span>
           <Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" />
+          <PulseSettings />
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-[repeat(3,minmax(0,1fr))] divide-x divide-rule overflow-hidden rounded-card border border-rule bg-paper-2 max-md:grid-cols-[minmax(0,1fr)] max-md:divide-x-0 max-md:[&>section]:h-[75vh]">
-        {SHOWN.map(([col]) => <Column key={col} col={col} show={show} globalQ={globalQ} />)}
+      <div className="grid min-h-0 flex-1 grid-cols-[repeat(var(--cols),minmax(0,1fr))] divide-x divide-rule overflow-hidden rounded-card border border-rule bg-paper-2 max-md:grid-cols-[minmax(0,1fr)] max-md:divide-x-0 max-md:[&>section]:h-[75vh]" style={{ "--cols": open.length } as CSSProperties}>
+        {open.map(([col]) => <Column key={`${col}:${rowH}`} col={col} show={show} globalQ={globalQ} />)}
       </div>
     </div>
   );

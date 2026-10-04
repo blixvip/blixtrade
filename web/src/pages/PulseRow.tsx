@@ -7,6 +7,7 @@ import { ageStr, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/l
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
+import { usePrefs } from "@/lib/prefs";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -15,7 +16,6 @@ import { Icon } from "@/shell/icons";
 // picture framed by bonding progress with the contract under it; ticker, name and copy; age, links and
 // counts each with an icon; who posted it and the AI call; a strip of audit pills; and on the right
 // volume, market cap, trades and the quick-buy pill.
-export const ROW_H = 116;
 const GRADE = (g?: string | null) => !g ? "text-muted" : g.startsWith("A") ? "text-up" : g.startsWith("B") ? "text-info" : g.startsWith("C") ? "text-warn" : g === "D" ? "text-caution" : "text-down";
 const POOL: Record<string, [dot: string, name: string]> = {
   pump: ["bg-up", "pump.fun"], bonk: ["bg-caution", "letsbonk.fun"], launchlab: ["bg-info", "Raydium LaunchLab"], bags: ["bg-warn", "Bags"], moonshot: ["bg-ink-2", "Moonshot"],
@@ -155,7 +155,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const handle = xHandle(t.x);
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
-  const paper = useTrade((st) => st.paper);
+  const paper = useTrade((st) => st.paper), prefs = usePrefs();
   const [buying, setBuying] = useState<null | "busy" | "filled">(null);
   const buy = async () => {
     if (buying) return;
@@ -172,7 +172,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
         a?.status === "running" && "bg-ink/[0.03]", (t.state === "faded" || slop) && "opacity-55")}>
       <div className="flex flex-col items-center gap-1">
         <Avatar coin={t} ring={prog} />
-        <button onClick={copy} aria-label="Copy contract address" className="text-xs text-muted hover:text-ink-2">{shortAddr(mint)}</button>
+        {!prefs.compact && <button onClick={copy} aria-label="Copy contract address" className="text-xs text-muted hover:text-ink-2">{shortAddr(mint)}</button>}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col justify-between">
@@ -199,6 +199,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {holders != null && <Count icon={<Icon.users />} value={holders} tip={curve ? "Holders now, from the live trade feed" : "Holders (RugCheck)"} />}
             {t.traders != null && <Count icon={<Icon.candles />} value={t.traders} tip="Wallets seen trading it live" />}
             {t.tr != null && <Count icon={<Icon.rank />} value={t.tr} tip="Live rank 0–100: real demand this second. 60+ is the pick line." className={t.tr >= 60 ? "text-up" : undefined} />}
+            {prefs.compact && <span className="text-sm"><AiCall coin={t} /></span>}
           </div>
           {chg != null && <span className={cn("num shrink-0 font-medium", tone(chg))}>{pct(chg)}</span>}
           {tx > 0 && (
@@ -210,14 +211,15 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
           )}
         </div>
 
-        <div className="flex min-w-0 items-center gap-2.5 text-sm">
+        {!prefs.compact && <div className="flex min-w-0 items-center gap-2.5 text-sm">
           {handle && <IconLink href={t.x} icon={<span className="font-medium">{handle}</span>} label="Open the X post" className="shrink-0 text-info hover:text-ink" />}
           <AiCall coin={t} />
           <span className="min-w-0 flex-1 truncate text-muted" title={note}>{note}</span>
-        </div>
+        </div>}
 
         <div className="flex items-center gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
+            {prefs.pills && <>
             {t.warn && <Chip icon={<Icon.ghost />} text={t.warn.kind === "emptied" ? "emptied" : t.warn.kind === "stale" ? "stale price" : "check price"} state="bad" tip={t.warn.text} />}
             {top10 != null && <Chip icon={<Icon.userStar />} text={`${Math.round(top10)}%`} state={top10 > 45 ? "bad" : "ok"} tip="Top 10 holders' share of the supply" />}
             {devSold ? <Chip icon={<Icon.chef />} text="DS" state="info" tip="The dev wallet sold everything it held" />
@@ -228,12 +230,13 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {H.bdN ? <Chip icon={<Icon.boxes />} text={`${Math.round(H.bd ?? 0)}%`} state={(H.bd ?? 0) > 15 ? "bad" : "ok"} tip={`Bundle: ${H.bdN} other wallets bought in the launch block; share of the supply they still hold`} /> : null}
             {(t.devCount ?? 0) >= 4 && <Chip icon={<Icon.ghost />} text={`×${t.devCount}`} state={(t.devCount ?? 0) >= 10 ? "bad" : "info"} tip="Coins this dev wallet launched in the last 6 hours" />}
             {t.win && <Chip icon={<Icon.curve />} text={`${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}`} state={t.win.netSol < 0 ? "bad" : "ok"} tip={`Last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, net SOL bought`} />}
+            </>}
           </div>
-          <Tip tip={paper ? `Paper buy ${sol} SOL at the price this second. Nothing is really bought.` : `Buy ${sol} SOL of it now with real SOL from your wallet.`}>
+          {prefs.buy && <Tip tip={paper ? `Paper buy ${sol} SOL at the price this second. Nothing is really bought.` : `Buy ${sol} SOL of it now with real SOL from your wallet.`}>
             <button onClick={buy} aria-busy={buying === "busy"} className={cn(buying === "filled" && "animate-tx-fill", buying === "busy" && "[&_svg]:animate-pulse", "num flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink-2 px-3 text-md font-bold whitespace-nowrap text-on-fill transition-[background-color,transform] duration-100 hover:bg-ink active:scale-95 [&_svg]:size-3.5 [&_svg]:fill-current")}>
               <Icon.bolt />{sol} SOL
             </button>
-          </Tip>
+          </Tip>}
         </div>
       </div>
     </div>
