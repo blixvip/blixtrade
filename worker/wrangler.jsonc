@@ -12,5 +12,7 @@
   // Waitlist accounts + page/sign-up tracking (site/waitlist.js, site/track.js); schema in migrations/.
   "d1_databases": [{ "binding": "DB", "database_name": "blix-waitlist", "database_id": "0f208c00-af5c-45b4-8fba-a344a5d9efd6", "migrations_dir": "migrations" }],
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  // Google sign-in for the waitlist (site/waitlist.js); the secret is GOOGLE_CLIENT_SECRET (wrangler secret put).
+  "vars": { "GOOGLE_CLIENT_ID": "1090647183335-d1l8tch0tbieujhqndckl6gpehitsoqi.apps.googleusercontent.com" },
   "observability": { "enabled": true }
 }

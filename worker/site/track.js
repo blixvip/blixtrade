@@ -51,7 +51,7 @@ export function record(env, defer, info, kind, { path = null, email = null, deta
 export function isPageView(req, url) {
   if (req.method !== "GET") return false;
   const p = url.pathname;
-  if (/^\/(_pub|api|img|assets|brand|cdn-cgi|__)\//.test(p) || p.startsWith("/__")) return false;
+  if (/^\/(_pub|api|img|assets|brand|cdn-cgi|auth|__)\//.test(p) || p.startsWith("/__")) return false;
   if (/\.(js|css|png|jpe?g|webp|svg|ico|woff2?|json|txt|xml|map)$/i.test(p)) return false;
   return /text\/html/.test(req.headers.get("accept") || "") || p === "/";
 }

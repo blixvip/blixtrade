@@ -34,8 +34,8 @@ export default {
     if (isPageView(req, url)) defer(who(req, env, url).then((info) => record(env, defer, info, "view", { path: url.pathname })));
     const page = await site(req, env, url);
     if (page) return page;
-    // "Start trading": make an account and wait for access (site/waitlist.js). Sign-ups and log-ins: 20 a minute per address.
-    const limited = req.method === "POST" && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20);
+    // "Start trading": sign in with Google and wait for access (site/waitlist.js). Sign-ins: 20 a minute per address.
+    const limited = (req.method === "POST" || url.pathname === "/auth/google") && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20);
     const wait = await waitlist(req, env, url, { limited, defer });
     if (wait) return wait;
     // A visitor without the owner's key never sees the terminal's key form: /app sends them to sign up,

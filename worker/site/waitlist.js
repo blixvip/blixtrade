@@ -1,16 +1,19 @@
-// The waitlist behind the landing page's "Start trading": a visitor makes an account (email + password) and
-// lands on a waiting page. Accounts and activity live in D1 at the edge (site/track.js), so sign-ups and
-// tracking keep working when the PC is off; the terminal itself (/app) still needs the owner's key.
-//   /start            make an account (GET form, POST create)
-//   /login            sign back in (GET form, POST check)
-//   /waiting          the waiting page (needs the blix_wait session cookie)
-//   /logout           clears the session
-//   /__admin          Kai's dashboard: sign-ups, visitors, sources, live activity (ADMIN_KEY secret:
-//                     open /__admin?key=<ADMIN_KEY> once, a cookie keeps it for 90 days)
-//   /__admin.csv      every account as CSV (same login)
+// The waitlist behind the landing page's "Start trading": a visitor signs in with Google and lands on a
+// waiting page. Accounts and activity live in D1 at the edge (site/track.js), so sign-ups and tracking keep
+// working when the PC is off; the terminal itself (/app) still needs the owner's key.
+//   /start, /login          "Continue with Google" (one page, two headings)
+//   /auth/google            off to Google (state kept in a short-lived signed cookie)
+//   /auth/google/callback   back from Google: code -> verified email -> account -> /waiting
+//   /waiting                the waiting page (needs the blix_wait session cookie)
+//   /logout                 clears the session
+//   /__admin                Kai's dashboard: sign-ups, visitors, sources, live activity (ADMIN_KEY secret:
+//                           open /__admin?key=<ADMIN_KEY> once, a cookie keeps it for 90 days)
+//   /__admin.csv            every account as CSV (same login)
+// Google client: GOOGLE_CLIENT_ID (var in wrangler.jsonc) + GOOGLE_CLIENT_SECRET (secret), the same OAuth
+// client as data/google.json. Its "Authorized redirect URIs" must include https://trade.blixvip.com/auth/google/callback.
 import { who, record } from "./track.js";
 
-const COOKIE = "blix_wait", ADMIN = "blix_admin";
+const COOKIE = "blix_wait", ADMIN = "blix_admin", STATE = "blix_oauth";
 const DAYS = 30;
 const enc = new TextEncoder();
 const b64u = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -23,10 +26,6 @@ const sameStr = (a, b) => {
 };
 const cookieOf = (req, name) => (String(req.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)) || [])[1] || null;
 
-async function hashPassword(password, salt) {
-  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  return b64u(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: enc.encode(salt), iterations: 100_000 }, key, 256));
-}
 async function sign(text, secret) {
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return b64u(await crypto.subtle.sign("HMAC", key, enc.encode(text)));
@@ -49,8 +48,9 @@ async function isAdmin(req, env) {
   return sameStr(cookieOf(req, ADMIN) || "", await adminToken(env));
 }
 
-// Cloudflare Web Analytics (injected by Cloudflare at the zone) is the only script allowed.
-const CSP = "default-src 'none'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+// Cloudflare Web Analytics (injected by Cloudflare at the zone) is the only script allowed; Google profile
+// pictures are the only outside images.
+const CSP = "default-src 'none'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://lh3.googleusercontent.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 const HEAD = (title, extra = "") => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} · BLIX</title><meta name="robots" content="noindex"><meta name="theme-color" content="#050608">${extra}
@@ -68,12 +68,11 @@ a{color:#d9dce2}
 .logo{display:flex;align-items:center;gap:4px;margin-bottom:28px;text-decoration:none}.logo img{height:36px}.logo img+img{height:46px;margin-left:-10px}
 h1{font-size:34px;letter-spacing:-.04em;line-height:1.05;font-weight:600;margin-bottom:10px}
 p{color:#8a92a3;font-size:16px;line-height:1.5}
-form{display:grid;gap:12px;margin-top:26px}
-label{font-size:14px;color:#aeb4bf;display:grid;gap:6px}
-input{font:inherit;font-size:16px;color:#f4f6fa;background:#07080b;border:1px solid #1d222b;border-radius:14px;padding:13px 14px;outline:none;transition:border-color .2s}
-input:focus{border-color:rgba(214,218,226,.45)}
-button{margin-top:6px;font:inherit;font-weight:600;font-size:17px;background:#f2f3f5;color:#0a0b0d;border:0;border-radius:999px;padding:14px 22px;cursor:pointer;box-shadow:0 10px 30px -10px rgba(255,255,255,.35)}
-button:hover{background:#fff}
+.g{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:28px;font-weight:600;font-size:17px;background:#f2f3f5;color:#0a0b0d;border-radius:999px;padding:15px 22px;text-decoration:none;box-shadow:0 10px 30px -10px rgba(255,255,255,.35);transition:transform .2s,background .2s}
+.g:hover{background:#fff;transform:translateY(-1px)}.g svg{width:20px;height:20px;flex:none}
+.fine{margin-top:16px;font-size:13px;color:#5d6575;text-align:center;line-height:1.5}
+.me{display:flex;align-items:center;gap:12px;margin:22px 0 4px;padding:12px 14px;border-radius:16px;background:#07080b;border:1px solid #161a21}
+.me img{width:40px;height:40px;border-radius:50%;flex:none}.me div{min-width:0}.me b{display:block;font-weight:600;font-size:15px}.me span{display:block;color:#8a92a3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .err{background:rgba(255,90,106,.1);border:1px solid rgba(255,90,106,.35);color:#ffb3bb;border-radius:12px;padding:10px 12px;font-size:14px;margin-top:18px}
 .alt{margin-top:22px;font-size:15px;color:#8a92a3;text-align:center}
 .wait{position:relative;margin:28px 0 24px;height:120px;border-radius:22px;background:#07080b;border:1px solid #161a21;display:grid;place-items:center;overflow:hidden}
@@ -97,27 +96,57 @@ li b{color:#dfe5ef;font-weight:500;word-break:break-all}
 ${body}
 </main></body></html>`, status);
 
-const form = (kind, err = "", email = "") => {
-  const start = kind === "start";
+const GOOGLE_G = `<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>`;
+
+const signIn = (kind, err = "") => {
+  const start = kind !== "login";
   return page(start ? "Start trading" : "Log in", `
 <h1>${start ? "Start trading" : "Welcome back"}</h1>
-<p>${start ? "Make your BLIX account. We're letting traders in a few at a time, and yours will be ready when it's your turn." : "Log in to check on your account."}</p>
+<p>${start ? "Make your BLIX account with Google. We're letting traders in a few at a time, and yours will be ready when it's your turn." : "Log in with Google to check on your account."}</p>
 ${err ? `<div class="err" role="alert">${esc(err)}</div>` : ""}
-<form method="post" action="/${kind}">
-<label>Email<input type="email" name="email" required autocomplete="email" maxlength="200" value="${esc(email)}"></label>
-<label>Password<input type="password" name="password" required minlength="8" maxlength="200" autocomplete="${start ? "new-password" : "current-password"}"></label>
-<button>${start ? "Create account" : "Log in"}</button>
-</form>
+<a class="g" href="/auth/google?from=${start ? "start" : "login"}">${GOOGLE_G}Continue with Google</a>
+<div class="fine">We only use your name and email. No passwords to remember.</div>
 <div class="alt">${start ? `Already have an account? <a href="/login">Log in</a>` : `New here? <a href="/start">Create an account</a>`}</div>`, err ? 400 : 200);
 };
 
-const go = (to, cookie) => new Response(null, { status: 303, headers: { location: to, "cache-control": "no-store", ...(cookie ? { "set-cookie": cookie } : {}) } });
+const go = (to, ...cookies) => {
+  const h = new Headers({ location: to, "cache-control": "no-store" });
+  for (const c of cookies) if (c) h.append("set-cookie", c);
+  return new Response(null, { status: 303, headers: h });
+};
+const callbackUrl = (url) => `${url.origin}/auth/google/callback`;
+const clearState = `${STATE}=; Path=/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+const ERRORS = {
+  denied: "You cancelled the Google sign-in. Try again whenever you're ready.",
+  busy: "Too many tries. Wait a minute and try again.",
+  setup: "Google sign-in isn't switched on yet. Check back soon.",
+  expired: "That sign-in took too long or was opened in another browser. Try again.",
+};
+
+// The id_token comes straight from Google's token endpoint over TLS, so its signature need not be checked
+// again; who it was issued to, by whom, and until when are.
+async function googleProfile(code, url, env) {
+  let r, j;
+  try {
+    r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(10_000),
+      body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: callbackUrl(url), grant_type: "authorization_code" }) });
+    j = await r.json();
+  } catch { throw new Error("Google didn't answer. Try again."); }
+  if (!r.ok || !j?.id_token) throw new Error(`Google refused the sign-in${j?.error ? ` (${j.error})` : ""}. Try again.`);
+  let c;
+  try { c = JSON.parse(decodeURIComponent(escape(atob(j.id_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))))); } catch { throw new Error("Google sent an unreadable answer. Try again."); }
+  if (c.aud !== env.GOOGLE_CLIENT_ID || !["https://accounts.google.com", "accounts.google.com"].includes(c.iss) || c.exp * 1000 < Date.now()) throw new Error("That Google sign-in wasn't meant for BLIX.");
+  if (!c.sub || !c.email || c.email_verified !== true) throw new Error("That Google account has no verified email.");
+  return { sub: String(c.sub), email: String(c.email).toLowerCase(), name: c.name ? String(c.name).slice(0, 120) : null,
+    picture: /^https:\/\/lh3\.googleusercontent\.com\//.test(c.picture || "") ? String(c.picture).slice(0, 500) : null };
+}
 
 // Returns a Response for the waitlist's paths, or null for everything else.
 export async function waitlist(req, env, url, { limited, defer }) {
   const p = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
   if (p === "/__admin" || p === "/__admin.csv") return admin(req, env, url, p);
-  if (!["/start", "/login", "/waiting", "/logout"].includes(p)) return null;
+  if (!["/start", "/login", "/waiting", "/logout", "/auth/google", "/auth/google/callback"].includes(p)) return null;
+  if (req.method !== "GET" && req.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET" } });
   const info = await who(req, env, url);
 
   if (p === "/logout") {
@@ -128,57 +157,72 @@ export async function waitlist(req, env, url, { limited, defer }) {
   if (p === "/waiting") {
     const email = await session(req, env);
     if (!email) return go("/login");
-    const acct = await env.DB.prepare("SELECT email FROM accounts WHERE email = ?").bind(email).first();
-    if (!acct) return go("/start");
+    const acct = await env.DB.prepare("SELECT email, name, picture FROM accounts WHERE email = ?").bind(email).first();
+    if (!acct) return go("/start", `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
     defer(env.DB.prepare("UPDATE accounts SET last_seen = ? WHERE email = ?").bind(Date.now(), email).run());
+    const first = (acct.name || "").split(/\s+/)[0];
     return page("You're on the list", `
 <div class="pill"><i></i>Account created</div>
-<h1>You're on the list.</h1>
+<h1>You're on the list${first ? `, ${esc(first)}` : ""}.</h1>
 <p>Thanks for signing up. We're opening BLIX to traders a few at a time so everyone gets a fast, smooth terminal.</p>
 <div class="wait" aria-hidden="true"><span class="ring"></span><span class="ring"></span><img src="/_pub/home/bx-logo.webp" alt=""></div>
 <ul>
 <li>We'll email <b>${esc(email)}</b> the moment your access is ready.</li>
-<li>Log back in any time to check on your account.</li>
+<li>Log back in with Google any time to check on your account.</li>
 <li>Follow <a href="https://x.com/blix_vip" rel="noopener" target="_blank">@blix_vip</a> for launch news and early invites.</li>
 </ul>
+<div class="me">${acct.picture ? `<img src="${esc(acct.picture)}" alt="" referrerpolicy="no-referrer">` : ""}<div><b>${esc(acct.name || email)}</b><span>Signed in with Google · ${esc(email)}</span></div></div>
 <div class="foot"><a href="/">Back to BLIX</a><a href="/logout">Log out</a></div>`);
   }
 
-  // /start and /login
-  const kind = p.slice(1);
-  if (req.method === "GET" || req.method === "HEAD") {
+  if (p === "/start" || p === "/login") {
     if (await session(req, env)) return go("/waiting");
-    return form(kind);
+    const e = url.searchParams.get("e");
+    return signIn(p.slice(1), e ? ERRORS[e] || String(e).slice(0, 160) : "");
   }
-  if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "GET, POST" } });
-  const origin = req.headers.get("origin");
-  if (origin && origin !== url.origin) return new Response("Bad origin", { status: 403 });
-  if (limited) return form(kind, "Too many tries. Wait a minute and try again.");
-  let data;
-  try { data = await req.formData(); } catch { return form(kind, "Something went wrong. Try again."); }
-  const email = String(data.get("email") || "").trim().toLowerCase().slice(0, 200);
-  const password = String(data.get("password") || "");
-  const fail = (msg, why) => { record(env, defer, info, `${kind === "start" ? "signup" : "login"}_fail`, { path: p, email: email || null, detail: why }); return form(kind, msg, email); };
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return fail("Enter a valid email address.", "bad email");
-  if (password.length < 8 || password.length > 200) return fail("Your password needs at least 8 characters.", "short password");
 
-  const acct = await env.DB.prepare("SELECT salt, hash FROM accounts WHERE email = ?").bind(email).first();
-  const now = Date.now();
-  if (kind === "login") {
-    if (!acct || !sameStr(await hashPassword(password, acct.salt), acct.hash)) return fail("That email and password don't match an account.", acct ? "wrong password" : "no account");
-    defer(env.DB.prepare("UPDATE accounts SET logins = logins + 1, last_seen = ? WHERE email = ?").bind(now, email).run());
-    record(env, defer, info, "login", { path: p, email });
-    return go("/waiting", await sessionCookie(email, env));
+  const back = (kind, e) => go(`/${kind === "login" ? "login" : "start"}?e=${encodeURIComponent(e)}`, clearState);
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return back("start", "setup");
+
+  // Off to Google, with a random state tied to this browser by a signed cookie.
+  if (p === "/auth/google") {
+    const from = url.searchParams.get("from") === "login" ? "login" : "start";
+    if (limited) return back(from, "busy");
+    const state = `${b64u(crypto.getRandomValues(new Uint8Array(18)))}.${from}`;
+    const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: callbackUrl(url), response_type: "code", scope: "openid email profile", state, prompt: "select_account" });
+    return go(`https://accounts.google.com/o/oauth2/v2/auth?${q}`, `${STATE}=${state}.${await sign(state, `oauth:${env.REG_KEY || ""}`)}; Path=/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
   }
-  if (acct) return fail("There's already an account with that email. Log in instead.", "exists");
+
+  // Back from Google.
+  const state = url.searchParams.get("state") || "", kept = cookieOf(req, STATE) || "";
+  const from = state.endsWith(".login") ? "login" : "start", failKind = from === "login" ? "login_fail" : "signup_fail";
+  const cut = kept.lastIndexOf(".");
+  if (!state || kept.slice(0, cut) !== state || !sameStr(kept.slice(cut + 1), await sign(state, `oauth:${env.REG_KEY || ""}`))) {
+    record(env, defer, info, failKind, { path: p, detail: "state" });
+    return back(from, "expired");
+  }
+  const gerr = url.searchParams.get("error");
+  if (gerr) {
+    record(env, defer, info, failKind, { path: p, detail: gerr.slice(0, 60) });
+    return back(from, gerr === "access_denied" ? "denied" : `Google said: ${gerr.slice(0, 60)}. Try again.`);
+  }
+  let g;
+  try { g = await googleProfile(url.searchParams.get("code") || "", url, env); }
+  catch (err) { record(env, defer, info, failKind, { path: p, detail: err.message.slice(0, 80) }); return back(from, err.message); }
+
+  const now = Date.now();
+  const had = await env.DB.prepare("SELECT email FROM accounts WHERE google_sub = ? OR email = ?").bind(g.sub, g.email).first();
+  if (had) {
+    await env.DB.prepare("UPDATE accounts SET logins = logins + 1, last_seen = ?, name = ?, picture = ? WHERE email = ?").bind(now, g.name, g.picture, had.email).run();
+    record(env, defer, info, "login", { path: p, email: had.email });
+    return go("/waiting", await sessionCookie(had.email, env), clearState);
+  }
   // Where they first came from: their earliest visit with a referrer, else this request's.
   const first = await env.DB.prepare("SELECT referrer FROM events WHERE visitor = ? AND referrer IS NOT NULL ORDER BY t LIMIT 1").bind(info.visitor).first();
-  const salt = b64u(crypto.getRandomValues(new Uint8Array(16)));
-  const made = await env.DB.prepare("INSERT OR IGNORE INTO accounts (email, salt, hash, created, last_seen, logins, country, city, referrer, ua, visitor) VALUES (?,?,?,?,?,0,?,?,?,?,?)")
-    .bind(email, salt, await hashPassword(password, salt), now, now, info.country, info.city, first?.referrer || info.referrer, info.ua, info.visitor).run();
-  if (!made.meta?.changes) return fail("There's already an account with that email. Log in instead.", "exists");
-  record(env, defer, info, "signup", { path: p, email });
-  return go("/waiting", await sessionCookie(email, env));
+  await env.DB.prepare("INSERT OR IGNORE INTO accounts (email, google_sub, name, picture, created, last_seen, logins, country, city, referrer, ua, visitor) VALUES (?,?,?,?,?,?,1,?,?,?,?,?)")
+    .bind(g.email, g.sub, g.name, g.picture, now, now, info.country, info.city, first?.referrer || info.referrer, info.ua, info.visitor).run();
+  record(env, defer, info, "signup", { path: p, email: g.email });
+  return go("/waiting", await sessionCookie(g.email, env), clearState);
 }
 
 // ---------- Kai's dashboard ----------
@@ -199,9 +243,9 @@ async function admin(req, env, url, p) {
   if (!(await isAdmin(req, env))) return new Response("Not found", { status: 404 });
 
   if (p === "/__admin.csv") {
-    const { results } = await env.DB.prepare("SELECT email, created, last_seen, logins, country, city, referrer, status FROM accounts ORDER BY created").all();
+    const { results } = await env.DB.prepare("SELECT email, name, created, last_seen, logins, country, city, referrer, status FROM accounts ORDER BY created").all();
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = ["email,signed_up,last_seen,logins,country,city,came_from,status", ...results.map((r) => [r.email, new Date(r.created).toISOString(), new Date(r.last_seen).toISOString(), r.logins, r.country, r.city, r.referrer, r.status].map(cell).join(","))].join("\n");
+    const csv = ["email,name,signed_up,last_seen,logins,country,city,came_from,status", ...results.map((r) => [r.email, r.name, new Date(r.created).toISOString(), new Date(r.last_seen).toISOString(), r.logins, r.country, r.city, r.referrer, r.status].map(cell).join(","))].join("\n");
     return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="blix-waitlist-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
   }
 
@@ -212,7 +256,7 @@ async function admin(req, env, url, p) {
     q(`SELECT COUNT(*) views, COUNT(DISTINCT visitor) visitors FROM events WHERE kind='view' AND ${HUMAN}`),
     q(`SELECT SUM(kind='view') views, COUNT(DISTINCT CASE WHEN kind='view' THEN visitor END) visitors, SUM(kind='signup') signups FROM events WHERE t > ? AND (kind!='view' OR ${HUMAN})`, day),
     q(`SELECT COUNT(DISTINCT CASE WHEN kind='view' THEN visitor END) visitors, SUM(kind='signup') signups FROM events WHERE t > ? AND (kind!='view' OR ${HUMAN})`, week),
-    q(`SELECT a.email, a.created, a.last_seen, a.logins, a.country, a.city, a.referrer, a.status,
+    q(`SELECT a.email, a.name, a.picture, a.created, a.last_seen, a.logins, a.country, a.city, a.referrer, a.status,
          (SELECT COUNT(*) FROM events e WHERE e.visitor = a.visitor AND e.kind='view') visits
        FROM accounts a ORDER BY a.created DESC LIMIT 500`),
     q(`SELECT date(t/1000,'unixepoch') d, SUM(kind='view') views, COUNT(DISTINCT CASE WHEN kind='view' THEN visitor END) visitors, SUM(kind='signup') signups
@@ -274,8 +318,8 @@ ${stat("Visitor → sign-up", conv)}
 <div class="box"><h2>Devices</h2>${list(devices, (r) => esc(r.d), (r) => r.n)}</div>
 </div>
 <div class="box" style="margin-bottom:12px"><h2>Sign-ups (${signups})</h2><div class="wrap"><table>
-<tr><th>Email</th><th>Signed up</th><th>Last seen</th><th>Logins</th><th>Visits</th><th>Where</th><th>Came from</th></tr>
-${accts.map((a) => `<tr><td>${esc(a.email)}</td><td class="m" title="${new Date(a.created).toISOString()}">${ago(a.created)}</td><td class="m">${ago(a.last_seen)}</td><td class="m">${a.logins}</td><td class="m">${a.visits}</td><td class="m">${flag(a.country)}${a.city ? " · " + esc(a.city) : ""}</td><td class="m">${esc(a.referrer || "direct")}</td></tr>`).join("") || `<tr><td colspan="7" class="m">No sign-ups yet.</td></tr>`}
+<tr><th>Name</th><th>Email</th><th>Signed up</th><th>Last seen</th><th>Logins</th><th>Visits</th><th>Where</th><th>Came from</th></tr>
+${accts.map((a) => `<tr><td>${a.picture ? `<img src="${esc(a.picture)}" alt="" referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;vertical-align:-5px;margin-right:8px">` : ""}${esc(a.name || "")}</td><td>${esc(a.email)}</td><td class="m" title="${new Date(a.created).toISOString()}">${ago(a.created)}</td><td class="m">${ago(a.last_seen)}</td><td class="m">${a.logins}</td><td class="m">${a.visits}</td><td class="m">${flag(a.country)}${a.city ? " · " + esc(a.city) : ""}</td><td class="m">${esc(a.referrer || "direct")}</td></tr>`).join("") || `<tr><td colspan="8" class="m">No sign-ups yet.</td></tr>`}
 </table></div></div>
 <div class="box"><h2>Live activity</h2><div class="wrap"><table>
 <tr><th>When</th><th>What</th><th>Page</th><th>Who</th><th>Where</th><th>From</th><th>Device</th></tr>
