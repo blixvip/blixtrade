@@ -9,9 +9,10 @@
 import { db } from "./db.js";
 import { onLiveTrade, feed, liveStats } from "./livetrades.js";
 import { books } from "./holders.js";
-import { launchIndex } from "./engine.js";
-import { rugcheck } from "./sources.js";
+import { launchIndex, enrichNow } from "./engine.js";
+import { getJson, rugcheck } from "./sources.js";
 import { gtGet } from "./gtgate.js";
+import { jupAsset, jupBigTrades, jupFirstTrades, jupHolders, jupRecentTrades, jupTrades } from "./jup.js";
 import { fastMcap, focusPrice, rugFigures } from "./pulse.js";
 
 const now = () => Date.now();
@@ -134,6 +135,40 @@ function rugNow(mint) {
   return c.s ? c : null;
 }
 
+// DexScreener orders: when the dev (or anyone) paid for the coin's DEX profile, an ad, a takeover or boosts,
+// drawn on the chart like Axiom's "DEX paid" marker. Read in the background for open pages: every minute
+// until something is paid, then every 10 minutes. Never awaited; null until the first answer.
+const paidLive = new Map();  // mint -> { t, busy, v }
+function paidNow(mint) {
+  let c = paidLive.get(mint);
+  if (!c) { c = { t: 0, busy: false, v: null }; paidLive.set(mint, c); }
+  if (!c.busy && now() - c.t > (c.v?.orders.length ? 600_000 : 60_000)) {
+    c.busy = true; c.t = now();
+    getJson(`https://api.dexscreener.com/orders/v1/solana/${mint}`, { timeout: 8000 }).then((j) => {
+      c.v = {
+        orders: (j?.orders || []).filter((o) => o.paymentTimestamp && o.status !== "rejected" && o.status !== "cancelled").map((o) => ({ type: o.type, status: o.status, t: o.paymentTimestamp })),
+        boosts: (j?.boosts || []).filter((x) => x.paymentTimestamp).map((x) => ({ amount: x.amount ?? null, t: x.paymentTimestamp })),
+      };
+    }, () => {}).finally(() => { c.busy = false; });
+  }
+  if (paidLive.size > 300) for (const [k, v] of paidLive) if (!v.busy && now() - v.t > 15 * 60_000) paidLive.delete(k);
+  return c.v;
+}
+
+// Chart marks: every trade in the ring by the dev, a sniper, a bundle wallet or a wallet you follow, so the
+// chart shows them from the start of the ring, not only from when the page opened.
+function chartMarks(r, tagOf) {
+  if (!r?.trades.length) return [];
+  const usd = feed.solUsd || null, out = [];
+  for (const [t, buy, sol, , mcSol, wallet] of r.trades) {
+    if (!wallet) continue;
+    const w = tagOf(wallet);
+    if (!w.tag && !w.followed) continue;
+    out.push({ t, side: buy ? "buy" : "sell", sol: +sol.toFixed(4), mcUsd: usd ? Math.round(mcSol * usd) : null, wallet, tag: w.tag, followed: w.followed, label: w.label });
+  }
+  return out.slice(-400);
+}
+
 const memo = new Map();
 function cached(key, ms, fn) {
   const c = memo.get(key);
@@ -145,9 +180,17 @@ function cached(key, ms, fn) {
 }
 
 // GET /api/coin/<mint>
+// An open coin page re-reads its stored row (liquidity, market cap, pair) from DexScreener at most every 20 s:
+// a coin the radar retired stops being refreshed, and its page showed a rugged $6K coin with $532K liquidity.
+const pageRefresh = new Map();   // mint -> last refresh
 export function coinPage(mint, { top = 100 } = {}) {
   const r = tapes.get(mint);
   if (r) r.focus = now();
+  if (now() - (pageRefresh.get(mint) || 0) > 20_000) {
+    pageRefresh.set(mint, now());
+    enrichNow(mint).catch(() => {});
+    if (pageRefresh.size > 500) for (const [m, t] of pageRefresh) if (now() - t > 10 * 60_000) pageRefresh.delete(m);
+  }
   return cached(`page:${mint}:${top}`, 1000, () => build(mint, Math.min(Math.max(+top || 100, 10), 300)));
 }
 
@@ -218,6 +261,18 @@ function build(mint, top) {
     if (fresh) { rf = rugFigures({ graduated: 1, safety_checked: fresh.at, safety_score: fresh.s.clean }, fresh.s); lpLocked = fresh.s.lpLockedPct ?? lpLocked; }
   }
   if (dev && bonded) dev.pct = rf?.dev ?? null;   // the ledger's figure is the dev's at bonding
+  const priceUsdNow = p.sol != null && solUsd ? p.sol * solUsd : t?.price ?? null;
+  const J = fillFromJupiter(mint, { holders, traders, early, bonded, genesis: Boolean(b?.genesis), tagOf, priceUsd: priceUsdNow, solUsd, top });
+  ({ holders, traders, early } = J);
+  if (!dev && J.asset?.dev) dev = { wallet: J.asset.dev, pct: null, coins: cached(`dev:${J.asset.dev}`, 30_000, () => devCoins(J.asset.dev, mint)) };
+  // No ledger for the dev: what Jupiter shows it bought and sold in the coin's first trades, and what it holds now.
+  if (dev && dev.boughtSol == null) {
+    const w = J.firstTally?.get(dev.wallet), h = J.heldOf(dev.wallet);
+    if (w) Object.assign(dev, { boughtSol: +w.inSol.toFixed(4), soldSol: +w.outSol.toFixed(4) });
+    if (h != null) dev.pct = +((h / J.supply) * 100).toFixed(3);
+    if (w || h != null) dev.via = "jupiter";
+  }
+  const viaJup = holders?.source === "jupiter";
   return {
     mint, symbol: t?.symbol || launchIndex.get(mint)?.symbol || null, name: t?.name || launchIndex.get(mint)?.name || null,
     solUsd, live: curveLive(L, t), onCurve: Boolean(L) && !t?.graduated,
@@ -228,9 +283,16 @@ function build(mint, top) {
     athUsd: Math.max(L?.ath || 0, t?.peak_mcap || 0) || null,
     progress: L?.progress ?? null, supply: SUPPLY,
     m5, holders, traders, early, dev,
+    // Where the wallet tabs came from when not the ledger ("holders", "traders", "early" from Jupiter), and
+    // Jupiter's audit of the coin (authorities, top holders, bots, bundles, the dev's launches) for Safety and Dev.
+    // When the coin was really created (Jupiter), for its age: first_seen is when Blix met it, which for a coin
+    // adopted late (another launchpad, or found after launch) can be days after.
+    created: J.asset?.created ?? null,
+    jupiter: J.source ? { tabs: J.source, tradersWindow: J.tradersWindow || null } : null,
+    audit: J.asset ? { ...(J.asset.audit || {}), holders: J.asset.holders, launchpad: J.asset.launchpad, organic: J.asset.organic } : null,
     info: {
-      holders: onLedger ? holders.count : rf?.holders ?? null,
-      top10: onLedger ? holders.top10 : rf?.top10 ?? null,
+      holders: onLedger ? holders.count : viaJup ? holders.count : rf?.holders ?? J.asset?.holders ?? null,
+      top10: onLedger ? holders.top10 : rf?.top10 ?? (viaJup ? holders.top10 : null),
       devPct: onLedger ? dev?.pct ?? rf?.dev ?? null : rf?.dev ?? null,
       // Snipers' and bundlers' share still held: the ledger knows it only while the coin is on the curve.
       snipers: b?.genesis && !bonded ? groupPct(b, b.snipers) : null,
@@ -239,11 +301,115 @@ function build(mint, top) {
       lpLocked,
       safety: rf?.safety ?? null,
       traders: bonded ? null : L?.traders ?? null,   // the feed counts curve traders only
-      source: onLedger ? (holders.partial ? "live ledger (partial: Blix missed this coin's first trades)" : "live ledger") : rf?.holders != null || rf?.top10 != null ? "RugCheck" : null,
+      source: onLedger ? (holders.partial ? "live ledger (partial: Blix missed this coin's first trades)" : "live ledger") : rf?.holders != null || rf?.top10 != null ? "RugCheck" : viaJup ? "Jupiter" : null,
       checked: !onLedger && rf?.checked ? rf.checked : null,   // when that RugCheck reading was taken
     },
     tradesSince: ring?.trades[0]?.[0] ?? null,
+    marks: chartMarks(ring, tagOf),
+    paid: paidNow(mint),
   };
+}
+
+// ---------- Jupiter fill-in for the wallet tabs ----------
+// The ledger above only knows a coin's bonding-curve trades, and only from when Blix started reading it. For a
+// bonded coin (pool trades), or one met after launch, the Holders, Top traders and Early buyers tabs come from
+// Jupiter's data API instead: fetched in the background while the page is open (every 15 s at most), merged
+// into the next poll, so the page never waits on it.
+const extra = new Map();   // mint -> { t, busy, holders, recent, first, asset }
+function enrich(mint, want) {
+  let e = extra.get(mint);
+  if (!e) { e = { t: 0 }; extra.set(mint, e); if (extra.size > 150) extra.delete(extra.keys().next().value); }
+  if (e.busy || now() - e.t < 15_000) return e;
+  e.busy = true;
+  Promise.allSettled([want.holders ? jupHolders(mint) : null, want.recent ? jupRecentTrades(mint) : null, want.first ? jupFirstTrades(mint) : null, jupAsset(mint)])
+    .then(([h, r, f, a]) => {
+      if (h.value) e.holders = h.value;
+      if (r.value) e.recent = r.value;
+      if (f.value) e.first = f.value;
+      if (a.value) e.asset = a.value;
+    }).finally(() => { e.t = now(); e.busy = false; });
+  return e;
+}
+
+// Per wallet, from a run of Jupiter trades: SOL and USD in and out, tokens bought and sold, first and last trade.
+function tally(rows) {
+  const by = new Map();
+  for (const x of rows) {
+    let w = by.get(x.wallet);
+    if (!w) by.set(x.wallet, (w = { inSol: 0, outSol: 0, inUsd: 0, outUsd: 0, tokIn: 0, tokOut: 0, n: 0, first: x.t, last: x.t, firstBuy: null }));
+    if (x.side === "buy") { w.inSol += x.sol || 0; w.inUsd += x.usd || 0; w.tokIn += x.tokens || 0; if (w.firstBuy == null || x.t < w.firstBuy) w.firstBuy = x.t; }
+    else { w.outSol += x.sol || 0; w.outUsd += x.usd || 0; w.tokOut += x.tokens || 0; }
+    w.n++; w.first = Math.min(w.first, x.t); w.last = Math.max(w.last, x.t);
+  }
+  return by;
+}
+
+// One row of the wallet tables from Jupiter's figures, the same shape walletLine() gives the ledger's rows.
+// `held`: tokens it holds now (from the top-100 holder list), or null when it is not in that list.
+function jupLine(wallet, { held, w, supply, priceUsd, solUsd, tagOf, pool, lastActive }) {
+  const r2 = (x) => (x == null ? null : +x.toFixed(4));
+  const valueUsd = held != null && priceUsd ? held * priceUsd : null;
+  const valueSol = valueUsd != null && solUsd ? valueUsd / solUsd : null;
+  const inSol = w?.inSol ?? null, outSol = w?.outSol ?? null;
+  // Result over the window only: sells, plus the part of what it holds that it bought inside the window, minus
+  // buys. A whale that bought before the window is not credited its whole bag as profit.
+  // Not in the top-100 list and still net long inside the window: what it holds now is unknown, so is its result.
+  // No buy inside the window: its cost is outside it, so its result is unknown too (sells alone are not profit).
+  const net = w ? Math.max(0, w.tokIn - w.tokOut) : 0, unknown = !w || w.tokIn <= 0 || (held == null && net > w.tokIn * 0.02);
+  const keptUsd = w && priceUsd ? Math.min(held ?? net, net) * priceUsd : 0;
+  const pnlUsd = w && !unknown ? (w.outUsd + keptUsd - w.inUsd) : null;
+  const avgBuyMc = w && w.tokIn > 0 ? Math.round((w.inUsd / w.tokIn) * supply) : null;
+  const avgSellMc = w && w.tokOut > 0 ? Math.round((w.outUsd / w.tokOut) * supply) : null;
+  return {
+    wallet, ...tagOf(wallet), ...(pool ? { label: "Pool" } : {}),
+    tokens: Math.round(held ?? 0), pct: held != null ? +((held / supply) * 100).toFixed(3) : 0, maxPct: 0,
+    boughtSol: r2(inSol), soldSol: r2(outSol), valueSol: r2(valueSol), pnlSol: pnlUsd != null && solUsd ? r2(pnlUsd / solUsd) : null, realizedSol: null,
+    boughtUsd: w ? +w.inUsd.toFixed(2) : null, soldUsd: w ? +w.outUsd.toFixed(2) : null, valueUsd: valueUsd == null ? null : +valueUsd.toFixed(2), pnlUsd: pnlUsd == null ? null : +pnlUsd.toFixed(2),
+    avgBuyMc, avgSellMc, trades: w?.n ?? 0, first: w?.first ?? lastActive ?? null,
+    status: held != null && held > 0.5 ? (w && w.tokOut > 0 ? "sold some" : "holding") : w && w.tokOut > 0 && w.tokOut >= w.tokIn * 0.98 ? "sold all" : "outside top 100",
+  };
+}
+
+function fillFromJupiter(mint, { holders, traders, early, bonded, genesis, tagOf, priceUsd, solUsd, top }) {
+  const needH = !holders || holders.frozen || (holders.partial && holders.list.length < 20);
+  const needT = bonded || !traders.length;
+  const needE = !genesis || !early.length;
+  const e = enrich(mint, { holders: needH, recent: needT, first: needE });
+  const supply = e.asset?.supply || SUPPLY;
+  const held = new Map((e.holders?.list || []).map((h) => [h.wallet, h]));
+  const out = { holders, traders, early, asset: e.asset || null, source: null };
+  const used = [];
+  if (needH && e.holders?.list.length) {
+    const recent = e.recent ? tally(e.recent) : null;
+    const list = e.holders.list.slice(0, top).map((h) => jupLine(h.wallet, { held: h.tokens, w: recent?.get(h.wallet), supply, priceUsd, solUsd, tagOf, pool: h.pool, lastActive: h.lastActive }));
+    const maxPct = Math.max(...list.filter((x) => x.label !== "Pool").map((x) => x.pct), 0);
+    for (const x of list) x.maxPct = maxPct;
+    const real = list.filter((x) => x.label !== "Pool");
+    out.holders = { count: e.holders.count ?? e.asset?.holders ?? list.length, wallets: list.length, trades: e.recent?.length || 0, since: null, last: now(), genesis: false, partial: false, frozen: false,
+      top10: +real.slice(0, 10).reduce((s, x) => s + x.pct, 0).toFixed(2), list, source: "jupiter" };
+    used.push("holders");
+  }
+  if (needT && e.recent?.length) {
+    const by = tally(e.recent);
+    out.traders = [...by.entries()].map(([wallet, w]) => jupLine(wallet, { held: held.get(wallet)?.tokens ?? (held.size ? Math.max(0, w.tokIn - w.tokOut) : null), w, supply, priceUsd, solUsd, tagOf, pool: held.get(wallet)?.pool }))
+      .filter((x) => x.label !== "Pool").sort((a, b) => ((b.boughtUsd ?? 0) + (b.soldUsd ?? 0)) - ((a.boughtUsd ?? 0) + (a.soldUsd ?? 0))).slice(0, 50);
+    out.tradersWindow = { trades: e.recent.length, since: e.recent.at(-1)?.t ?? null };
+    used.push("traders");
+  }
+  if (needE && e.first?.length) {
+    const by = tally(e.first), t0 = e.first[0].t;
+    out.early = [...by.entries()].filter(([, w]) => w.firstBuy != null).sort((a, b) => a[1].firstBuy - b[1].firstBuy).slice(0, 50)
+      .map(([wallet, w]) => {
+        const h = held.get(wallet);
+        return { ...jupLine(wallet, { held: h ? h.tokens : null, w, supply, priceUsd, solUsd, tagOf, pool: h?.pool }), afterFirstMs: w.firstBuy - t0, slot: null };
+      }).filter((x) => x.label !== "Pool");
+    used.push("early");
+  }
+  out.source = used.length ? used : null;
+  out.firstTally = e.first?.length ? tally(e.first) : null;
+  out.heldOf = (wallet) => held.get(wallet)?.tokens ?? null;
+  out.supply = supply;
+  return out;
 }
 
 function groupPct(b, set) {
@@ -285,7 +451,7 @@ export async function coinTrades(mint, { limit = 100 } = {}) {
     const curve = liveTrades(mint, r, n);
     const seen = new Set(pool.trades.map((x) => x.tx).filter(Boolean));
     const trades = [...pool.trades, ...curve.trades.filter((x) => !x.tx || !seen.has(x.tx))].sort((a, b) => b.t - a.t).slice(0, n);
-    return { ...pool, source: pool.trades.length ? "pool" : "live", trades, note: pool.trades.length ? "Bonded: pool trades from GeckoTerminal, then the curve trades before bonding." : pool.note };
+    return { ...pool, source: pool.trades.length ? "pool" : "live", trades, note: pool.trades.length ? "Bonded: the pool's trades, then the curve trades before bonding." : pool.note };
   }
   if (r?.trades.length) return cached(`trades:${mint}:${n}`, 500, () => liveTrades(mint, r, n));
   if (t?.pair) return poolTrades(mint, t, n);
@@ -306,7 +472,34 @@ function liveTrades(mint, r, n) {
 
 // Bonded coins: the pool's last trades from GeckoTerminal (free, rate limited; cached 10 s per pool).
 const pools = new Map();
+// GET /api/coin/<mint>/big: trades of $1,000 or more over the coin's history (Jupiter), for the chart's bubbles.
+export async function coinBigTrades(mint) {
+  const t = tokenRow(mint) || {};
+  try {
+    const rows = await jupBigTrades(mint);
+    const supply = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : SUPPLY, tagOf = tagger(mint, books.get(mint), t.creator || null);
+    return { mint, trades: rows.map((x) => ({ t: x.t, side: x.side, sol: x.sol, usd: x.usd, mcUsd: x.priceUsd ? Math.round(x.priceUsd * supply) : null, wallet: x.wallet, tx: x.tx, ...tagOf(x.wallet) })) };
+  } catch (e) { return { mint, trades: [], note: e.message }; }
+}
+
+// Bots spam zero-size "buys" (0 tokens, $0): they are not trades, and their price field is junk (XFUN showed
+// rows at $823K market cap on a $6K coin), so the list leaves them out.
+const sized = (x) => !(x.tokens === 0 || (x.usd != null && x.usd <= 0 && !(x.sol > 0)));
+
+// Jupiter first (every trade with its wallet, no allowance to share); GeckoTerminal when Jupiter has none.
 async function poolTrades(mint, t, n) {
+  try {
+    const rows = await jupTrades(mint, n);
+    if (rows.length) {
+      const supply = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : SUPPLY, tagOf = tagger(mint, books.get(mint), t.creator || null);
+      const trades = rows.filter(sized).map((x) => ({ t: x.t, side: x.side, sol: x.sol, usd: x.usd, tokens: x.tokens, mcUsd: x.priceUsd ? Math.round(x.priceUsd * supply) : null, wallet: x.wallet, tx: x.tx, ...tagOf(x.wallet) }));
+      return { mint, source: "pool", pool: t.pair, dex: t.dex, trades, note: "The pool's latest trades from Jupiter, refreshed every few seconds." };
+    }
+  } catch { /* Jupiter down: GeckoTerminal below */ }
+  return geckoTrades(mint, t, n);
+}
+
+async function geckoTrades(mint, t, n) {
   // Every 15 s while a bonded coin's page is open: GeckoTerminal's allowance is shared (gtgate.js).
   const c = pools.get(t.pair);
   if (c && now() - c.t < 15_000) return c.v;
@@ -323,7 +516,7 @@ async function poolTrades(mint, t, n) {
         const buy = a.kind === "buy", px = +(buy ? a.price_to_in_usd : a.price_from_in_usd) || null, vol = +a.volume_in_usd || 0;
         return { t: Date.parse(a.block_timestamp), side: buy ? "buy" : "sell", sol: usd ? +(vol / usd).toFixed(4) : null, usd: +vol.toFixed(2),
           tokens: Math.round(+(buy ? a.to_token_amount : a.from_token_amount) || 0), mcUsd: px ? Math.round(px * supply) : null, wallet: a.tx_from_address || null, tx: a.tx_hash || null, ...tagOf(a.tx_from_address) };
-      }).filter((x) => x.t > 0).sort((a, b) => b.t - a.t).slice(0, n);
+      }).filter((x) => x.t > 0 && sized(x)).sort((a, b) => b.t - a.t).slice(0, n);
       const v = { mint, source: "pool", pool: t.pair, dex: t.dex, trades, note: "Bonded coin: the pool's latest trades from GeckoTerminal, refreshed every few seconds." };
       pools.set(t.pair, { t: now(), v });
       return v;

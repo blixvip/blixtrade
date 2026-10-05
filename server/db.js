@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
   mint TEXT, t INTEGER, price REAL, mcap REAL, liquidity REAL, vol_m5 REAL
 );
 CREATE INDEX IF NOT EXISTS snap_mint ON snapshots(mint, t);
+-- prune and thinning select by time alone: without it each pass reads the whole table
+CREATE INDEX IF NOT EXISTS snap_t ON snapshots(t);
 
 CREATE TABLE IF NOT EXISTS signals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,9 +141,9 @@ export function logEvent(kind, text) {
 export const json = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
 // Price history older than a day is kept as the highest and lowest reading of each 5 minutes per coin,
-// which is all the peak and outcome checks look at. Works forward six hours of history per call so it
+// which is all the peak and outcome checks look at. Works forward one hour of history per call so it
 // never holds the radar up for long.
-const THIN_AFTER = 864e5, THIN_BUCKET = 5 * 60_000, THIN_STEP = 6 * 3600e3;
+const THIN_AFTER = 864e5, THIN_BUCKET = 5 * 60_000, THIN_STEP = 3600e3;
 export function thinSnapshots(now = Date.now()) {
   const end = now - THIN_AFTER;
   let from = Number(meta.get("snap_thin_t", 0));
@@ -155,17 +157,25 @@ export function thinSnapshots(now = Date.now()) {
   return Number(n);
 }
 
-// Keeps the database small: old snapshots and dead tokens go after a few days.
-export function prune() {
+// Keeps the database small: old snapshots and dead tokens go after a few days. Deletes run in slices with a
+// yield between them so the hourly pass never holds the radar up (one statement over the table took ~9 s).
+const yieldNow = () => new Promise((r) => setImmediate(r));
+async function sliced(sql, ...args) {
+  const st = db.prepare(sql);
+  for (let i = 0; i < 500; i++) { if (Number(st.run(...args).changes) < 2000) return; await yieldNow(); }
+}
+export async function prune() {
   const now = Date.now();
-  db.prepare("DELETE FROM snapshots WHERE t < ?").run(now - 3 * 864e5);
-  db.prepare("DELETE FROM tokens WHERE status = 'dead' AND updated < ? AND mint NOT IN (SELECT mint FROM signals)").run(now - 2 * 864e5);
-  db.prepare("DELETE FROM events WHERE t < ?").run(now - 7 * 864e5);
-  db.prepare("DELETE FROM deliveries WHERE t < ?").run(now - 14 * 864e5);
+  await sliced("DELETE FROM snapshots WHERE rowid IN (SELECT rowid FROM snapshots WHERE t < ? LIMIT 2000)", now - 3 * 864e5);
+  await sliced("DELETE FROM tokens WHERE rowid IN (SELECT rowid FROM tokens WHERE status = 'dead' AND updated < ? AND mint NOT IN (SELECT mint FROM signals) LIMIT 2000)", now - 2 * 864e5);
+  await sliced("DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE t < ? LIMIT 2000)", now - 7 * 864e5);
+  await sliced("DELETE FROM deliveries WHERE rowid IN (SELECT rowid FROM deliveries WHERE t < ? LIMIT 2000)", now - 14 * 864e5);
   try { db.prepare("DELETE FROM ai_spend WHERE t < ?").run(now - 60 * 864e5); } catch {}
-  try { thinSnapshots(now); } catch {}
+  // Thinning in 1 h windows, one per yield, until caught up (each window is a few thousand rows).
+  try { for (let i = 0; i < 48 && Number(meta.get("snap_thin_t", 0)) < now - THIN_AFTER; i++) { thinSnapshots(now); await yieldNow(); } } catch {}
   // A read keeps its grade and report; the raw pages it was written from are only useful for a few days.
-  try { db.prepare("UPDATE research SET sources = NULL WHERE t < ? AND sources IS NOT NULL").run(now - 3 * 864e5); } catch {}
+  try { await sliced("UPDATE research SET sources = NULL WHERE rowid IN (SELECT rowid FROM research WHERE t < ? AND sources IS NOT NULL LIMIT 200)", now - 3 * 864e5); } catch {}
+  await yieldNow();
   // Fold the write-ahead log back into the database so it does not grow without limit.
   try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch {}
 }

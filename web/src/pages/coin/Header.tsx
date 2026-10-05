@@ -1,6 +1,8 @@
 // The coin page header: the picture inside its bonding ring with the contract under the name, the live
-// figures (market cap first), and quick paper buys plus the real-money route (Fomo).
-import { loadPaperWallet, paperReady } from "@/lib/mode";
+// figures (market cap first), and quick paper buys plus the real-money route (Fomo), with the switch for
+// the floating instant trade panel (./QuickTrade.tsx).
+import { useTrade } from "@/lib/mode";
+import { trade } from "@/lib/trade";
 import { useState, type ReactNode } from "react";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
 import { toast } from "@/components/ui/toast";
@@ -12,6 +14,7 @@ import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, CoinPic, CopyBtn, Price } from "./parts";
+import { toggleQuick, useQuick } from "./QuickTrade";
 
 const POOL: Record<string, [string, string]> = { pump: ["bg-up", "pump.fun"], bonk: ["bg-caution", "letsbonk.fun"], launchlab: ["bg-accent", "Raydium LaunchLab"], bags: ["bg-warn", "Bags"], moonshot: ["bg-ink-2", "Moonshot"] };
 const SOCIAL: Record<string, keyof typeof Icon> = { twitter: "x", telegram: "tg", website: "web" };
@@ -26,15 +29,15 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
   const ath = Math.max(c?.athUsd || 0, t.peak_mcap || 0, L?.ath || 0, mc || 0) || null;   // never below the price on screen
   const fromAth = mc && ath ? (mc / ath - 1) * 100 : null;
   const chg = L?.chg1m != null && !graduated ? [L.chg1m, "1m"] as const : t.chg_h1 != null ? [t.chg_h1, "1h"] as const : null;
-  const born = t.pair_created || t.first_seen || c?.tradesSince || null;
+  // Jupiter's creation time first: first_seen is when Blix met the coin, days late for one it adopted after launch.
+  const born = c?.created || t.pair_created || t.first_seen || c?.tradesSince || null;
   const pool = POOL[/bonk$/.test(t.mint) ? "bonk" : /pump$/.test(t.mint) ? "pump" : ""];
   const [busy, setBusy] = useState<number | null>(null);
+  const paper = useTrade((st) => st.paper), quick = useQuick((st) => st.open);
   const buy = async (sol: number) => {
     setBusy(sol);
-    if (!paperReady()) return;
-    try { await post("paper/quoted", { mint: t.mint, sol }); toast(`Paper buy $${t.symbol || ""}: ${sol} SOL`); onPaper(); loadPaperWallet(); }
-    catch (e) { toast((e as Error).message); }
-    finally { setBusy(null); }
+    if (await trade({ side: "buy", mint: t.mint, symbol: t.symbol || "", sol }, () => post("paper/quoted", { mint: t.mint, sol }))) onPaper();
+    setBusy(null);
   };
   const stat = (label: string, value: ReactNode, tip?: string) => (
     <Tip tip={tip}><div className="flex min-w-0 flex-col gap-1"><span className="label">{label}</span><b className="num whitespace-nowrap text-lg font-semibold text-ink">{value}</b></div></Tip>
@@ -91,7 +94,13 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
       </div>
 
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
-        <Tip tip="Paper buys at the real quote: nothing is really bought"><span className="flex items-center gap-1 text-[0.625rem] font-bold tracking-wider text-warn"><Icon.bolt className="size-3.5" />PAPER</span></Tip>
+        <Tip tip="Float the quick buy / sell panel over the chart (drag it anywhere)">
+          <button onClick={toggleQuick} aria-pressed={quick}
+            className={cn("mr-1 inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-sm font-semibold", quick ? "border-accent bg-accent/15 text-ink" : "border-rule-2 text-ink-2 hover:text-ink")}>
+            <CIcon.window className="size-3.5" />Instant
+          </button>
+        </Tip>
+        <Tip tip={paper ? "Paper buys at the real quote: nothing is really bought" : "Paper is off: these buy with real SOL from your wallet"}><span className={cn("flex items-center gap-1 text-[0.625rem] font-bold tracking-wider", paper ? "text-warn" : "text-up")}><Icon.bolt className="size-3.5" />{paper ? "PAPER" : "REAL"}</span></Tip>
         {sizes.map((s) => (
           <button key={s} disabled={busy != null} onClick={() => buy(s)}
             className="num inline-flex h-7 items-center gap-1.5 rounded-full border border-up/50 px-3 text-sm font-semibold text-up hover:bg-up/15 disabled:opacity-50"><SolanaLogo className="w-3" />{s}</button>

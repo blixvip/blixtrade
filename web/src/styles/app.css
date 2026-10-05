@@ -6,25 +6,25 @@
 
 /* The one place colour, type, radius and motion are defined. Components only use these names. */
 @theme {
-  /* surfaces: black, as in the wordmark's ground, stepping up through graphite. A trace of blue keeps it cold like polished steel. */
-  --color-paper: oklch(6% 0.003 255);
-  --color-paper-2: oklch(10.5% 0.004 255);
-  --color-paper-3: oklch(14% 0.005 255);
-  --color-paper-4: oklch(18% 0.006 255);
-  --color-paper-5: oklch(23% 0.007 255);
-  --color-rule: oklch(21% 0.006 255);
-  --color-rule-2: oklch(32% 0.008 255);
-  --color-edge: oklch(100% 0 0 / 0.13);
+  /* surfaces: flat neutral greys, no tint (owner, 2026-10-04: a browser new-tab page is "the feeling": #1c1c1c ground, #2b2b2b fields, soft edges). A trace of blue keeps it cold like polished steel. */
+  --color-paper: oklch(18% 0 0);
+  --color-paper-2: oklch(20% 0 0);
+  --color-paper-3: oklch(24% 0 0);
+  --color-paper-4: oklch(27.5% 0 0);
+  --color-paper-5: oklch(31.5% 0 0);
+  --color-rule: oklch(26% 0 0);
+  --color-rule-2: oklch(32.5% 0 0);
+  --color-edge: oklch(100% 0 0 / 0.06);
 
-  --color-ink: oklch(96% 0.004 255);
-  --color-ink-2: oklch(79% 0.008 255);
-  --color-muted: oklch(62% 0.010 255);
+  --color-ink: oklch(95% 0 0);
+  --color-ink-2: oklch(80% 0 0);
+  --color-muted: oklch(64% 0 0);
 
   /* one accent, chrome: selection, focus, links, the AI, the light in the field. It is a light, not a hue. */
-  --color-accent: oklch(90% 0.012 250);
-  --color-accent-dim: oklch(52% 0.012 250);
-  --color-accent-ink: oklch(12% 0.006 255);
-  --color-focus: oklch(98% 0.004 250);
+  --color-accent: oklch(92% 0 0);
+  --color-accent-dim: oklch(50% 0 0);
+  --color-accent-ink: oklch(18% 0 0);
+  --color-focus: oklch(98% 0 0);
 
   /* the metal itself: a strip of polished chrome, light from above, a dark horizon, light bouncing back up */
   --chrome: linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(88% 0.010 250) 22%, oklch(58% 0.014 252) 47%, oklch(34% 0.012 255) 53%, oklch(74% 0.012 250) 70%, oklch(96% 0.006 250) 100%);
@@ -41,8 +41,10 @@
   /* a small market cap, and an X handle: the one cool data colour (large caps read warn, then up) */
   --color-info: oklch(80% 0.09 235);
 
-  --font-display: system-ui, "Segoe UI Variable Display", "Segoe UI", -apple-system, sans-serif;
-  --font-body: system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+  /* SF Pro: installed on the owner's PC, built into Apple devices (-apple-system). Not bundled (Apple's licence);
+     anyone without it gets Segoe UI. */
+  --font-display: "SF Pro Display", "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "SF Pro Text", "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-outlier: "JetBrains Mono", "Cascadia Mono", ui-monospace, Consolas, monospace;
 
   --text-2xs: 0.625rem;
@@ -62,10 +64,10 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
   /* depth: every raised surface has a lit top edge and a shadow that falls away from the light */
-  --shadow-panel: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.6), 0 18px 40px -22px oklch(0% 0 0 / 0.9);
-  --shadow-raised: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.5), 0 6px 16px -8px oklch(0% 0 0 / 0.8);
-  --shadow-glow: 0 0 18px -4px oklch(96% 0.006 250 / 0.35);
-  --shadow-sheet: inset 0 1px 0 var(--color-edge), 0 30px 80px -20px oklch(0% 0 0 / 0.95);
+  --shadow-panel: 0 1px 2px oklch(0% 0 0 / 0.25);
+  --shadow-raised: 0 1px 2px oklch(0% 0 0 / 0.3);
+  --shadow-glow: none;
+  --shadow-sheet: 0 24px 60px -20px oklch(0% 0 0 / 0.6);
 
   --animate-flash-up: flash-up 700ms var(--ease-out);
   --animate-flash-down: flash-down 700ms var(--ease-out);
@@ -112,24 +114,19 @@
   /* a surface raised one step above the field: mostly opaque, the light shows faintly through */
   /* a panel: dark polished metal. Lit along its top edge, falling to black, with a hairline that catches the light. */
   .surface {
-    background: linear-gradient(180deg, color-mix(in oklch, var(--color-paper-3) 88%, transparent), color-mix(in oklch, var(--color-paper-2) 90%, transparent) 64px, color-mix(in oklch, var(--color-paper) 88%, transparent));
+    background: var(--color-paper-2);
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-panel);
   }
   /* chrome lettering: page titles and the lead figures. Only on large, heavy type; never on body text. */
-  .chrome-text {
-    background: var(--chrome-type);
-    -webkit-background-clip: text; background-clip: text;
-    color: transparent; -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 0 10px oklch(96% 0.006 250 / 0.18));
-  }
+  .chrome-text { color: var(--color-ink); }
   /* a chrome control: the one primary action in a view, and what a quiet button becomes under the pointer */
   .chrome-fill {
-    background: var(--chrome-soft);
-    color: var(--color-accent-ink);
-    border-color: oklch(98% 0 0 / 0.6);
-    box-shadow: inset 0 1px 0 oklch(100% 0 0 / 0.9), inset 0 -1px 0 oklch(0% 0 0 / 0.35), var(--shadow-glow);
+    background: var(--color-paper-5);
+    color: var(--color-ink);
+    border-color: transparent;
+    box-shadow: 0 1px 2px oklch(0% 0 0 / 0.3);
   }
   .label {
     font: 600 var(--text-2xs) / 1 var(--font-body);
@@ -139,10 +136,7 @@
   }
   .num { font-variant-numeric: tabular-nums; }
   /* a strip of brushed metal: column headers, the selected choice in a group */
-  .metal-bar {
-    background: linear-gradient(180deg, var(--color-paper-5), var(--color-paper-3) 55%, var(--color-paper-2));
-    box-shadow: inset 0 1px 0 var(--color-edge), inset 0 -1px 0 oklch(0% 0 0 / 0.55);
-  }
+  .metal-bar { background: var(--color-paper-3); }
 }
 
 @media (prefers-reduced-motion: reduce) {

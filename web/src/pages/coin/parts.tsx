@@ -6,6 +6,7 @@ import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { priceParts, solNum, type WalletTags } from "@/lib/coin";
 import { shortAddr } from "@/lib/format";
+import { usePic } from "@/lib/pics";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 
@@ -16,6 +17,9 @@ export const CIcon = {
   back: I(<path d="M15 5l-7 7 7 7" />),
   shield: I(<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M8.5 12l2.5 2.5 4.5-5" /></>),
   external: I(<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />),
+  pencil: I(<><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></>),
+  check: I(<path d="M5 12.5l4.5 4.5L19 7" />),
+  window: I(<><rect x="3.5" y="5" width="17" height="14" rx="2" /><path d="M3.5 9h17M7 13h4M7 16h7" /></>),
 };
 
 export function Price({ value, className }: { value: number | null | undefined; className?: string }) {
@@ -65,19 +69,16 @@ export function Who({ wallet, x }: { wallet: string | null; x: WalletTags }) {
 
 // The coin's picture from the radar's image cache, the ticker underneath until it loads.
 export function CoinPic({ mint, symbol, size = 56, ring }: { mint: string; symbol?: string | null; size?: number; ring?: number | null }) {
-  const [n, setN] = useState(0);
-  const [ok, setOk] = useState(false);
-  const dead = n > 3;
+  const pic = usePic(mint);
   const pad = ring == null ? 0 : 3;
   return (
     <div className="relative shrink-0 rounded-[13px]" style={{ width: size + pad * 2, height: size + pad * 2, padding: pad,
       background: ring == null ? undefined : `conic-gradient(var(--color-up) ${Math.min(1, Math.max(0, ring)) * 360}deg, var(--color-rule-2) 0)` }}>
       <div className="relative grid size-full place-items-center overflow-hidden rounded-[10px] bg-paper-4">
         <span className="font-display text-xs font-semibold text-muted">{(symbol || "?").slice(0, 4).toUpperCase()}</span>
-        {!dead && (
-          <img key={n} src={`/img/${mint}${n ? `?r=${n}` : ""}`} alt="" decoding="async"
-            onLoad={() => setOk(true)} onError={() => window.setTimeout(() => setN((x) => x + 1), [1500, 4000, 10_000][n] ?? 0)}
-            className={cn("absolute inset-0 size-full object-cover transition-opacity duration-200", ok ? "opacity-100" : "opacity-0")} />
+        {pic.src && (
+          <img key={pic.key} src={pic.src} alt="" decoding="async" onLoad={pic.onLoad} onError={pic.onError}
+            className={cn("absolute inset-0 size-full object-cover transition-opacity duration-200", pic.ok ? "opacity-100" : "opacity-0")} />
         )}
       </div>
     </div>

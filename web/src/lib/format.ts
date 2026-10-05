@@ -5,6 +5,8 @@ export const compact = (n: number | null | undefined) =>
 export const pct = (n: number | null | undefined) =>
   n == null ? "—" : `${n > 0 ? "+" : ""}${Math.abs(n) >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(Math.abs(n) < 10 ? 1 : 0)}%`;
 
+// How old a coin is, coloured like Axiom: green for its first 10 minutes, orange to an hour, red after.
+export const ageTone = (ms: number) => (ms < 10 * 60_000 ? "text-up" : ms < 60 * 60_000 ? "text-caution" : "text-down");
 export const ageStr = (ms: number) => {
   const s = ms / 1000;
   return s < 60 ? `${Math.max(0, Math.floor(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;

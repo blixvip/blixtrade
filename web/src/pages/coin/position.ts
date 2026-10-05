@@ -1,0 +1,79 @@
+// Your position in one coin, worked out once for the page and read by the Position card, the instant trade
+// panel and the chart's average buy and sell lines: the paper one while Paper is on, the real wallet's while
+// it is off. Averages are per token (all SOL paid over all tokens bought), the way Axiom and GMGN show them.
+import { useEffect, useState } from "react";
+import type { CoinData, Paper, TokenDetail } from "@/lib/coin";
+import { useTrade } from "@/lib/mode";
+import { usePulse } from "@/lib/pulse";
+import { useMe } from "@/lib/ui";
+
+interface RealTx { kind: string; mint: string | null; sol: number | null; tokens: string | null; status: string }
+export interface Pos {
+  paper: boolean;            // whose position this is: the paper wallet's, or the signed-in wallet's
+  has: boolean;              // any trade in this coin
+  bought: number; sold: number;
+  holding: number | null;    // what is still held is worth now, in SOL (null: no live price)
+  pnl: number | null;        // sold + holding − bought, in SOL
+  entry: number | null;      // average market cap bought at
+  exit: number | null;       // average market cap sold at (null before the first sell)
+  mcapNow: number | null;
+  open: Paper[];             // paper: the open rows (a sell goes through each)
+  tokens: number | null;     // tokens held (paper: quoted rows only; real: the wallet's)
+  canSell: boolean;
+}
+
+export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | null): Pos {
+  const paper = useTrade((st) => st.paper), me = useMe((st) => st.me);
+  const [txs, setTxs] = useState<{ mint: string; list: RealTx[] }>({ mint, list: [] });
+  const walletKey = me?.signedIn ? `${me.wallet?.sol}:${me.wallet?.tokens?.length}` : "";
+  useEffect(() => {
+    if (paper || !me?.signedIn) return;
+    let alive = true;
+    fetch("/api/account/txs", { signal: AbortSignal.timeout(20_000) }).then((x) => (x.ok ? x.json() : [])).then((j: RealTx[]) => {
+      if (alive) setTxs({ mint, list: j.filter((t) => t.mint === mint && t.status !== "failed" && (t.kind === "buy" || t.kind === "sell")) });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [paper, walletKey, mint]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mcapNow = c?.mcUsd ?? r?.live?.mcap ?? r?.token.mcap ?? null;
+  const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false };
+  if (paper) {
+    // A partial sell splits a row: the sold part becomes a closed row with the same entry, so summing every
+    // row counts each buy once. Tokens per row are SOL over entry market cap (the same units throughout).
+    const ps = r?.paper || [], open = ps.filter((p) => p.status === "open");
+    const valueOf = (p: Paper) => p.valueSol ?? (p.mult != null ? p.sol * p.mult : null);
+    pos.open = open;
+    pos.bought = ps.reduce((a, p) => a + (p.sol || 0), 0);
+    pos.sold = ps.filter((p) => p.status === "closed").reduce((a, p) => a + (p.exit_sol ?? valueOf(p) ?? 0), 0);
+    pos.holding = open.every((p) => valueOf(p) != null) ? open.reduce((a, p) => a + (valueOf(p) || 0), 0) : null;
+    pos.tokens = open.length && open.every((p) => (p.tokens || 0) > 0) ? open.reduce((a, p) => a + (p.tokens || 0), 0) : null;
+    pos.has = ps.length > 0;
+    pos.canSell = open.length > 0;
+    const w = (p: Paper) => (p.sol > 0 && (p.mcap0 || 0) > 0 ? p.sol / (p.mcap0 as number) : 0);
+    const bw = ps.reduce((a, p) => a + w(p), 0), paid = ps.reduce((a, p) => a + (w(p) ? p.sol : 0), 0);
+    pos.entry = bw ? paid / bw : null;
+    const sells = ps.filter((p) => p.status === "closed" && (p.exit_mcap || 0) > 0 && w(p));
+    const sw = sells.reduce((a, p) => a + w(p), 0);
+    pos.exit = sw ? sells.reduce((a, p) => a + w(p) * (p.exit_mcap as number), 0) / sw : null;
+  } else {
+    const list = txs.mint === mint ? txs.list : [];
+    const raw = (t: RealTx) => Number(t.tokens) || 0;
+    const buys = list.filter((t) => t.kind === "buy"), sells = list.filter((t) => t.kind === "sell");
+    pos.bought = buys.reduce((a, t) => a + (t.sol || 0), 0); pos.sold = sells.reduce((a, t) => a + (t.sol || 0), 0);
+    const boughtRaw = buys.reduce((a, t) => a + raw(t), 0), soldRaw = sells.reduce((a, t) => a + raw(t), 0), heldRaw = boughtRaw - soldRaw;
+    const held = me?.wallet?.tokens?.find((x) => x.mint === mint);
+    const solUsd = me?.wallet && me.wallet.sol > 0 && me.wallet.solUsd ? me.wallet.solUsd / me.wallet.sol : usePulse.getState().live.solUsd || 0;
+    pos.holding = !held ? 0 : held.usd != null && solUsd ? held.usd / solUsd : null;
+    pos.tokens = held?.ui ?? 0;
+    pos.has = list.length > 0 || Boolean(held);
+    pos.canSell = (held?.ui ?? 0) > 0;
+    // What was paid (or got) per token against what a token is worth now, applied to the cap now.
+    const nowPer = pos.holding && heldRaw > 0 ? pos.holding / heldRaw : null;
+    if (mcapNow && nowPer) {
+      if (pos.bought && boughtRaw) pos.entry = (mcapNow * (pos.bought / boughtRaw)) / nowPer;
+      if (pos.sold && soldRaw) pos.exit = (mcapNow * (pos.sold / soldRaw)) / nowPer;
+    }
+  }
+  pos.pnl = pos.has && pos.holding != null ? pos.sold + pos.holding - pos.bought : null;
+  return pos;
+}

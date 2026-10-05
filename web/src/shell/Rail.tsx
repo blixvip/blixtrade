@@ -1,25 +1,24 @@
 import { useEffect, useRef, type ComponentType, type SVGProps } from "react";
 import { openExchange } from "@/components/Exchange";
+import { CoinImg } from "@/components/page";
 import { compact, pct, tone } from "@/lib/format";
 import { usePulse } from "@/lib/pulse";
 import { loadMe, useMe, useUi } from "@/lib/ui";
 import { loadPaperWallet, setPaper, useTrade } from "@/lib/mode";
 import { cn } from "@/lib/utils";
-import { useFx, type FxMode } from "@/shader/ShaderField";
 import { useShallow } from "zustand/react/shallow";
 import { PoweredBy, SolanaLogo } from "@/components/brand";
 import { Icon } from "./icons";
+import { NavIcon } from "./navIcons";
 
 // The shell: a side rail with every page (the owner prefers the rail to a top nav), and a strip across
 // the top of the page with what is moving, the search, Deposit and the wallet.
 type Item = [route: string, label: string, icon: ComponentType<SVGProps<SVGSVGElement>>];
-const MAIN: Item[] = [["coins", "Discover", Icon.coins], ["", "Pulse", Icon.pulse], ["wallets", "Trackers", Icon.wallets], ["signals", "Signals", Icon.signals],
-  ["picks", "Picks", Icon.picks], ["research", "Research", Icon.research], ["account", "Portfolio", Icon.user]];
-const MORE: Item[] = [["narratives", "Narratives", Icon.narratives], ["briefs", "Briefs", Icon.briefs], ["record", "Track record", Icon.record],
-  ["health", "Health", Icon.health], ["api", "API", Icon.api], ["mcp", "MCP", Icon.mcp], ["settings", "Settings", Icon.settings]];
+const MAIN: Item[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse], ["feed", "Feed", NavIcon.feed], ["narratives", "Narratives", NavIcon.narratives],
+  ["picks", "Picks", NavIcon.picks], ["research", "Research", NavIcon.research], ["traders", "Top traders", NavIcon.traders], ["launch", "Create coin", NavIcon.launch], ["account", "Portfolio", NavIcon.account]];
+const MORE: Item[] = [["health", "Health", NavIcon.health], ["api", "API", NavIcon.api], ["mcp", "MCP", NavIcon.mcp], ["settings", "Settings", NavIcon.settings]];
 // Every page, for anything that needs a page's name (main.tsx).
 export const NAV: { group: string; items: Item[] }[] = [{ group: "Main", items: MAIN }, { group: "More", items: MORE }];
-const FX: [FxMode, string][] = [["full", "Live"], ["static", "Still"], ["off", "Off"]];
 const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 // The liquid-chrome BLIX wordmark (public/brand). Its black ground is dropped by the screen blend.
@@ -87,7 +86,7 @@ function Tape() {
         const chg = c.chg1m ?? c.chg5;
         return (
           <a key={c.mint} href={`#/coin/${c.mint}`} className="flex items-center gap-1.5 text-ink-2 hover:text-ink">
-            <img src={`/img/${c.mint}`} alt="" className="size-4 rounded-chip bg-paper-4 object-cover" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+            <span className="relative size-4 shrink-0 overflow-hidden rounded-chip bg-paper-4"><CoinImg mint={c.mint} /></span>
             <b className="font-semibold text-ink">{c.symbol || "?"}</b><span className="num text-muted">{compact(c.mcap)}</span>
             {chg != null && <span className={cn("num", tone(chg))}>{pct(chg)}</span>}
           </a>
@@ -97,17 +96,19 @@ function Tape() {
   );
 }
 
-// The rail, in the same order as classic Blix. Settings sits apart at the bottom.
-const SIDE: (Item | [...Item, string])[] = [["", "Pulse", Icon.pulse, "LIVE"], ["signals", "Signals", Icon.signals], ["picks", "Picks", Icon.picks, "AI"], ["research", "Research", Icon.research],
-  ["narratives", "Narratives", Icon.narratives], ["coins", "Discover", Icon.coins], ["wallets", "Trackers", Icon.wallets], ["briefs", "Briefs", Icon.briefs], ["record", "Track record", Icon.record],
-  ["health", "Health", Icon.health], ["api", "API", Icon.api], ["mcp", "MCP", Icon.mcp], ["account", "Account", Icon.user]];
+// The rail: Discover, Pulse and Narratives first (the owner's order), then the rest. API, MCP, Account and
+// Settings sit apart at the bottom. Health is off the rail (still at #/health).
+const SIDE: (Item | [...Item, string])[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse, "LIVE"], ["feed", "Feed", NavIcon.feed], ["narratives", "Narratives", NavIcon.narratives],
+  ["picks", "Picks", NavIcon.picks, "AI"], ["research", "Research", NavIcon.research], ["traders", "Top traders", NavIcon.traders],
+  ["launch", "Create coin", NavIcon.launch, "NEW"]];
+const FOOT: Item[] = [["api", "API", NavIcon.api], ["mcp", "MCP", NavIcon.mcp], ["account", "Account", NavIcon.account], ["settings", "Settings", NavIcon.settings]];
 
 function RailLink({ item: [route, label, Ic, badge], active }: { item: Item | [...Item, string]; active: boolean }) {
   return (
     <a href={`#/${route}`} aria-current={active ? "page" : undefined}
       className={cn("group flex h-9 items-center gap-3 rounded-control px-3 text-lg whitespace-nowrap transition-colors duration-100",
         active ? "bg-paper-4 font-semibold text-ink shadow-raised" : "text-ink-2 hover:bg-paper-3 hover:text-ink")}>
-      <Ic className={cn("size-4.5 shrink-0", active ? "text-ink" : "text-muted group-hover:text-ink-2")} />
+      <Ic className={cn("size-5 shrink-0 transition-colors duration-100 [&_.duo]:transition-opacity", active ? "text-ink [&_.duo]:opacity-35" : "text-muted group-hover:text-ink-2")} />
       <span>{label}</span>
       {badge && <em className={cn("ml-auto rounded-chip border px-1.5 text-2xs font-semibold not-italic", badge === "LIVE" ? "border-up/40 text-up" : "border-rule-2 text-muted")}>{badge}</em>}
     </a>
@@ -115,24 +116,20 @@ function RailLink({ item: [route, label, Ic, badge], active }: { item: Item | [.
 }
 
 export function Rail({ route }: { route: string }) {
-  const connected = usePulse((s) => s.connected);
-  const { mode, auto, set } = useFx();
+  const connected = usePulse((s) => s.connected), polling = usePulse((s) => s.polling);
   return (
     <aside className="flex h-dvh w-48 shrink-0 flex-col gap-1 border-r border-rule bg-paper/80 px-2 py-3 max-md:hidden">
-      <a href="#/" aria-label="Blix, home" className="mb-2 block px-1"><Mark /></a>
+      <a href="#/" aria-label="Blix, home" className="mt-1 mb-3 block w-[136px] px-2.5"><Mark /></a>
       <PoweredBy />
       <nav aria-label="Pages" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {SIDE.map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
       </nav>
       <div className="mt-auto flex flex-col gap-2 pt-2">
-        <RailLink item={["settings", "Settings", Icon.settings]} active={route === "settings"} />
+        <div className="flex flex-col gap-0.5 border-t border-rule pt-2">
+          {FOOT.map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
+        </div>
         <div className="flex items-center justify-between gap-2 px-3 text-sm">
-          <span className={cn("flex items-center gap-1.5", connected ? "text-up" : "text-warn")}><i className={cn("size-1.5 rounded-full", connected ? "bg-up" : "bg-warn")} />{connected ? "connected" : "connecting"}</span>
-          <span className="flex gap-1.5 text-xs" role="radiogroup" aria-label={`Background effect${auto ? " (paused itself: the graphics card was busy)" : ""}`}>
-            {FX.map(([m, text]) => (
-              <button key={m} role="radio" aria-checked={mode === m} onClick={() => set(m)} className={cn("transition-colors duration-100", mode === m ? "text-ink" : "text-muted hover:text-ink-2")}>{text}</button>
-            ))}
-          </span>
+          <span title={polling ? "The live stream cannot get through this connection, so figures refresh every 2 seconds instead" : undefined} className={cn("flex items-center gap-1.5", connected || polling ? "text-up" : "text-warn")}><i className={cn("size-1.5 rounded-full", connected || polling ? "bg-up" : "bg-warn")} />{connected ? "connected" : polling ? "live · polling" : "connecting"}</span>
         </div>
       </div>
     </aside>
@@ -182,7 +179,7 @@ export function BottomBar({ route }: { route: string }) {
   return (
     <nav aria-label="Pages" className="hidden shrink-0 overflow-x-auto border-t border-rule bg-paper-2 [scrollbar-width:none] max-md:flex">
       {/* Every page, the main ones first; it scrolls sideways for the rest. */}
-      {([...SIDE, ["settings", "Settings", Icon.settings]] as Item[]).map(([r, label, Ic]) => (
+      {([...SIDE, ...FOOT] as Item[]).map(([r, label, Ic]) => (
         <a key={r} href={`#/${r}`} aria-current={route === r ? "page" : undefined}
           className={cn("flex w-[4.6rem] shrink-0 flex-col items-center gap-1 py-2 text-2xs whitespace-nowrap", route === r ? "text-ink" : "text-muted")}>
           <Ic className="size-4.5" />{label}

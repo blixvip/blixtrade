@@ -502,7 +502,7 @@ test("quotes use the current Jupiter host and the token's actual decimals", asyn
   L.feed.solKnown = true; L.feed.solUsd = 100;
   t.mock.method(globalThis, "fetch", async (input) => {
     const u = new URL(input);
-    assert.equal(u.hostname, "api.jup.ag");
+    assert.equal(u.hostname, "lite-api.jup.ag", "keyless trade quotes use the priority lane on lite-api");
     if (u.pathname === "/price/v3") return Response.json({ [mint]: { decimals: 9, usdPrice: 2 } });
     assert.equal(u.searchParams.get("amount"), "100000000");
     return Response.json({ outAmount: "5000000000", otherAmountThreshold: "4850000000", priceImpactPct: "0.01", routePlan: [] });

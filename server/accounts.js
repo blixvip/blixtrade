@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { initSocial, socialRoute } from "./social.js";
 
 // Same data folder as the radar (db.js), worked out here so this file can also run on its own
 // (server/accounts-server.mjs) without opening the radar's database.
@@ -33,11 +34,12 @@ try {
     CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, account_id INTEGER NOT NULL, expires INTEGER NOT NULL, authed INTEGER NOT NULL);
   `);
 } catch (e) { adb = null; console.error("[accounts] the account database could not be opened:", e.message); }
+try { if (adb) initSocial(adb, DATA); } catch (e) { console.error("[accounts] profiles could not be set up:", e.message); }
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const send = (res, code, body, extra = {}) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...extra }); res.end(JSON.stringify(body)); };
 const redirect = (res, to, cookies = []) => { res.writeHead(302, { location: to, "cache-control": "no-store", "set-cookie": cookies }); res.end(); };
-const readBody = (req) => new Promise((ok) => { let b = ""; req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); }); req.on("end", () => { try { ok(JSON.parse(b || "{}")); } catch { ok({}); } }); });
+const readBody = (req, max = 1e5) => new Promise((ok) => { let b = ""; req.on("data", (c) => { b += c; if (b.length > max) req.destroy(); }); req.on("end", () => { try { ok(JSON.parse(b || "{}")); } catch { ok({}); } }); });
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 const cookie = (req, name) => new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.cookie || "")?.[1];
@@ -173,8 +175,10 @@ async function route(req, res, url) {
     const t = cookie(req, "blix_session"); if (t) adb.prepare("DELETE FROM sessions WHERE token = ?").run(sha(t));
     return send(res, 200, { signedIn: false }, { "set-cookie": "blix_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
   }
+  // Profiles, people and following (server/social.js); some of it is open to visitors who are not signed in.
+  if (await socialRoute(req, res, url, { me, send, fail, readBody, vault })) return;
   if (!me) throw fail(401, "Sign in first.");
-  const body = m === "POST" ? await readBody(req) : {};
+  const body = m === "POST" ? await readBody(req, p === "/api/account/launch" ? 6e6 : 1e5) : {};   // a launch carries the coin picture
   // Moving money out, or showing the key, needs a Google sign-in from the last ten minutes.
   const fresh = () => { if (Date.now() - s.authed > FRESH_MS) throw Object.assign(fail(401, "Sign in with Google again to confirm this."), { confirm: true }); };
   if (p === "/api/account/txs" && m === "GET") return send(res, 200, await vault(`/users/${me.vault_id}/txs`));
@@ -185,6 +189,31 @@ async function route(req, res, url) {
   if (p === "/api/account/sell" && m === "POST") {
     if (!MINT.test(String(body.mint || ""))) throw fail(400, "That is not a coin's contract address.");
     return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "sell", mint: body.mint, pct: body.pct, slippageBps: body.slippageBps }));
+  }
+  // A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
+  // builds, signs and sends the create (+ the creator's first buy) from this person's wallet.
+  if (p === "/api/account/launch" && m === "POST") {
+    const name = String(body.name || "").trim(), symbol = String(body.symbol || "").trim().replace(/^\$/, "").toUpperCase();
+    if (!name || name.length > 32) throw fail(400, "The name is 1 to 32 characters.");
+    if (!/^[A-Z0-9]{1,10}$/.test(symbol)) throw fail(400, "The ticker is 1 to 10 letters or numbers.");
+    const img = /^data:(image\/(png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(body.image || ""));
+    if (!img) throw fail(400, "Add a picture (PNG, JPG, GIF or WebP).");
+    const bytes = Buffer.from(img[3], "base64");
+    if (bytes.length > 4.3e6) throw fail(400, "The picture is over 4 MB.");
+    const link = (v, re) => { v = String(v || "").trim(); if (!v) return ""; if (!/^https:\/\/\S{3,200}$/.test(v) || (re && !re.test(v))) throw fail(400, `That is not a working link: ${v.slice(0, 60)}`); return v; };
+    const fd = new FormData();
+    fd.append("file", new Blob([bytes], { type: img[1] }), `coin.${img[2] === "jpeg" ? "jpg" : img[2]}`);
+    fd.append("name", name); fd.append("symbol", symbol); fd.append("description", String(body.description || "").trim().slice(0, 500));
+    fd.append("twitter", link(body.twitter, /^https:\/\/(x|twitter)\.com\//)); fd.append("telegram", link(body.telegram, /^https:\/\/t\.me\//)); fd.append("website", link(body.website));
+    fd.append("showName", "true");
+    let meta;
+    try {
+      const r = await fetch("https://pump.fun/api/ipfs", { method: "POST", body: fd, signal: AbortSignal.timeout(45_000) });
+      meta = await r.json().catch(() => null);
+      if (!r.ok || !meta?.metadataUri) throw new Error(`HTTP ${r.status}`);
+    } catch (e) { throw fail(502, `The picture could not be uploaded to IPFS (${e.message}). Try again.`); }
+    const out = await vault(`/users/${me.vault_id}/launch`, { name, symbol, uri: meta.metadataUri, sol: +body.sol || 0, slippageBps: body.slippageBps });
+    return send(res, 200, { ...out, uri: meta.metadataUri, image: meta.metadata?.image || null });
   }
   // Paying by card: Stripe's own hosted page takes the payment and sends the SOL to this person's wallet.
   if (p === "/api/account/onramp" && m === "POST") {

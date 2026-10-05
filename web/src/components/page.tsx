@@ -1,6 +1,7 @@
 // The pieces every page is built from: the page frame, panels, a figure strip, table cells, a coin cell.
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { ageStr } from "@/lib/format";
+import { usePic } from "@/lib/pics";
 import { cn } from "@/lib/utils";
 
 export const ago = (t?: number | null) => (t ? `${ageStr(Date.now() - t)} ago` : "never");
@@ -54,13 +55,24 @@ export const Empty = ({ children }: { children: ReactNode }) => <p className="px
 export const Loading = () => <div className="h-24 animate-pulse rounded-card border border-rule bg-paper-2" />;
 export const Problem = ({ text }: { text: string }) => <p className="rounded-control border border-down/40 bg-down/10 px-3 py-2 text-md text-ink-2">Blix did not answer: {text}</p>;
 
+// A coin's picture, laid over its ticker letters (lib/pics.ts loads it and retries a miss). Hidden until
+// loaded: never a broken-image box.
+export function CoinImg({ mint, className }: { mint: string; className?: string }) {
+  const pic = usePic(mint);
+  if (!pic.src) return null;
+  return (
+    <img key={pic.key} src={pic.src} alt="" decoding="async" draggable={false} onLoad={pic.onLoad} onError={pic.onError}
+      className={cn("absolute inset-0 size-full object-cover transition-opacity duration-150", pic.ok ? "opacity-100" : "opacity-0", className)} />
+  );
+}
+
 // A coin: picture, ticker and name. Opens the coin page.
 export function CoinCell({ mint, symbol, name, sub }: { mint: string; symbol?: string | null; name?: string | null; sub?: ReactNode }) {
   return (
     <a href={`#/coin/${mint}`} className="flex min-w-0 items-center gap-2.5 hover:text-ink">
       <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-chip bg-paper-4 text-2xs font-semibold text-muted uppercase">
         {(symbol || "?").slice(0, 3)}
-        <img src={`/img/${mint}`} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+        <CoinImg mint={mint} />
       </span>
       <span className="flex min-w-0 flex-col"><b className="truncate font-semibold text-ink">{symbol || "?"}</b><span className="max-w-56 truncate text-sm text-muted">{sub ?? name}</span></span>
     </a>

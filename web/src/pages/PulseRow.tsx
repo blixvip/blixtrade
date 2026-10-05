@@ -1,13 +1,15 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { PumpLogo } from "@/components/brand";
+import { usePic } from "@/lib/pics";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
-import { ageStr, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
+import { ageStr, ageTone, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
 import { usePrefs } from "@/lib/prefs";
+import { hideCoins, unhideCoin, useHidden } from "@/lib/hidden";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -34,42 +36,24 @@ function Flash({ value, children, className }: { value: number | null | undefine
 
 function Age({ born }: { born: number }) {
   const now = useNow();
-  return <span className="num text-lg font-medium text-up">{ageStr(now - born)}</span>;
-}
-
-// The radar answers 404 for a picture it is still fetching (a coin made seconds ago), so a miss is retried
-// a few times before the ticker is shown instead. What is known is remembered across scrolling.
-const picKnown = new Map<string, "ok" | "dead">();
-const PIC_RETRY_MS = [1500, 4000, 10_000];
-function usePicture(mint: string) {
-  const [state, setState] = useState<{ n: number; dead: boolean }>(() => ({ n: 0, dead: picKnown.get(mint) === "dead" }));
-  const [shown, setShown] = useState(false);   // hidden until it has loaded, so a miss never shows a broken-image box
-  const timer = useRef(0);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return {
-    shown,
-    src: state.dead ? null : `/img/${mint}${state.n ? `?r=${state.n}` : ""}`,
-    onLoad: () => { picKnown.set(mint, "ok"); setShown(true); },
-    onError: () => {
-      const wait = PIC_RETRY_MS[state.n];
-      if (wait == null) { picKnown.set(mint, "dead"); if (picKnown.size > 3000) picKnown.clear(); return setState({ n: state.n, dead: true }); }
-      timer.current = window.setTimeout(() => setState({ n: state.n + 1, dead: false }), wait);
-    },
-  };
+  return <span className={cn("num text-lg font-medium", ageTone(now - born))}>{ageStr(now - born)}</span>;
 }
 
 // The picture, framed by the bonding progress, with the launchpad marked on its corner.
 function Avatar({ coin, ring }: { coin: Coin; ring: number }) {
-  const pic = usePicture(coin.mint);
-  const pool = POOL[(coin.pool || "").toLowerCase()];
+  const pic = usePic(coin.mint);
+  // Later columns often arrive without the launchpad; a pump.fun coin still shows by its dex or its "…pump" mint.
+  const pad = (coin.pool || "").toLowerCase() || (/^pump(fun|swap)$/.test(coin.dex || "") || coin.mint.endsWith("pump") ? "pump" : "");
+  const pool = POOL[pad];
   return (
-    <Tip tip={`${ring}% of the way to bonding${pool ? ` · launched on ${pool[1]}` : ""}`} side="right">
-      <span className="relative block size-17 shrink-0 rounded-control p-0.5" style={{ background: `conic-gradient(var(--color-up) ${ring}%, var(--color-rule-2) 0)` }}>
+    <Tip tip={`${ring}% of the way to bonding${pool ? ` · launched on ${pool[1]}` : ""}${coin.mayhem ? " · Mayhem Mode: pump.fun's AI agent trades it for its first 24 hours" : ""}`} side="right">
+      {/* Mayhem Mode coins wear gold, like Axiom; every other coin's frame fills green with its bonding progress. */}
+      <span className="relative block size-17 shrink-0 rounded-control p-0.5" style={{ background: coin.mayhem ? `conic-gradient(var(--color-warn) ${Math.max(ring, 0)}%, color-mix(in oklch, var(--color-warn) 35%, var(--color-rule-2)) 0)` : `conic-gradient(var(--color-up) ${ring}%, var(--color-rule-2) 0)` }}>
         <span className="relative grid size-full place-items-center overflow-hidden rounded-chip bg-paper-3 text-sm font-semibold text-muted uppercase">
           {(coin.symbol || "?").slice(0, 4)}
-          {pic.src && <img key={pic.src} src={pic.src} alt="" decoding="async" className={cn("absolute inset-0 size-full object-cover", !pic.shown && "invisible")} onLoad={pic.onLoad} onError={pic.onError} />}
+          {pic.src && <img key={pic.key} src={pic.src} alt="" decoding="async" className={cn("absolute inset-0 size-full object-cover", !pic.ok && "invisible")} onLoad={pic.onLoad} onError={pic.onError} />}
         </span>
-        {pool && <span className="absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border border-rule-2 bg-paper">{(coin.pool || "").toLowerCase() === "pump" ? <PumpLogo className="size-3" /> : <i className={cn("size-2 rounded-full", pool[0])} />}</span>}
+        {pool && <span className={cn("absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border bg-paper", coin.mayhem ? "border-warn bg-warn/25 [&_img]:[filter:sepia(1)_saturate(4)_hue-rotate(-12deg)_brightness(1.15)]" : "border-rule-2")}>{pad === "pump" ? <PumpLogo className="size-3" /> : <i className={cn("size-2 rounded-full", pool[0])} />}</span>}
       </span>
     </Tip>
   );
@@ -156,6 +140,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
   const paper = useTrade((st) => st.paper), prefs = usePrefs();
+  const isHidden = useHidden((s) => s.showing && s.mints.includes(mint));
   const [buying, setBuying] = useState<null | "busy" | "filled">(null);
   const buy = async () => {
     if (buying) return;
@@ -168,8 +153,14 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
 
   return (
     <div onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) location.hash = `#/coin/${mint}`; }}
-      className={cn("flex h-full cursor-pointer gap-3.5 border-b border-rule px-3.5 py-2.5 transition-colors duration-100 hover:bg-paper-3/60",
+      className={cn("group relative flex h-full cursor-pointer gap-3.5 border-b border-rule px-3.5 py-2.5 transition-colors duration-100 hover:bg-paper-3/60",
         a?.status === "running" && "bg-ink/[0.03]", (t.state === "faded" || slop) && "opacity-55")}>
+      <Tip tip={isHidden ? "Unhide" : "Hide this coin"}>
+        <button onClick={() => (isHidden ? unhideCoin(mint) : hideCoins([mint]))} aria-label={isHidden ? "Unhide coin" : "Hide coin"}
+          className={cn("absolute top-1.5 left-1.5 z-10 grid size-6 place-items-center rounded-full border border-rule-2 bg-paper-2 text-ink-2 shadow-[var(--shadow-raised)] transition-opacity duration-100 hover:text-ink", isHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}>
+          {isHidden ? <Icon.eye className="size-3.5" /> : <Icon.eyeOff className="size-3.5" />}
+        </button>
+      </Tip>
       <div className="flex flex-col items-center gap-1">
         <Avatar coin={t} ring={prog} />
         {!prefs.compact && <button onClick={copy} aria-label="Copy contract address" className="text-xs text-muted hover:text-ink-2">{shortAddr(mint)}</button>}

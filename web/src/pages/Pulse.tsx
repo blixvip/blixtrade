@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Segmented } from "@/components/ui/segmented";
 import { COLS, usePulse, type Coin, type ColKey } from "@/lib/pulse";
@@ -10,6 +10,10 @@ import { Sol } from "@/shell/Rail";
 import { rowHeight, usePrefs, type PulseCol, type PulsePrefs } from "@/lib/prefs";
 import { PulseRow } from "./PulseRow";
 import { PulseSettings } from "./PulseSettings";
+import { Tip } from "@/components/ui/tooltip";
+import { toast } from "@/components/ui/toast";
+import { hideCoins, showHidden, unhideAll, useHidden } from "@/lib/hidden";
+import { FilterButton, fitsColumn, PulseFilters, useColFilters } from "./pulse/ColumnFilters";
 
 type Show = "all" | "noslop" | "rated" | "buy";
 // The columns on this page. "Running now" is left out: New Pairs, Final Stretch and Migrated are the page.
@@ -50,6 +54,8 @@ const passes = (t: Coin, show: Show, q: string, f: PulsePrefs): boolean => {
   return true;
 };
 
+const NONE: string[] = [];
+
 // Each column keeps three quick-buy sizes (P1, P2, P3) and which one is in use.
 interface Preset { p: number; sizes: number[] }
 const PRESET0: Preset = { p: 0, sizes: [0.25, 0.5, 1] };
@@ -60,20 +66,48 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
   const [preset, setPresetState] = useState<Preset>(() => store.get<Preset>(`pulse:buy:${col}`, PRESET0));
   const setPreset = (p: Preset) => { store.set(`pulse:buy:${col}`, p); setPresetState(p); };
   const q = (own || globalQ).trim().toLowerCase(), sol = preset.sizes[preset.p] || 0.25;
-  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && passes(s.coins[m], show, q, prefs))));
+  const cf = useColFilters((s) => s.f[col as "new"] || {});
+  const { mints: hiddenList, showing } = useHidden();
+  const hidden = new Set(hiddenList);
+  // Normal view: hidden coins drop out. Hidden view: only the hidden ones, filters off, so each can be brought back.
+  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf))))));
+  const hideAll = () => { if (!mints.length) return; hideCoins(mints); toast(`${mints.length} coin${mints.length === 1 ? "" : "s"} hidden from ${title}. The eye button up top brings them back.`); };
   const loaded = usePulse((s) => s.loaded);
   const scroller = useRef<HTMLDivElement>(null);
-  const v = useVirtualizer({ count: mints.length, getScrollElement: () => scroller.current, estimateSize: () => rowH, overscan: 6, getItemKey: (i) => mints[i] });
+
+  // Like Padre's and Axiom's trenches: while the pointer is over a column, or it is scrolled down, its order
+  // holds still (figures keep updating) and new coins wait behind an "N new" pill. Moving away, scrolling back
+  // to the top or pressing the pill lets them in, sliding the rows down rather than snapping.
+  const [hover, setHover] = useState(false), [scrolled, setScrolled] = useState(false);
+  const paused = (hover || scrolled) && !q;
+  const frozen = useRef<string[] | null>(null);
+  if (paused && !frozen.current) frozen.current = mints;
+  if (!paused) frozen.current = null;
+  // The frozen rows still drop a coin the radar forgot or one hidden meanwhile (selector, so price ticks do not re-render the column).
+  const held = usePulse(useShallow((s) => (frozen.current ? frozen.current.filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m))) : NONE)));
+  const list = paused ? held : mints;
+  const waiting = paused ? mints.filter((m) => !frozen.current!.includes(m)).length : 0;
+  // Rows that just arrived fade and slide in; ones already seen (or mounted by scrolling) do not.
+  const seen = useRef<Set<string> | null>(null), fresh = useRef<Map<string, number>>(new Map());
+  if (loaded && list.length) {
+    if (!seen.current) seen.current = new Set(list);
+    else for (const m of list) if (!seen.current.has(m)) { seen.current.add(m); fresh.current.set(m, Date.now()); }
+    if (seen.current.size > 3000) seen.current = new Set(list);
+  }
+  useEffect(() => { const t = setInterval(() => { for (const [m, at] of fresh.current) if (Date.now() - at > 1000) fresh.current.delete(m); }, 2000); return () => clearInterval(t); }, []);
+  const resume = () => { setHover(false); setScrolled(false); scroller.current?.scrollTo({ top: 0, behavior: "smooth" }); };
+
+  const v = useVirtualizer({ count: list.length, getScrollElement: () => scroller.current, estimateSize: () => rowH, overscan: 6, getItemKey: (i) => list[i] });
 
   return (
     <section aria-label={title} className="flex min-h-0 min-w-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-rule px-3.5">
         <h2 className="text-xl font-semibold whitespace-nowrap text-ink">{title}</h2>
-        <label className="ml-auto flex h-8 w-52 min-w-0 shrink items-center max-xl:hidden rounded-full border border-rule-2 bg-paper px-3 focus-within:border-accent-dim">
+        <label className="ml-auto flex h-8 w-52 min-w-0 shrink items-center max-[1800px]:hidden rounded-full border border-rule-2 bg-paper px-3 focus-within:border-accent-dim">
           <input value={own} onChange={(e) => setOwn(e.target.value)} placeholder="Search by ticker or name" aria-label={`Search ${title}`}
             className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
         </label>
-        <div className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-rule-2 bg-paper pr-1 pl-2.5 max-xl:ml-auto">
+        <div className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-rule-2 bg-paper pr-1 pl-2.5 max-[1800px]:ml-auto">
           <label className="flex items-center gap-1 text-ink-2" title="Quick-buy size in SOL for this column">
             <Icon.bolt className="size-3.5 fill-current" />
             <input value={String(preset.sizes[preset.p] ?? "")} inputMode="decimal" aria-label={`Quick-buy size for ${title}, in SOL`}
@@ -89,21 +123,61 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
             ))}
           </span>
         </div>
+        {!showing && (
+          <Tip tip={`Hide every coin in ${title} now; new ones keep coming in`}>
+            <button onClick={hideAll} aria-label={`Hide all coins in ${title}`}
+              className="grid size-8 shrink-0 place-items-center rounded-control border border-rule-2 text-ink-2 transition-colors duration-100 hover:border-muted hover:text-ink">
+              <Icon.eyeOff className="size-4.5" />
+            </button>
+          </Tip>
+        )}
+        <FilterButton col={col} title={title} />
       </header>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-width:none]">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      {paused && (
+        <button onClick={resume} className={cn("absolute top-2 left-1/2 z-10 flex h-7 -translate-x-1/2 items-center gap-1.5 rounded-full border border-rule-2 bg-paper-4/95 px-3 text-sm font-medium text-ink-2 shadow-raised backdrop-blur transition-opacity duration-150 hover:text-ink",
+          waiting ? "opacity-100" : "pointer-events-none opacity-0")}>
+          <i className="size-1.5 rounded-full bg-warn" />Paused{waiting ? ` · ${waiting} new` : ""}
+        </button>
+      )}
+      <div ref={scroller} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+        onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 8)}
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-width:none]">
         {!loaded ? <p className="p-4 text-md text-muted">Loading…</p>
-          : !mints.length ? <p className="p-4 text-md text-muted">{q || show !== "all" ? "Nothing matches the filter." : "Nothing here right now."}</p>
+          : !list.length ? <p className="p-4 text-md text-muted">{showing ? "No hidden coins in this column." : q || show !== "all" || Object.keys(cf).length ? "Nothing matches the filter." : "Nothing here right now."}</p>
           : (
             <div className="relative" style={{ height: v.getTotalSize() }}>
-              {v.getVirtualItems().map((it) => (
-                <div key={it.key} className="absolute inset-x-0 top-0" style={{ height: rowH, transform: `translateY(${it.start}px)` }}>
-                  <PulseRow mint={mints[it.index]} col={col} sol={+sol || 0.25} />
-                </div>
-              ))}
+              {v.getVirtualItems().map((it) => {
+                const m = list[it.index];
+                return (
+                  <div key={it.key} className={cn("absolute inset-x-0 top-0 transition-transform duration-300 ease-out will-change-transform", fresh.current.has(m) && "animate-row-in")}
+                    style={{ height: rowH, transform: `translateY(${it.start}px)` }}>
+                    <PulseRow mint={m} col={col} sol={+sol || 0.25} />
+                  </div>
+                );
+              })}
             </div>
           )}
       </div>
+      </div>
     </section>
+  );
+}
+
+// Axiom's eye button: how many coins are hidden; pressing it shows just those (and Unhide all).
+function HiddenButton() {
+  const { mints, showing } = useHidden();
+  return (
+    <span className="flex items-center gap-2">
+      {showing && mints.length > 0 && <button onClick={() => { if (confirm(`Unhide all ${mints.length} hidden coins?`)) { unhideAll(); showHidden(false); toast("All coins unhidden"); } }} className="h-8 rounded-full border border-rule-2 px-3 text-md text-ink-2 hover:border-muted hover:text-ink">Unhide all</button>}
+      <Tip tip={showing ? "Back to the live columns" : mints.length ? `Show the ${mints.length} hidden coin${mints.length === 1 ? "" : "s"}` : "No hidden coins yet: hover a coin and press its eye"}>
+        <button onClick={() => showHidden(!showing)} aria-pressed={showing} aria-label="Hidden coins"
+          className={cn("relative grid size-8 place-items-center rounded-control border transition-colors duration-100", showing ? "border-ink/50 bg-paper-4 text-ink" : "border-rule-2 text-ink-2 hover:border-muted hover:text-ink")}>
+          <Icon.eyeOff className="size-4.5" />
+          {mints.length > 0 && <span className="num absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-paper-5 px-1 text-2xs font-bold text-ink">{mints.length > 99 ? "99+" : mints.length}</span>}
+        </button>
+      </Tip>
+    </span>
   );
 }
 
@@ -118,6 +192,7 @@ export function Pulse() {
         <h1 className="text-2xl leading-none font-bold tracking-tight text-ink">Pulse</h1>
         <span className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper px-3 text-md font-medium text-ink" title="Blix is Solana only"><Sol className="size-3.5" />Solana</span>
         <div className="ml-auto flex items-center gap-2.5">
+          <HiddenButton />
           <span className="text-sm text-muted max-md:hidden">Display</span>
           <Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" />
           <PulseSettings />
@@ -126,6 +201,7 @@ export function Pulse() {
       <div className="grid min-h-0 flex-1 grid-cols-[repeat(var(--cols),minmax(0,1fr))] divide-x divide-rule overflow-hidden rounded-card border border-rule bg-paper-2 max-md:grid-cols-[minmax(0,1fr)] max-md:divide-x-0 max-md:[&>section]:h-[75vh]" style={{ "--cols": open.length } as CSSProperties}>
         {open.map(([col]) => <Column key={`${col}:${rowH}`} col={col} show={show} globalQ={globalQ} />)}
       </div>
+      <PulseFilters />
     </div>
   );
 }

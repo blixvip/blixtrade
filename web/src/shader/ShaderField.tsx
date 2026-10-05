@@ -3,8 +3,9 @@ import { create } from "zustand";
 import { usePulse } from "@/lib/pulse";
 import { store } from "@/lib/utils";
 
-// The light behind the instrument: slow liquid chrome on black, lit from the brand corner. It answers the market:
-// more launches make it brighter and faster, net buying or selling changes which way it drifts.
+// The light behind the instrument: a few large folds of dark liquid chrome drifting slowly, lit from the brand
+// corner, never brighter than a sheen (the data sits on top of it). It answers the market: more launches make it
+// a little brighter and faster, net buying or selling changes which way it drifts.
 //
 // GPU budget (this runs all day on a small card): half resolution, 30 frames a second, stopped while the
 // tab is hidden or the window is not focused, one still frame under reduced motion, and it drops itself
@@ -25,28 +26,30 @@ out vec4 o;
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
   return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y); }
-float fbm(vec2 p){ float a = .5, s = 0.; for (int i = 0; i < 4; i++) { s += a * noise(p); p = p * 2.03 + vec2(11.7, 3.1); a *= .5; } return s; }
+float fbm(vec2 p){ float a = .5, s = 0.; for (int i = 0; i < 3; i++) { s += a * noise(p); p = p * 2.03 + vec2(11.7, 3.1); a *= .5; } return s; }
 void main(){
   vec2 uv = gl_FragCoord.xy / u_res;
   float ar = u_res.x / u_res.y;
   vec2 p = vec2(uv.x * ar, uv.y);
-  float t = u_time * (.018 + .028 * u_heat);
-  // A slow liquid surface: warped height, its slope read as a mirror normal.
-  vec2 q = vec2(fbm(p * .9 + vec2(0., t)), fbm(p * .9 + vec2(5.2, -t * .8)));
-  float h = fbm(p * 1.15 + 2.4 * q + vec2(t * .5, u_flow * t * 1.2));
-  vec2 g = vec2(dFdx(h), dFdy(h)) * u_res.y;
-  vec3 r = reflect(vec3(0., 0., -1.), normalize(vec3(-g * 1.1, 1.)));
-  // What the mirror sees: a hard bright horizon, a soft sky above it, a thin second light below.
-  float y = r.y + .3 * r.x;
-  float sky = smoothstep(-.03, .04, y) * (1. - smoothstep(.04, .7, y));
-  float rim = smoothstep(.05, 0., abs(y + .42));
-  float d = distance(p, vec2(0., 1.));                 // distance from the brand corner (top left)
-  float key = exp(-d * 1.05);
-  float ptr = exp(-distance(p, vec2(u_ptr.x * ar, u_ptr.y)) * 4.) * .10;
-  float light = (.07 + .50 * key + ptr) * (.75 + .25 * u_heat);
-  vec3 silver = vec3(.86, .89, .95), steel = vec3(.34, .38, .46);
-  vec3 col = (silver * sky + steel * rim * .6) * light;
-  col += vec3(.006, .007, .010);
+  float t = u_time * (.008 + .012 * u_heat);
+  // A few large, slow folds of liquid chrome: a gently warped height field ...
+  vec2 q = vec2(fbm(p * .48 + vec2(0., t)), fbm(p * .48 + vec2(5.2, -t * .7)));
+  vec2 s = p * .6 + 1.6 * q + vec2(t * .35, u_flow * t * .5);
+  // ... its slope from finite differences in the surface's own units (the same at any resolution) ...
+  float e = .02, h0 = fbm(s);
+  vec2 g = vec2(fbm(s + vec2(e, 0.)) - h0, fbm(s + vec2(0., e)) - h0) / e;
+  vec3 n = normalize(vec3(-g * 1.2, 1.));
+  // ... reflecting one broad, soft band of sky (no horizon line), with a faint glint where it faces the light.
+  vec3 r = reflect(vec3(0., 0., -1.), n);
+  float y = r.y + .35 * r.x;
+  float z = (y - .25) / .45, band = exp(-z * z);           // a square, not pow(): pow() of a negative is undefined in GLSL
+  vec3 L = normalize(vec3(-.5, .6, .65));
+  float spec = pow(max(dot(n, normalize(L + vec3(0., 0., 1.))), 0.), 30.);
+  float key = exp(-distance(p, vec2(0., 1.)) * .95);       // lit from the brand corner, top left
+  float ptr = exp(-distance(p, vec2(u_ptr.x * ar, u_ptr.y)) * 3.5) * .04;
+  float light = (.03 + .28 * key + ptr) * (.85 + .15 * u_heat);
+  vec3 col = vec3(.84, .87, .94) * (band * .7 + spec * .6) * light;
+  col += vec3(.082, .085, .094);   // the floor: very dark grey, the same as --color-paper
   col += (hash(gl_FragCoord.xy + fract(u_time) * 61.) - .5) * .008;   // a little grain to hide banding
   o = vec4(col, 1.);
 }`;

@@ -68,6 +68,11 @@ export function addWallet(address, label = "", source = "you") {
     // Your own follows win; a Fomo label beats an anonymous smart-money one.
     db.prepare(`UPDATE wallets SET label = CASE WHEN label IS NULL OR label = '' OR ? = 'fomo' THEN COALESCE(NULLIF(?, ''), label) ELSE label END, watching = 1,
       source = CASE WHEN ? = 'you' THEN 'you' WHEN ? = 'fomo' AND source = 'smart' THEN 'fomo' ELSE source END WHERE address = ?`).run(source, label, source, source, address);
+    // Following it again: the "(bot, paused)" note pauseBots() wrote into the label no longer applies.
+    if (cur.label && /\((bot|unverified), paused\)$/.test(cur.label)) {
+      const name = cur.label.replace(/\s*\((bot|unverified), paused\)$/, "");
+      db.prepare("UPDATE wallets SET label = ? WHERE address = ?").run(name && name !== short(address) ? name : null, address);
+    }
   } else {
     db.prepare("INSERT INTO wallets (address, label, source, watching, added) VALUES (?, ?, ?, 1, ?)").run(address, label || null, source, now());
     logEvent("wallet", `Watching ${label || short(address)}`);
@@ -398,12 +403,17 @@ export function coinWallets(mint) {
 
 // ---------- discovery ----------
 // A "winner" is a coin the radar saw at least 3x from its first reading, peaking at $250k+.
+// Coins already checked and found short of 3x, with the peak they had then: only a new peak can change the
+// answer, so the first-reading lookup (random reads over the whole price history) runs once per peak.
+const notWinner = new Map();
 function findWinners() {
+  const cands = db.prepare(`SELECT t.mint, t.peak_mcap FROM tokens t WHERE t.peak_mcap >= 250000 AND COALESCE(t.asset_class, 'meme') = 'meme'
+    AND t.mint NOT IN (SELECT mint FROM winners)`).all().filter((r) => notWinner.get(r.mint) !== r.peak_mcap);
   // Trusted readings only (ok = 0 marks an emptied pool), and only real memecoins.
-  const rows = db.prepare(`SELECT t.mint, t.peak_mcap, (SELECT mcap FROM snapshots s WHERE s.mint = t.mint AND s.mcap > 0 AND COALESCE(s.ok, 1) = 1 ORDER BY s.t LIMIT 1) first_mcap
-    FROM tokens t WHERE t.peak_mcap >= 250000 AND COALESCE(t.asset_class, 'meme') = 'meme' AND t.mint NOT IN (SELECT mint FROM winners)`).all();
-  for (const r of rows) {
-    if (!r.first_mcap || r.peak_mcap / r.first_mcap < 3) continue;
+  const first = db.prepare("SELECT mcap FROM snapshots WHERE mint = ? AND mcap > 0 AND COALESCE(ok, 1) = 1 ORDER BY t LIMIT 1");
+  for (const r of cands) {
+    r.first_mcap = first.get(r.mint)?.mcap;
+    if (!r.first_mcap || r.peak_mcap / r.first_mcap < 3) { notWinner.set(r.mint, r.peak_mcap); continue; }
     db.prepare("INSERT OR IGNORE INTO winners (mint, t, multiple) VALUES (?, ?, ?)").run(r.mint, now(), r.peak_mcap / r.first_mcap);
     logEvent("winner", `${q.getToken.get(r.mint)?.symbol || short(r.mint)} ran ${(r.peak_mcap / r.first_mcap).toFixed(1)}x; studying its wallets`);
   }

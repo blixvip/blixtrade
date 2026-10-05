@@ -1,6 +1,8 @@
 // The right column: 5-minute flow, the paper trade panel at real quotes, your paper position,
 // token info (an icon and a figure each, green when clean, red when not), addresses and links.
-import { loadPaperWallet, paperReady, useTrade } from "@/lib/mode";
+import { useTrade } from "@/lib/mode";
+import { trade } from "@/lib/trade";
+import { useMe } from "@/lib/ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
@@ -10,10 +12,12 @@ import { shortAddr } from "@/lib/format";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, copy, SolAmt } from "./parts";
+import type { Pos } from "./position";
 
 const card = "surface p-3";
 const H = ({ children }: { children: ReactNode }) => <h3 className="label mb-2 flex items-center gap-1.5">{children}</h3>;
 const PaperTag = () => <span className="rounded-chip border border-warn/50 px-1 text-[0.625rem] font-bold text-warn">PAPER</span>;
+const RealTag = () => <span className="rounded-chip border border-up/50 px-1 text-[0.625rem] font-bold text-up">REAL</span>;
 
 export function Flow({ c }: { c: CoinData | null }) {
   const m = c?.m5;
@@ -48,8 +52,13 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
   const [busy, setBusy] = useState(false);
   const setSol = (v: number) => { store.set("trade:sol", v); setSolState(v); };
   const setSlip = (v: number) => { store.set("trade:slip", v); setSlipState(v); };
-  const s = side === "sell" && !open.length ? "buy" : side;
-  const key = s === "buy" ? `buy:${mint}:${sol}:${slip}` : `sell:${open[0]?.id}:${pct}`;
+  const wallet = useTrade((st) => st.wallet), paperOn = useTrade((st) => st.paper);
+  // Paper off: the same panel trades the signed-in wallet's real SOL, and sells what that wallet holds.
+  const me = useMe((st) => st.me), held = me?.wallet?.tokens?.find((x) => x.mint === mint)?.ui ?? 0;
+  const canSell = paperOn ? open.length > 0 : held > 0;
+  const s = side === "sell" && !canSell ? "buy" : side;
+  const realSell = !paperOn && s === "sell";
+  const key = s === "buy" ? `buy:${mint}:${sol}:${slip}` : realSell ? `sell:real:${pct}` : `sell:${open.map((p) => p.id).join(",")}:${pct}`;
   const keyRef = useRef(key); keyRef.current = key;
 
   useEffect(() => { api<{ sizes?: number[] }>("paper").then((d) => d.sizes?.length && setSizes(d.sizes)).catch(() => {}); }, []);
@@ -57,9 +66,11 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
   useEffect(() => {
     let alive = true, timer = 0;
     const run = async () => {
-      if (!(s === "buy" ? sol > 0 : open[0])) { setQ(null); return; }
+      if (realSell || !(s === "buy" ? sol > 0 : open[0])) { setQ(null); return; }
       try {
-        const quote = await api<Quote>(s === "buy" ? `quote?mint=${mint}&side=buy&amount=${sol}&slip=${slip}` : `paper/${open[0].id}/preview?pct=${pct}`);
+        // A sell takes the same share of every open paper row (each buy is its own row): their previews summed.
+        const quote = s === "buy" ? await api<Quote>(`quote?mint=${mint}&side=buy&amount=${sol}&slip=${slip}`)
+          : await Promise.all(open.map((p) => api<Quote>(`paper/${p.id}/preview?pct=${pct}`))).then((qs) => ({ ...qs[0], outSol: qs.reduce((a, x) => a + (x.outSol || 0), 0), impactPct: Math.max(...qs.map((x) => x.impactPct ?? 0)) }));
         if (alive && keyRef.current === key) setQ({ key, quote });
       } catch (e) { if (alive && keyRef.current === key) setQ({ key, error: (e as Error).message }); }
       if (alive) timer = window.setTimeout(run, 3000);
@@ -68,16 +79,12 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
     return () => { alive = false; clearTimeout(t); clearTimeout(timer); };
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const wallet = useTrade((st) => st.wallet), paperOn = useTrade((st) => st.paper);
   const submit = async () => {
-    if (!paperReady()) return;
     setBusy(true);
-    try {
-      if (s === "buy") { const d = await post<{ position: { sol: number } }>("paper/quoted", { mint, sol, slippageBps: slip }); toast(`Paper buy $${symbol}: ${d.position.sol} SOL`); }
-      else { await post(`paper/${open[0].id}/sellq`, { pct, why: "coin page" }); toast(`Paper sell $${symbol}: ${pct}%`); }
-      onDone(); loadPaperWallet();
-    } catch (e) { toast((e as Error).message); }
-    finally { setBusy(false); }
+    const ok = await trade(s === "buy" ? { side: "buy", mint, symbol, sol, slippageBps: slip } : { side: "sell", mint, symbol, pct, slippageBps: slip },
+      async () => { if (s === "buy") return post("paper/quoted", { mint, sol, slippageBps: slip }); for (const p of open) await post(`paper/${p.id}/sellq`, { pct, why: "coin page" }); });
+    if (ok) onDone();
+    setBusy(false);
   };
   const quote = q?.key === key ? q.quote : undefined, error = q?.key === key ? q.error : undefined;
   const chip = (on: boolean) => cn("h-7 min-w-12 rounded-control border px-2 text-sm font-semibold num", on ? "border-accent bg-accent/15 text-ink" : "border-rule text-ink-2 hover:text-ink");
@@ -85,11 +92,11 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
     <div className={cn(card, "flex flex-col gap-2.5")}>
       <div className="flex items-center gap-1.5">
         <button onClick={() => setSide("buy")} className={cn("h-7 rounded-control px-4 text-sm font-bold", s === "buy" ? "bg-up text-on-fill" : "text-muted hover:text-ink")}>Buy</button>
-        <button onClick={() => setSide("sell")} disabled={!open.length} className={cn("h-7 rounded-control px-4 text-sm font-bold disabled:opacity-40", s === "sell" ? "bg-down text-on-fill" : "text-muted hover:text-ink")}>Sell</button>
+        <button onClick={() => setSide("sell")} disabled={!canSell} className={cn("h-7 rounded-control px-4 text-sm font-bold disabled:opacity-40", s === "sell" ? "bg-down text-on-fill" : "text-muted hover:text-ink")}>Sell</button>
         <span className="ml-auto flex items-center gap-2">
           {paperOn && wallet && <span className="num text-xs text-muted" title={`Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}`}>{wallet.cash.toFixed(3)} SOL</span>}
-          {!paperOn && <span className="text-xs text-muted">off</span>}
-          <PaperTag />
+          {!paperOn && <span className="num text-xs text-muted">{me?.signedIn ? `${(me.wallet?.sol ?? 0).toFixed(3)} SOL` : "not signed in"}</span>}
+          {paperOn ? <PaperTag /> : <RealTag />}
         </span>
       </div>
       {s === "buy" ? (
@@ -111,7 +118,7 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
         </div>
       )}
       <div className="min-h-16 rounded-control border border-rule p-2.5 text-sm">
-        {error ? <span className="text-down">{error}</span> : !quote ? <span className="text-muted">Quoting…</span> : (
+        {realSell ? <span className="text-ink-2">Sells {pct}% of the {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol} in your wallet for SOL, at the market price.</span> : error ? <span className="text-down">{error}</span> : !quote ? <span className="text-muted">Quoting…</span> : (
           <>
             <div className="mb-1.5 flex items-baseline gap-2 text-muted">You get <b className="num text-lg font-semibold text-ink">{s === "buy" ? `${tokN(quote.outTokens)} ${symbol}` : <SolAmt v={quote.outSol} />}</b>{quote.usdIn != null && <span>≈ {usdK(s === "buy" ? quote.usdIn : quote.usdOut)}</span>}</div>
             <div className="num grid grid-cols-[auto_1fr_auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted">
@@ -123,28 +130,42 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
           </>
         )}
       </div>
-      <button onClick={submit} disabled={busy || !quote}
+      <button onClick={submit} disabled={busy || (!quote && !realSell)}
         className={cn("h-10 rounded-control text-md font-bold text-on-fill transition-transform active:scale-[0.99] disabled:opacity-45", s === "buy" ? "bg-up" : "bg-down")}>
-        {busy ? "Placing…" : s === "buy" ? `Paper buy ${sol} SOL of $${symbol}` : `Paper sell ${pct}%`}
+        {busy ? "Placing…" : `${paperOn ? "Paper " : ""}${s === "buy" ? `${paperOn ? "buy" : "Buy"} ${sol} SOL of $${symbol}` : `${paperOn ? "sell" : "Sell"} ${pct}%`}`}
       </button>
     </div>
   );
 }
 
-export function Position({ r }: { r: TokenDetail }) {
-  const ps = r.paper || [];
-  const bought = ps.reduce((a, p) => a + (p.sol || 0), 0), sold = ps.reduce((a, p) => a + (p.exit_sol || 0), 0);
-  const open = ps.filter((p) => p.status === "open"), priced = open.every((p) => p.valueSol != null);
-  const holding = open.reduce((a, p) => a + (p.valueSol || 0), 0);
-  const pnl = ps.length && priced ? sold + holding - bought : null;
-  const cell = (label: string, value: ReactNode, cls = "") => <div className="flex flex-col gap-0.5"><small className="text-xs text-muted">{label}</small><b className={cn("num text-md font-semibold text-ink", cls)}>{value}</b></div>;
+// Your position in this coin (worked out in ./position.ts): the paper one while Paper is on, the real
+// wallet's while it is off. Average buy and sell are market caps per token, the chart's dashed lines.
+export function Position({ pos }: { pos: Pos }) {
+  const me = useMe((st) => st.me);
+  const { paper: paperOn, has, bought, sold, holding, pnl, entry, exit, mcapNow } = pos;
+  const cell = (label: ReactNode, value: ReactNode, cls = "") => (
+    <div className="flex min-w-0 flex-col gap-0.5"><small className="flex items-center gap-1 text-xs whitespace-nowrap text-muted">{label}</small><b className={cn("num text-md font-semibold text-ink", cls)}>{value}</b></div>
+  );
+  const dash = (c: string) => <i className={cn("inline-block w-2.5 border-t border-dashed", c)} />;
+  const move = entry && mcapNow ? (mcapNow / entry - 1) * 100 : null;
   return (
     <div className={card}>
-      <H>Your position <PaperTag /></H>
+      <H>Your position {paperOn ? <PaperTag /> : <RealTag />}</H>
       <div className="grid grid-cols-4 gap-1.5">
-        {cell("Bought", <SolAmt v={bought} />)}{cell("Sold", <SolAmt v={sold} />)}{cell("Holding", open.length ? (priced ? <SolAmt v={holding} /> : "—") : <SolAmt v={0} />)}
+        {cell("Bought", <SolAmt v={bought} />)}{cell("Sold", <SolAmt v={sold} />)}{cell("Holding", holding == null ? "—" : <SolAmt v={holding} />)}
         {cell("PnL", pnl == null ? "—" : <><SolAmt v={pnl} signed />{bought ? <span className="text-xs font-normal"> {Math.round((pnl / bought) * 100)}%</span> : null}</>, pnl == null ? "" : pnl >= 0 ? "text-up" : "text-down")}
       </div>
+      {has && (
+        <Tip tip="Market caps. Averages are per token: all the SOL paid (or got) over all the tokens bought (or sold).">
+          <div className={cn("mt-2.5 grid gap-1.5 border-t border-rule pt-2.5", exit != null ? "grid-cols-4" : "grid-cols-3")}>
+            {cell(<>{dash("border-up")}Avg buy</>, entry ? usdK(entry) : "—")}
+            {exit != null && cell(<>{dash("border-down")}Avg sell</>, usdK(exit))}
+            {cell("Now", mcapNow ? usdK(mcapNow) : "—")}
+            {cell("Since buy", move == null ? "—" : `${move >= 0 ? "+" : "−"}${Math.abs(move).toFixed(0)}%`, move == null ? "" : move >= 0 ? "text-up" : "text-down")}
+          </div>
+        </Tip>
+      )}
+      {!paperOn && !me?.signedIn && <p className="mt-2 text-xs text-muted">Sign in to see your real position.</p>}
     </div>
   );
 }

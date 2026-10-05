@@ -11,6 +11,7 @@ import path from "node:path";
 import { onLiveTrade, feed } from "./livetrades.js";
 import { db, DATA } from "./db.js";
 import { gtGet } from "./gtgate.js";
+import { jupCandles } from "./jup.js";
 
 const now = () => Date.now();
 const STEP = 1;                       // seconds per stored bucket: the chart's finest candle
@@ -118,6 +119,39 @@ async function geckoCandles(mint, tf, ttl = 60_000) {
   return rows;
 }
 
+// Market cap points (USD) from `fromSec` on, for the list mini charts: every trade second from the live feed
+// plus the pool prices of bonded coins, each second as its low and high (in the order they happened) so no
+// spike is lost. [[unix seconds, mc], ...] in time order; empty when the radar has no live reading.
+export function series(mint, fromSec) {
+  const out = [];
+  for (const map of [book, ticks]) {
+    const e = map.get(mint);
+    if (!e) continue;
+    for (const [t, o, h, l, c] of e.b) {
+      if (t < fromSec) continue;
+      if (h === l) out.push([t, c]);
+      else if (c >= o) out.push([t, l], [t + 0.5, h]);
+      else out.push([t, h], [t + 0.5, l]);
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+// Volume (USD), buys and sells from `fromSec` on, from the live feed's trade seconds. `from` is the first
+// second the feed holds for the coin: when it is after `fromSec` and the coin is older, the window is only
+// partly covered and the caller should not present it as the whole window.
+export function windowStats(mint, fromSec) {
+  const e = book.get(mint);
+  if (!e || !e.b.length) return null;
+  let vol = 0, buys = 0, sells = 0;
+  for (let i = e.b.length - 1; i >= 0; i--) {
+    const [t, , , , , v = 0, b = 0, s = 0] = e.b[i];
+    if (t < fromSec) break;
+    vol += v; buys += b; sells += s;
+  }
+  return { vol, buys, sells, from: e.b[0][0], last: e.b[e.b.length - 1][0] };
+}
+
 // Candles for the chart: tf in seconds (1, 5, 15, 60, 300, 900, 3600). `since` (a candle time) asks for
 // only the candles from that one on: the chart's fast refresh, a handful of rows several times a second. In time order: GeckoTerminal's from
 // before the feed's first trade, the feed's own (the curve), GeckoTerminal's after the feed's last (the
@@ -128,7 +162,18 @@ export async function candles(mint, tf = 60, since = null) {
   const own = fromBook(mint, Math.max(tf, STEP));
   const snaps = fromBook(mint, Math.max(tf, STEP), ticks);
   const ownStart = own.length ? own[0].time : Infinity, ownEnd = own.length ? own[own.length - 1].time : -Infinity;
-  let gt = [], note = null;
+  // Jupiter has every coin's whole history at every size: draw it, then the live feed's and pool prices' newer
+  // candles on top. GeckoTerminal (below) is only the fallback when Jupiter has nothing or is down.
+  let jup = [], jupErr = null;
+  try { jup = await jupCandles(mint, tf); } catch (e) { jupErr = e.message; }
+  if (jup.length) {
+    const jl = jup[jup.length - 1].time, fresh = own.filter((r) => r.time > jl);
+    const charted = Math.max(jl, fresh.length ? fresh[fresh.length - 1].time : -Infinity), bridge = snaps.filter((r) => r.time > charted);
+    const all = [...jup, ...fresh, ...bridge], rows = since ? all.filter((r) => r.time >= since) : all;
+    const source = ["Jupiter", fresh.length && "live trades", bridge.length && "pool prices"].filter(Boolean).join(" + ");
+    return { mint, tf, rows, first: all[0]?.time ?? null, partial: Boolean(since), live: now() / 1000 - all[all.length - 1].time < 120, source, note: null, solUsd: feed.solUsd };
+  }
+  let gt = [], note = jupErr;
   if (tf >= 60 && (!own.length || own[0].time > now() / 1000 - 50 * 60 || snaps.length)) {
     const recent = Math.max(ownEnd, snaps.length ? snaps[snaps.length - 1].time : -Infinity) > now() / 1000 - 120;
     try { gt = await geckoCandles(mint, tf, recent ? 5 * 60_000 : 60_000); } catch (e) { note = e.message; }
@@ -174,7 +219,9 @@ export function loadState(file = STATE_FILE) {
   try {
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
     if (!(now() - j.t < RESUME_MS)) return 0;
-    for (const [name, map] of [["book", book], ["ticks", ticks]]) for (const [mint, last, b] of j[name] || []) if (!map.has(mint) && Array.isArray(b)) map.set(mint, { b, last });
+    // Pool prices saved before 2026-10-05 for non-pump.fun coins could be scaled by a wrong 1B supply; those are
+    // re-read within seconds, so only pump.fun coins' saved pool prices are kept.
+    for (const [name, map] of [["book", book], ["ticks", ticks]]) for (const [mint, last, b] of j[name] || []) if (!map.has(mint) && Array.isArray(b) && (name === "book" || /pump$/.test(mint))) map.set(mint, { b, last });
     candleStats.restored = book.size + ticks.size;
   } catch {}
   return candleStats.restored;

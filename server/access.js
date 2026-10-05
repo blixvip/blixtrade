@@ -4,9 +4,9 @@
 // this PC, or remotely with the access key.
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
 const OPEN = [
-  /^\/api\/(me|pulse|overview|bot|signals|tokens|narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/,
+  /^\/api\/(me|pulse|overview|bot|signals|tokens|sparks|market|narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/,
   new RegExp(`^/api/(holders|candles|token|research)/${MINT}$`),
-  new RegExp(`^/api/coin/${MINT}(/trades)?$`),
+  new RegExp(`^/api/coin/${MINT}(/trades|/big)?$`),
 ];
 
 export function visitorMay(method, pathname) {

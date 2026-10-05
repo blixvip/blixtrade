@@ -8,7 +8,8 @@ import { startWallets, walletSignals, revalidateWinners } from "./wallets.js";
 import { CURVE_DEX, readingProblem, exitState, classifyAsset, safetyVerdict, cleanLinks, safeUrl } from "./quality.js";
 import * as health from "./health.js";
 import { meta } from "./db.js";
-import { onLiveCreate } from "./livetrades.js";
+import { onLiveCreate, live as liveCurves, feed as liveFeed } from "./livetrades.js";
+import { windowStats } from "./candles.js";
 import { startCoverage } from "./coverage.js";
 
 export const bus = new EventEmitter();
@@ -55,7 +56,11 @@ function saveLaunches() {
 }
 
 function adopt(t) {
-  if (!t.mint || q.getToken.get(t.mint)) {
+  const had = t.mint && q.getToken.get(t.mint);
+  if (!t.mint || had) {
+    // A retired coin that a live source finds again (it graduated, took off on the feed, trends on
+    // GeckoTerminal, got boosted) is live again: it was retired on old figures. Re-read on the next cycle.
+    if (had?.status === "dead" && t.source !== "wallet") { db.prepare("UPDATE tokens SET status = 'active', updated = 0 WHERE mint = ?").run(t.mint); stats.revived = (stats.revived || 0) + 1; }
     if (t.mint && t.boosts) db.prepare("UPDATE tokens SET boosts = MAX(boosts, ?) WHERE mint = ?").run(t.boosts, t.mint);
     if (t.mint && t.description) db.prepare("UPDATE tokens SET description = COALESCE(NULLIF(description,''), ?) WHERE mint = ?").run(t.description, t.mint);
     return false;
@@ -160,7 +165,19 @@ async function discoverFeeds() {
 
 // ---------- enrichment ----------
 const pulled = new Set();   // coins whose pool was just emptied; dumpWatch turns these into warnings
+// DexScreener can keep quoting a drained pool at its old price: XFUN's pool held 13.46 SOL against 644.8M
+// tokens (about $2.5K market cap, $3.3K liquidity) while DexScreener said $823K and $540K. When the pool is
+// quoted in SOL, its own reserves set the price, and liquidity is twice the SOL side.
+function fromReserves(p) {
+  const base = +p.liquidity?.base, quote = +p.liquidity?.quote, usd = +liveFeed.solUsd, px = +p.priceUsd;
+  if (p.quoteToken?.symbol !== "SOL" || !(base > 0 && quote > 0 && usd > 0 && px > 0)) return p;
+  const spot = (quote / base) * usd, liq = 2 * quote * usd;
+  if (px / spot < 5 && spot / px < 5) return p;
+  const k = spot / px;
+  return { ...p, priceUsd: String(spot), marketCap: (p.marketCap || 0) * k, fdv: (p.fdv || 0) * k, liquidity: { ...p.liquidity, usd: Math.min(p.liquidity.usd || liq, liq) } };
+}
 function applyPair(mint, p) {
+  p = fromReserves(p);
   const links = cleanLinks([
     ...(p.info?.websites || []).map((w) => ({ type: "website", url: w.url })),
     ...(p.info?.socials || []).map((s) => ({ type: s.type, url: s.url })),
@@ -192,6 +209,23 @@ function applyPair(mint, p) {
   q.snapshot.run(mint, now(), +p.priceUsd || 0, mcap, liq, p.volume?.m5 || 0, problem ? 0 : 1);
 }
 
+// Coins someone has on screen (Discover) are re-read from DexScreener when their reading is over 15 s old:
+// at most 30 a call and one call every 10 s, so a bonded coin's row is never minutes behind the market.
+let visibleT = 0;
+export async function refreshVisible(mints) {
+  if (now() - visibleT < 10_000) return;
+  const due = mints.filter((m) => { const t = q.getToken.get(m); return t && now() - (t.updated || 0) > 15_000; }).slice(0, 30);
+  if (!due.length) return;
+  visibleT = now();
+  const pairs = await src.dexTokens(due);
+  for (const m of due) {
+    const p = pairs.get(m);
+    if (!p) continue;
+    applyPair(m, p);
+    if ((p.volume?.h1 || 0) >= 1000) db.prepare("UPDATE tokens SET status = 'active' WHERE mint = ? AND status = 'dead'").run(m);
+  }
+}
+
 async function refreshActive() {
   const rows = q.activeMints.all();
   stats.tracked = rows.length;
@@ -219,18 +253,32 @@ async function refreshActive() {
 }
 
 // Retire tokens that are clearly finished, and cap the watch list.
+// Still trading on the curve right now (20+ trades in the last 10 minutes on the live feed): a coin like that
+// is never retired on old DexScreener figures, and a retired one comes back (Narratives showed $Trojan, 852
+// buyers and $122K of volume in the hour, as dead).
+const busyNow = (mint) => { const w = windowStats(mint, now() / 1000 - 600); return Boolean(w && w.buys + w.sells >= 20); };
+const isDead = db.prepare("SELECT 1 FROM tokens WHERE mint = ? AND status = 'dead'");
+const revive = db.prepare("UPDATE tokens SET status = 'active', updated = 0 WHERE mint = ?");
+function reviveBusy() {
+  for (const [mint, c] of liveCurves) {
+    if (now() - (c.last || 0) > 10 * MIN || c.buys + c.sells < 20 || !isDead.get(mint) || !busyNow(mint)) continue;
+    revive.run(mint); stats.revived = (stats.revived || 0) + 1;
+  }
+}
 function cull() {
+  reviveBusy();
   const age = (t) => now() - t.first_seen;
   const rows = db.prepare("SELECT mint, first_seen, mcap, liquidity, vol_h1, score FROM tokens WHERE status = 'active'").all();
-  const dead = rows.filter((t) =>
+  const dead = rows.filter((t) => !busyNow(t.mint) && (
     (age(t) > 45 * MIN && (t.mcap || 0) < 6000) ||
     (age(t) > 3 * 60 * MIN && (t.vol_h1 || 0) < 500) ||
-    (age(t) > 36 * 60 * MIN && (t.score || 0) < 40));
+    (age(t) > 36 * 60 * MIN && (t.score || 0) < 40)));
   const kill = db.prepare("UPDATE tokens SET status = 'dead', updated = ? WHERE mint = ?");
   for (const t of dead) kill.run(now(), t.mint);
   const alive = rows.length - dead.length;
   if (alive > settings.maxTracked) {
-    const extra = db.prepare("SELECT mint FROM tokens WHERE status = 'active' ORDER BY score ASC, first_seen ASC LIMIT ?").all(alive - settings.maxTracked);
+    // Over the cap, the least traded go first (a hot coin with a low score must not drop off Discover).
+    const extra = db.prepare("SELECT mint FROM tokens WHERE status = 'active' ORDER BY COALESCE(vol_h1, 0) + 12 * COALESCE(vol_m5, 0) ASC, score ASC, first_seen ASC LIMIT ?").all(alive - settings.maxTracked);
     for (const t of extra) kill.run(now(), t.mint);
   }
 }
@@ -238,7 +286,12 @@ function cull() {
 // ---------- safety ----------
 const safetyQueue = new Set();
 async function runSafety() {
-  const stale = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND score >= 50 AND (safety_checked IS NULL OR safety_checked < ?) ORDER BY score DESC LIMIT 10`).all(now() - 12 * MIN);
+  // Never-checked coins first: a busy coin with no report at all shows blank audit figures everywhere, while
+  // re-reading the top scorers every 12 minutes could otherwise take every slot. Busy means real trading,
+  // whatever its score (a coin trending on Discover can score under 50).
+  const unseen = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND safety_checked IS NULL AND pair IS NOT NULL AND (score >= 50 OR COALESCE(vol_h1, 0) >= 10000 OR COALESCE(liquidity, 0) >= 5000) ORDER BY COALESCE(vol_h1, 0) DESC LIMIT 8`).all();
+  for (const r of unseen) safetyQueue.add(r.mint);
+  const stale = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND score >= 50 AND (safety_checked IS NULL OR safety_checked < ?) ORDER BY safety_checked IS NOT NULL, score DESC LIMIT 10`).all(now() - 12 * MIN);
   for (const r of stale) safetyQueue.add(r.mint);
   // A report taken in a coin's first minutes in its pool goes out of date fast (the dev of an airdrop launch
   // holds most of the supply, then hands it out): every bonded coin is read again about 3 and about 15
@@ -534,6 +587,10 @@ export async function enrichNow(mint) {
 export function adoptLaunch(l) {
   adopt({ mint: l.mint, symbol: l.symbol, name: l.name, uri: l.uri, creator: l.creator, devSol: l.devSol, source: "pump-triage" });
   return enrichNow(l.mint).catch(() => {});
+}
+// Coins Jupiter lists as the most traded right now (jupdisc.js): added if new, brought back if retired.
+export function adoptFound(list, source = "jupiter") {
+  for (const t of list) if (t?.mint) adopt({ mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, source });
 }
 export function adoptMint(mint) {
   if (q.getToken.get(mint)) return;

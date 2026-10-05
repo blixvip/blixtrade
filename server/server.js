@@ -5,22 +5,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, json, logEvent, meta, backupInBackground, backups, DB_FILE, DATA, dbStats } from "./db.js";
-import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots } from "./engine.js";
+import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound } from "./engine.js";
+import * as jupdisc from "./jupdisc.js";
+import { jupCandles } from "./jup.js";
+import * as xtrack from "./xtrack.js";
 import { computeNarratives, THEMES, themesFor } from "./narratives.js";
+import { narrativeFeed } from "./narfeed.js";
 import { settings, saveSettings, publicSettings, withOverrides, SECRETS } from "./settings.js";
 import { writeBrief, explainCoin, briefProblem } from "./ai.js";
 import { notifySignal, notifyBrief, testNotify, decide, rules, destinations, deliveries } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
+import * as fomoBoard from "./fomoboard.js";
 import * as research from "./research.js";
 import * as brain from "./brain.js";
-import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf } from "./pulse.js";
-import { startLiveTrades, drainUpdates, liveStats, feed as liveFeed } from "./livetrades.js";
+import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, focusPrice, rugFigures } from "./pulse.js";
+import { dexPaid } from "./dexpaid.js";
+import { startLiveTrades, drainUpdates, liveStats, feed as liveFeed, live as liveCurves } from "./livetrades.js";
 import { startLaunchLab, labStats } from "./launchlab.js";
-import { startHolders, holdersFor, liveHolders, holderStats } from "./holders.js";
+import { startHolders, holdersFor, liveHolders, holderStats, rowHolders } from "./holders.js";
 import * as paper from "./paper.js";
 import { quote } from "./quote.js";
-import { candles, startCandles } from "./candles.js";
+import { candles, startCandles, series as liveSeries, windowStats } from "./candles.js";
 import { startTunnel, tunnelStats } from "./tunnel.js";
 import { startTriage, triageRecord, triageFor } from "./triage.js";
 import { testFast } from "./fast.js";
@@ -35,6 +41,8 @@ import { startWebApp, webStats } from "./webapp.js";
 import { startEarly, earlyData } from "./early.js";
 import * as images from "./images.js";
 import * as coin from "./coin.js";
+import { fomoList } from "./fomolists.js";
+import { fomoFeed } from "./fomofeed.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 
@@ -115,53 +123,244 @@ function signalOut(r) {
     since: r.price > 0 && r.price_now ? (exit.ok ? r.price_now / r.price : 0) : null };
 }
 
-// Last ~6 hours of trusted prices, thinned to 24 points, for the mini charts in tables.
-const sparkQ = db.prepare("SELECT price FROM snapshots WHERE mint = ? AND t > ? AND price > 0 AND COALESCE(ok, 1) = 1 ORDER BY t");
-function withSpark(list) {
-  const since = Date.now() - 6 * HOUR;
-  for (const t of list) {
-    const ps = sparkQ.all(t.mint, since).map((r) => r.price);
-    const step = Math.max(1, Math.ceil(ps.length / 24));
-    t.spark = ps.filter((_, i) => i % step === 0 || i === ps.length - 1);
+let market = { t: 0, v: null, pending: null };
+async function marketPrices() {
+  if (market.v && Date.now() - market.t < 15_000) return market.v;
+  if (market.pending) return market.pending;
+  market.pending = (async () => {
+    const out = { t: Date.now(), source: "binance", btc: null, eth: null, sol: null };
+    try {
+      const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]&type=MINI', { signal: AbortSignal.timeout(6000) });
+      for (const x of await r.json()) {
+        const k = { BTCUSDT: "btc", ETHUSDT: "eth", SOLUSDT: "sol" }[x.symbol];
+        if (k) out[k] = { usd: +x.lastPrice, chg24: x.openPrice > 0 ? (x.lastPrice / x.openPrice - 1) * 100 : null };
+      }
+    } catch {
+      out.source = "coinbase";
+      await Promise.all(["BTC", "ETH", "SOL"].map(async (c) => {
+        try { const j = await (await fetch(`https://api.coinbase.com/v2/prices/${c}-USD/spot`, { signal: AbortSignal.timeout(6000) })).json(); out[c.toLowerCase()] = { usd: +j.data.amount, chg24: null }; } catch { /* left empty */ }
+      }));
+    }
+    if (out.btc || out.eth || out.sol) market = { t: Date.now(), v: out, pending: null };
+    return out;
+  })().finally(() => { market.pending = null; });
+  return market.pending;
+}
+
+// A coin's market cap over the list's window (5m / 1h / 24h), for the mini charts and their change figure.
+// Trade-level where the radar has it (every trade second on the curve from the live feed, bonded pools' prices
+// every 2 s; candles.js series), the radar's minute snapshots for anything older, the last snapshot before the
+// window as the left edge. Points are [time 0..1 of the window, mc] so the chart is drawn to time: a coin
+// younger than the window starts part-way across. 40 time buckets keep their first, low, high and last point,
+// so a spike is never thinned away. `chg` is measured on the same line, so line, colour and % always agree.
+const SPARK_WIN = { "5m": 5 * MIN, "1h": HOUR, "24h": 24 * HOUR };
+const sparkQ = db.prepare("SELECT t, price FROM snapshots WHERE mint = ? AND t > ? AND t < ? AND price > 0 AND COALESCE(ok, 1) = 1 ORDER BY t");
+const sparkBefore = db.prepare("SELECT price FROM snapshots WHERE mint = ? AND t <= ? AND price > 0 AND COALESCE(ok, 1) = 1 ORDER BY t DESC LIMIT 1");
+// Jupiter's market-cap candles for the whole window (15 min candles for 24h, 1 min for 1h, 15 s for 5m), kept
+// per coin and window and refreshed in the background, so a coin the radar only started watching recently
+// still gets a full, real line instead of a part-width one with straight ramps across the gaps. The radar's
+// own trades and the latest market cap are laid on after Jupiter's last candle, so the line moves live.
+const JUP_TF = { "5m": [15, 10_000], "1h": [60, 20_000], "24h": [900, 45_000] };
+const jupSpark = new Map();   // `${mint}:${win}` -> { t, pts: [[ms, mc]], pending }
+let jupSparkKicks = 0, jupSparkSec = 0;
+function jupSparkPts(mint, win, since, fine = false) {
+  const [tf, ttl] = fine ? [60, 20_000] : JUP_TF[win] || JUP_TF["1h"], key = `${mint}:${win}${fine ? ":fine" : ""}`, e = jupSpark.get(key), nowMs = Date.now();
+  // At most 25 new reads a second across every list, so a page of 200 coins fills in over a few seconds.
+  if (Math.floor(nowMs / 1000) !== jupSparkSec) { jupSparkSec = Math.floor(nowMs / 1000); jupSparkKicks = 0; }
+  if ((!e || (!e.pending && nowMs - e.t > ttl)) && jupSparkKicks < 25) {
+    jupSparkKicks++;
+    const next = { t: e?.t || 0, pts: e?.pts || null, pending: true };
+    jupSpark.set(key, next);
+    jupCandles(mint, tf).then((cs) => { jupSpark.set(key, { t: Date.now(), pts: cs.map((c) => [c.time * 1000, c.close]), pending: false }); },
+      () => { jupSpark.set(key, { t: Date.now(), pts: next.pts, pending: false }); });
+    if (jupSpark.size > 3000) for (const [k, v] of jupSpark) if (!v.pending && nowMs - v.t > 30 * MIN) jupSpark.delete(k);
   }
+  const pts = jupSpark.get(key)?.pts;
+  if (!pts?.length) return null;
+  // The last candle that opened before the window is its left edge (when the coin is older than the window).
+  const i = pts.findIndex((q) => q[0] >= since);
+  if (i < 0) return null;
+  const out = i > 0 ? [[since, pts[i - 1][1]], ...pts.slice(i)] : pts.slice(i);
+  // A coin only a few hours old has a handful of 15 min candles in the 24h window: use 1 min ones instead.
+  if (win === "24h" && !fine && i === 0 && out.length < 24) return jupSparkPts(mint, win, since, true) || out;
+  return out;
+}
+
+function sparkFor(t, win) {
+  const ms = SPARK_WIN[win] || HOUR, now = Date.now(), since = now - ms, B = 40;
+  const sup = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : 1e9;   // price -> market cap
+  // Ten extra minutes of the feed so the left edge is the last trade before the window, when there was one.
+  const all = liveSeries(t.mint, since / 1000 - 600).map(([sec, mc]) => [sec * 1000, mc]);
+  const live = all.filter((q) => q[0] >= since), preLive = all.filter((q) => q[0] < since).pop();
+  const fresh = live.length && now - live[live.length - 1][0] < 2 * MIN;
+  const jup = t.quarantine ? null : jupSparkPts(t.mint, win, since);
+  let pts;
+  if (jup && jup.length >= 2) {
+    // Jupiter's line, then the radar's own trades after its last candle.
+    const jEnd = jup[jup.length - 1][0];
+    pts = [...jup, ...live.filter((q) => q[0] > jEnd)];
+  } else {
+    const liveFrom = live.length ? live[0][0] : now;
+    pts = preLive ? [] : sparkQ.all(t.mint, since, liveFrom).map((r) => [r.t, r.price * sup]);
+    const before = preLive ? preLive[1] : sparkBefore.get(t.mint, since)?.price * sup;
+    // A coin born inside the window starts at its first trade (as Axiom measures it), not at the empty curve.
+    if (before) pts.unshift([since, before]);
+    pts.push(...live);
+  }
+  // The newest market cap is always the right end, so the line ends where the figure beside it says.
+  if (!fresh && t.mcap > 0 && !t.quarantine && pts.length) pts.push([now, t.mcap]);
+  if (pts.length < 2) return { spark: pts.length ? [[Math.max(0, (pts[0][0] - since) / ms), pts[0][1]]] : [], mc: fresh ? live[live.length - 1][1] : null, chg: null };
+  const out = [];
+  let b = 0, bucket = [];
+  const flush = () => {
+    if (!bucket.length) return;
+    let lo = bucket[0], hi = bucket[0];
+    for (const q of bucket) { if (q[1] < lo[1]) lo = q; if (q[1] > hi[1]) hi = q; }
+    out.push(...[bucket[0], lo, hi, bucket[bucket.length - 1]].filter((q, i, a) => a.indexOf(q) === i).sort((x, y) => x[0] - y[0]));
+    bucket = [];
+  };
+  for (const q of pts) {
+    const k = Math.min(B - 1, Math.floor(((q[0] - since) / ms) * B));
+    if (k !== b) { flush(); b = k; }
+    bucket.push(q);
+  }
+  flush();
+  const first = out[0][1], last = out[out.length - 1][1];
+  return { spark: out.map(([x, mc]) => [Math.round(((x - since) / ms) * 1000) / 1000, Math.round(mc)]), mc: fresh ? last : null, chg: first > 0 ? (last / first - 1) * 100 : null };
+}
+// A row's figures from the radar's own trade feed while the coin is on a pump.fun curve, the way Axiom
+// shows them: market cap, liquidity (2 x the curve's virtual SOL reserve, Axiom's convention: GITPAD $15.2K vs $15.1K), volume
+// and buys/sells over the window (only when the feed covers the whole window), and the holder ledger
+// (holders, top 10, dev, snipers, bundlers; only when the ledger saw the coin from its first trade).
+// Null fields mean "no live figure": the page keeps the DexScreener / RugCheck reading for those.
+function liveRow(t, win) {
+  // Jupiter's figures first (what Axiom shows for any coin), then the radar's own feed where it is sharper.
+  const j = jupdisc.figures(t.mint, win);
+  const out = j ? { mc: j.mc, liq: null, progress: null, vol: j.vol, buys: j.buys, sells: j.sells, holders: j.holders, top10: j.top10,
+    // Jupiter leaves the dev figure out when the dev holds nothing on pump.fun coins; elsewhere a gap is unknown.
+    dev: j.dev ?? (j.launchpad === "pump.fun" && j.top10 != null ? 0 : null), devSold: null, snipers: null, bundlers: null, src: "jupiter" } : null;
+  const c = liveCurves.get(t.mint), usd = liveFeed.solUsd, nowS = Date.now() / 1000;
+  if (!c || c.pad || c.progress >= 0.995 || Date.now() - c.last > 30 * MIN) return out;
+  const ms = SPARK_WIN[win] || HOUR, fromS = nowS - ms / 1000;
+  const w = windowStats(t.mint, fromS);
+  // The feed covers the window when it holds trades from before it, or from the coin's very first trade.
+  const covered = w && (w.from <= fromS + 2 || w.from * 1000 <= c.first + 5000);
+  const h = rowHolders(t.mint), full = h && !h.p;
+  const o = out || { mc: null, liq: null, progress: null, vol: null, buys: null, sells: null, holders: null, top10: null, dev: null, devSold: null, snipers: null, bundlers: null };
+  return { ...o, src: "feed", mc: c.mc * usd, liq: c.vSol > 0 ? 2 * c.vSol * usd : null, progress: c.progress,
+    vol: covered ? w.vol : o.vol, buys: covered ? w.buys : o.buys, sells: covered ? w.sells : o.sells,
+    holders: full ? h.h : o.holders, top10: full ? h.t10 : o.top10, dev: full ? h.dev : o.dev, devSold: full ? h.ds : null,
+    snipers: full ? h.sn : null, bundlers: full ? h.bd : null };
+}
+
+function withSpark(list, win = "1h") {
+  for (const t of list) { const s = sparkFor(t, win); t.spark = s.spark; t.spark_chg = s.chg; if (s.mc) t.mc_live = s.mc; }
   return list;
 }
 
+// Pages list coins by the dozen: start fetching their pictures as soon as a list goes out, so the
+// browser's /img requests find them on disk. Each answer is walked once.
+const warmedLists = new WeakSet();
+function warmPics(v) {
+  if (!v || typeof v !== "object" || warmedLists.has(v)) return v;
+  warmedLists.add(v);
+  const mints = new Set();
+  const walk = (x, d) => {
+    if (!x || typeof x !== "object" || d > 6 || mints.size > 300) return;
+    if (Array.isArray(x)) { for (const y of x) walk(y, d + 1); return; }
+    if (typeof x.mint === "string") mints.add(x.mint);
+    for (const k in x) if (x[k] && typeof x[k] === "object") walk(x[k], d + 1);
+  };
+  walk(v, 0);
+  images.warm([...mints].filter((m) => !images.hasPicture(m)));
+  return v;
+}
+
 // ---------- coins ----------
-const AGE = "COALESCE(pair_created, first_seen)", TX = "(COALESCE(buys_h1, 0) + COALESCE(sells_h1, 0))";
-const SORTS = { score: "score", mcap: "mcap", liq: "liquidity", volume: "vol_h1", new: AGE, change: "chg_h1", chg24: "chg_h24", safety: "safety_score",
-  holders: "json_extract(safety, '$.totalHolders')", tx: TX };
+const AGE = "COALESCE(pair_created, first_seen)", TX = "(COALESCE(buys_h1, 0) + COALESCE(sells_h1, 0))", TX5 = "(COALESCE(buys_m5, 0) + COALESCE(sells_m5, 0))";
+// DexScreener reports no liquidity for a coin still on the pump.fun curve; Axiom shows 2 x the curve's virtual SOL.
+// On the standard curve that is 2 * sqrt(market cap * 32.19 SOL * SOL price) (market cap = vSol^2 / 32.19 SOL).
+// SOLUSD is filled in per query.
+const LIQ = "(CASE WHEN dex = 'pumpfun' AND COALESCE(liquidity, 0) = 0 AND mcap > 0 THEN 2 * sqrt(mcap * 32.19 * SOLUSD) ELSE liquidity END)";
+const solSql = () => String(Math.round((+liveFeed.solUsd || 150) * 100) / 100);
+const SORTS = { score: "score", mcap: "mcap", liq: LIQ, volume: "vol_h1", new: AGE, change: "chg_h1", chg24: "chg_h24", safety: "safety_score",
+  holders: "json_extract(safety, '$.totalHolders')", tx: TX,
+  vol5: "vol_m5", vol24: "vol_h24", chg5: "chg_m5", tx5: TX5 };
 // [param, sql expression, comparison]: every numeric filter the Coins page offers.
 const RANGES = [
-  ["minMcap", "mcap", ">="], ["maxMcap", "mcap", "<="], ["minLiq", "liquidity", ">="], ["maxLiq", "liquidity", "<="],
-  ["minVol", "vol_h1", ">="], ["maxVol", "vol_h1", "<="], ["minTx", TX, ">="], ["minSafety", "safety_score", ">="], ["minScore", "score", ">="],
+  ["minMcap", "mcap", ">="], ["maxMcap", "mcap", "<="], ["minLiq", LIQ, ">="], ["maxLiq", LIQ, "<="],
+  ["minVol", "vol_h1", ">="], ["maxVol", "vol_h1", "<="], ["minVol5", "vol_m5", ">="], ["minVol24", "vol_h24", ">="], ["minTx", TX, ">="], ["minSafety", "safety_score", ">="], ["minScore", "score", ">="],
   ["minHolders", "json_extract(safety, '$.totalHolders')", ">="], ["maxTop10", "json_extract(safety, '$.top10')", "<="],
   ["maxDev", "json_extract(safety, '$.devPct')", "<="], ["maxInsider", "json_extract(safety, '$.insiderPct')", "<="],
+  // Discover's full filter set (Axiom's): both ends of every figure, per window where the data has one.
+  ["maxVol5", "vol_m5", "<="], ["maxVol24", "vol_h24", "<="], ["maxTx", TX, "<="], ["minTx5", TX5, ">="], ["maxTx5", TX5, "<="],
+  ["minBuys", "buys_h1", ">="], ["minSells", "sells_h1", ">="], ["minBuys5", "buys_m5", ">="], ["minSells5", "sells_m5", ">="],
+  ["minTop10", "json_extract(safety, '$.top10')", ">="], ["minDev", "json_extract(safety, '$.devPct')", ">="], ["minInsider", "json_extract(safety, '$.insiderPct')", ">="],
+  ["maxHolders", "json_extract(safety, '$.totalHolders')", "<="], ["minLp", "json_extract(safety, '$.lpLockedPct')", ">="],
+  ["maxDevLaunches", "json_extract(safety, '$.devLaunches')", "<="], ["maxSafety", "safety_score", "<="],
 ];
+// Discover's protocol chips → the dex column ("other" = no known dex).
+const DEXES = new Set(["pumpfun", "pumpswap", "meteoradbc", "meteora", "raydium", "orca", "bags", "fluxbeam", "other"]);
+const SOCIAL = { twitter: ["twitter", "x"], website: ["website"], telegram: ["telegram"] };
+const hasLink = (types) => `EXISTS (SELECT 1 FROM json_each(COALESCE(links, '[]')) j WHERE j.value->>'type' IN (${types.map((t) => `'${t}'`).join(", ")}))`;
+const list = (v, max) => String(v || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, max);
 function tokensQuery(p = {}) {
   const where = ["pair IS NOT NULL"], args = [];
   // A search looks everywhere (dead and flagged coins too); browsing shows live, believable, real memecoins.
-  if (!p.q) {
+  // `mints`: exactly these coins, whatever their state (Discover's Fomo tabs look up the coins Fomo lists).
+  const only = list(p.mints, 200);
+  if (only.length) { where.push(`mint IN (${only.map(() => "?").join(", ")})`); args.push(...only); }
+  if (!p.q && !only.length) {
     where.push("status = 'active'");
     if (p.unreliable !== "1") where.push("quarantine IS NULL");
+    // A pool holding more value than the whole coin is worth means most of the supply sits in the pool and the
+    // "volume" is the pool trading with itself (a wash-traded copy: 14Deg…Kaiq "Human", $7.4M an hour, $0
+    // organic volume on Jupiter, not listed by Axiom). Curves are exempt: their liquidity is virtual.
+    if (p.unreliable !== "1") where.push("NOT (COALESCE(dex, '') NOT IN ('pumpfun', 'meteoradbc', 'bags', 'launchlab', 'moonshot', 'boop', 'heaven') AND liquidity > mcap AND mcap > 0)");
     if (p.cls === "other") where.push("COALESCE(asset_class, 'meme') != 'meme'");
     else if (p.cls !== "all") where.push("COALESCE(asset_class, 'meme') = 'meme'");
   }
   if (p.theme) { where.push("themes LIKE ?"); args.push(`%"${p.theme}"%`); }
-  for (const [key, expr, op] of RANGES) if (p[key] !== undefined && p[key] !== "" && Number.isFinite(+p[key])) { where.push(`${expr} ${op} ?`); args.push(+p[key]); }
+  for (const [key, expr, op] of RANGES) if (p[key] !== undefined && p[key] !== "" && Number.isFinite(+p[key])) { where.push(`${expr.replaceAll("SOLUSD", solSql())} ${op} ?`); args.push(+p[key]); }
   if (p.minAge) { where.push(`${AGE} <= ?`); args.push(Date.now() - +p.minAge * MIN); }
   if (p.maxAge) { where.push(`${AGE} >= ?`); args.push(Date.now() - +p.maxAge * MIN); }
   if (p.q) { where.push("(symbol LIKE ? OR name LIKE ? OR mint = ?)"); args.push(`%${p.q}%`, `%${p.q}%`, p.q); }
   if (p.graduated === "1") where.push("graduated = 1"); else if (p.graduated === "0") where.push("graduated = 0");
-  const expr = SORTS[p.sort] || SORTS.score, dir = p.dir === "asc" ? "ASC" : "DESC";
+  const dex = list(p.dex, 12).filter((d) => DEXES.has(d));
+  if (dex.length) where.push(`(${[dex.some((d) => d !== "other") && `dex IN (${dex.filter((d) => d !== "other").map((d) => `'${d}'`).join(", ")})`, dex.includes("other") && "dex IS NULL OR dex NOT IN ('pumpfun', 'pumpswap', 'meteoradbc', 'meteora', 'raydium', 'orca', 'bags', 'fluxbeam')"].filter(Boolean).join(" OR ")})`);
+  const kw = list(p.kw, 10), xkw = list(p.xkw, 10);
+  if (kw.length) { where.push(`(${kw.map(() => "symbol LIKE ? OR name LIKE ?").join(" OR ")})`); for (const k of kw) args.push(`%${k}%`, `%${k}%`); }
+  for (const k of xkw) { where.push("COALESCE(symbol, '') NOT LIKE ? AND COALESCE(name, '') NOT LIKE ?"); args.push(`%${k}%`, `%${k}%`); }
+  if (p.paid === "1") where.push("(COALESCE(boosts, 0) > 0 OR header IS NOT NULL)");
+  if (p.pumpCa === "1") where.push("mint LIKE '%pump'");
+  if (p.noDanger === "1") where.push("COALESCE(json_extract(safety, '$.danger'), 0) = 0");
+  for (const k of Object.keys(SOCIAL)) if (p[k] === "1") where.push(hasLink(SOCIAL[k]));
+  if (p.social === "1") where.push(hasLink(["twitter", "x", "website", "telegram", "discord", "instagram", "tiktok", "youtube", "reddit", "truth"]));
+  const hide = list(p.hide, 500);
+  if (hide.length) { where.push(`mint NOT IN (${hide.map(() => "?").join(", ")})`); args.push(...hide); }
+  const expr = (SORTS[p.sort] || SORTS.score).replaceAll("SOLUSD", solSql()), dir = p.dir === "asc" ? "ASC" : "DESC";
   const limit = Math.max(1, Math.min(+p.limit || 100, 400)), offset = Math.max(0, +p.offset || 0);
   const total = db.prepare(`SELECT COUNT(*) n FROM tokens WHERE ${where.join(" AND ")}`).get(...args).n;
   const rows = db.prepare(`SELECT * FROM tokens WHERE ${where.join(" AND ")} ORDER BY (${expr}) IS NULL, ${expr} ${dir}, mint LIMIT ? OFFSET ?`).all(...args, limit, offset);
   // Lists don't need each coin's full holder list and risk text; the coin page loads those.
   const dup = dupes();
-  const slim = (t) => ({ ...t, description: undefined, safety: t.safety && { danger: t.safety.danger, warn: t.safety.warn, top10: t.safety.top10, devPct: t.safety.devPct, insiderPct: t.safety.insiderPct, totalHolders: t.safety.totalHolders, lpLockedPct: t.safety.lpLockedPct },
-    dupes: dup.get(String(t.symbol || "").toLowerCase())?.n || 1, dupTop: dup.get(String(t.symbol || "").toLowerCase())?.top === t.mint });
-  return { rows: withSpark(rows.map(tokenOut).map(slim)), total, limit, offset, sort: p.sort in SORTS ? p.sort : "score", dir: dir.toLowerCase() };
+  // Token-info pills: only figures that can still be true. Jupiter's (what Axiom shows, re-read every ~25 s
+  // while on screen) first; else a RugCheck reading under 10 minutes old that rugFigures() accepts (a bonded
+  // coin's first minutes in its pool read wrong); else nothing (the pill shows "—", never an old number).
+  // Paid = DexScreener's own orders API (a paid profile), not a boost or a header picture.
+  const win = p.spark === "5m" || p.spark === "24h" ? p.spark : "1h";
+  jupdisc.want(rows.map((t) => t.mint));
+  if (!p.q) fomoBoard.prefetchCoins(rows.slice(0, 8).map((t) => t.mint));   // the top coins' Fomo holders and theses, read ahead
+  const pct = (v) => (v == null || !(v >= 0 && v <= 100) ? null : v);   // RugCheck sometimes reports 127% insiders
+  const slim = (t) => {
+    const fig = jupdisc.figures(t.mint, win);
+    const rf = t.safety_checked && Date.now() - t.safety_checked < 10 * MIN ? rugFigures(t, t.safety || {}) : { holders: null, top10: null, dev: null, insiders: null };
+    const dev = fig ? fig.dev ?? (fig.launchpad === "pump.fun" && fig.top10 != null ? 0 : null) : rf.dev;
+    return { ...t, description: undefined, paid: dexPaid(t.mint), figSrc: fig ? "jupiter" : rf.holders != null || rf.top10 != null ? "rugcheck" : null,
+      safety: { danger: t.safety?.danger, warn: t.safety?.warn, top10: pct(fig?.top10 ?? rf.top10), devPct: pct(dev), insiderPct: pct(rf.insiders), totalHolders: fig?.holders ?? rf.holders, lpLockedPct: t.safety?.lpLockedPct },
+      dupes: dup.get(String(t.symbol || "").toLowerCase())?.n || 1, dupTop: dup.get(String(t.symbol || "").toLowerCase())?.top === t.mint };
+  };
+  return { rows: withSpark(rows.map(tokenOut).map(slim), p.spark), total, limit, offset, sort: p.sort in SORTS ? p.sort : "score", dir: dir.toLowerCase() };
 }
 // Tickers shared by several tracked coins: how many, and which one is the biggest.
 let dupCache = { t: 0, v: new Map() };
@@ -340,8 +539,8 @@ function healthReport() {
   add("responsiveness", "Responsiveness", rs.worst10m >= 2000 ? "degraded" : "ok",
     `Longest pause: ${rs.worst10m ? secs(rs.worst10m) : "none over 0.2 s"} in the last 10 minutes, ${rs.worst24h ? secs(rs.worst24h) : "none"} since start or 24h · ${rs.over1s} pauses over 1 s${rs.slow.length ? ` · slowest work: ${rs.slow.slice(0, 3).map((s) => `${s.name} ${secs(s.worstMs)} (${s.n}×)`).join("; ")}` : ""}`,
     { stats: rs });
-  add("webapp", "New page (127.0.0.1:4421)", webStats.on && webStats.built ? "ok" : webStats.on ? "degraded" : "down",
-    webStats.on ? (webStats.built ? `Served by Blix itself from web/dist · built ${ago(webStats.built)}` : "Running, but web/dist has not been built (npm run build in the web folder)") : `Not running${webStats.error ? `: ${webStats.error}` : ""}`,
+  add("webapp", "New page (127.0.0.1:4421)", process.env.BLIX_WEB_EXTERNAL ? "ok" : webStats.on && webStats.built ? "ok" : webStats.on ? "degraded" : "down",
+    process.env.BLIX_WEB_EXTERNAL ? "Served by the supervisor from web/dist, so it stays up while the radar restarts" : webStats.on ? (webStats.built ? `Served by Blix itself from web/dist · built ${ago(webStats.built)}` : "Running, but web/dist has not been built (npm run build in the web folder)") : `Not running${webStats.error ? `: ${webStats.error}` : ""}`,
     { lastError: webStats.error });
   const fileMb = (f) => { try { return fs.statSync(f).size / 1048576; } catch { return 0; } };
   const dbMb = fileMb(DB_FILE), walMb = fileMb(`${DB_FILE}-wal`);
@@ -360,6 +559,8 @@ function healthReport() {
   const svc = (key, name, staleMs) => { const p = hp(key); add(key, name, health.stateOf(key, staleMs), p.lastOk ? `Last answer ${ago(p.lastOk)} · ${p.ok.toLocaleString()} ok, ${p.fail} failed${p.lastFail && p.lastFail > p.lastOk ? ` · failing: ${p.lastError}` : ""}` : p.lastError ? `Never answered: ${p.lastError}` : "Not used yet", p); };
   svc("dexscreener", "Prices (DexScreener)", 3 * MIN);
   svc("jupiter", "Quotes and prices (Jupiter)", 3 * MIN);
+  // Keyless, quotes, Discover and Blix Vault's real swaps share one Jupiter allowance on this PC.
+  { const j = parts[parts.length - 1]; if (j.state !== "ok" && !settings.jupiterKey) j.fix = "Jupiter is rate-limiting this PC's free allowance. A free API key from portal.jup.ag (Settings → Jupiter key) gives quotes, prices and swaps their own allowance."; }
   svc("geckoterminal", "Discovery (GeckoTerminal)", 10 * MIN);
   svc("rugcheck", "Safety checks (RugCheck)", 30 * MIN);
 
@@ -565,11 +766,14 @@ const server = http.createServer(async (req, res) => {
     if (!allowed(req)) return send(res, 403, { error: "Blix only answers this PC and its own public hostname." });
     if (remoteGate(req, res, url)) return;
     if (req.visitor && !visitorMay(req.method, p)) return send(res, 403, { error: "This is the public view of Blix: it is read-only." });
-    if (p === "/api/me") return send(res, 200, { readonly: Boolean(req.visitor) });
+    // mcpScript: where the MCP server lives on this PC, so the MCP page can show ready-to-paste setup (never to visitors).
+    if (p === "/api/me") return send(res, 200, { readonly: Boolean(req.visitor), ...(req.visitor ? {} : { mcpScript: path.join(ROOT, "mcp", "blix-mcp.mjs") }) });
     if (req.visitor && p === "/api/health") return send(res, 200, visitorHealth(cached("health", 4000, healthReport)));
     if (p === "/api/remote-link") return LOCAL.has(hostOf(req)) ? send(res, 200, { host: settings.publicHost || null, link: remoteLink() }) : send(res, 403, { error: "local only" });
     const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (pic) return await images.serve(pic[1], res);
+    // Logos in bulk for the page (lib/pics.ts): ?m=<mint>,<mint>,…  →  { mint: data URL | null }
+    if (p === "/api/pics") return send(res, 200, await images.batch(String(params.m || "").split(",").filter((m) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m))));
     if (!p.startsWith("/api/")) {
       const file = path.join(PUBLIC, p === "/" ? "index.html" : p);
       if (!file.startsWith(PUBLIC) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
@@ -590,10 +794,44 @@ const server = http.createServer(async (req, res) => {
     }
     const POST = req.method === "POST";
     if (POST || req.method === "DELETE") forget("");
-    if (p === "/api/overview") return send(res, 200, cached("overview", 3000, overview));
-    if (p === "/api/tokens") return send(res, 200, cached(`tokens${url.search}`, 5000, () => tokensQuery(params)));
-    if (p === "/api/signals") return send(res, 200, cached(`signals${url.search}`, 3000, () => signalsQuery(params)));
-    if (p === "/api/narratives") return send(res, 200, cached("narratives", 20000, () => computeNarratives({ launches: launchLog })));
+    if (p === "/api/overview") return send(res, 200, warmPics(cached("overview", 3000, overview)));
+    // BTC, ETH and SOL for the status bar along the bottom of the page: Binance's public 24h tickers (free, no
+    // key), one call per 15 s whoever asks; Coinbase spot prices if Binance does not answer.
+    if (p === "/api/market") return send(res, 200, await marketPrices());
+    // X tracker (xtrack.js): accounts, their posts with the coins they mention, profile changes, reader status.
+    if (p === "/api/x") {
+      const posts = xtrack.feed({ handle: params.handle || null, limit: params.limit, coins: params.coins === "1", since: +params.since || 0 });
+      const mints = [...new Set(posts.flatMap((x) => x.mints))].slice(0, 300);
+      const coins = mints.length ? Object.fromEntries(db.prepare(`SELECT mint, symbol, name, mcap, dex FROM tokens WHERE mint IN (${mints.map(() => "?").join(",")})`).all(...mints).map((t) => [t.mint, t])) : {};
+      return send(res, 200, { status: xtrack.status(), accounts: xtrack.accounts(), changes: xtrack.changes(30), posts, coins });
+    }
+    if (p === "/api/x/accounts" && POST) { const b = await readBody(req); return send(res, 200, await xtrack.addAccount(b.handle)); }
+    const xm = p.match(/^\/api\/x\/accounts\/([A-Za-z0-9_]{1,15})$/);
+    if (xm && req.method === "DELETE") { xtrack.removeAccount(xm[1]); return send(res, 200, { ok: true }); }
+    if (xm && POST) { const b = await readBody(req); xtrack.setAlerts(xm[1], b.alerts !== false); return send(res, 200, { ok: true }); }
+    if (p === "/api/x/refresh" && POST) return send(res, 200, xtrack.status(await xtrack.runOnce()));
+    // The mini charts and live market caps for the rows a list is showing, asked every second or two.
+    if (p === "/api/sparks") {
+      const mints = String(params.m || "").split(",").filter((m) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m)).slice(0, 200);
+      return send(res, 200, cached(`sparks:${params.w}:${mints.join(",")}`, 1000, () => {
+        const rows = mints.length ? db.prepare(`SELECT mint, price, mcap, quarantine, pair_created, first_seen, graduated FROM tokens WHERE mint IN (${mints.map(() => "?").join(",")})`).all(...mints) : [];
+        // Jupiter only for coins the live feed is not already pricing (keeps its shared allowance free).
+        jupdisc.want(mints.filter((m) => { const c = liveCurves.get(m); return !c || c.pad || c.progress >= 0.995 || Date.now() - c.last > 10 * MIN; })); jupdisc.topTraded(params.w);
+        const out = Object.fromEntries(rows.map((t) => [t.mint, { ...sparkFor(t, params.w), live: liveRow(t, params.w) }]));
+        // Coins the radar does not track (Fomo's lists show big, older coins): Jupiter's line alone.
+        for (const m of mints) if (!out[m]) { const s = sparkFor({ mint: m, price: 0, mcap: null, quarantine: null }, params.w); if (s.spark.length > 1) out[m] = { ...s, mc: s.mc ?? s.spark[s.spark.length - 1][1], live: null }; }
+        // Rows with no live curve figures are re-read from DexScreener while on screen (engine.js).
+        refreshVisible(rows.filter((t) => out[t.mint].live?.src !== "feed").map((t) => t.mint)).catch(() => {});
+        // Coins on screen with no live price (bonded, or off the feed) get their pool price every few seconds (pulse.js),
+        // the first 20 of them, so their lines and caps move too.
+        rows.filter((t) => !out[t.mint].mc && out[t.mint].live?.src !== "feed").slice(0, 20).forEach((t) => focusPrice(t.mint));
+        return { w: SPARK_WIN[params.w] ? params.w : "1h", t: Date.now(), rows: out };
+      }));
+    }
+    if (p === "/api/tokens") return send(res, 200, warmPics(cached(`tokens${url.search}`, 5000, () => tokensQuery(params))));
+    if (p === "/api/signals") return send(res, 200, warmPics(cached(`signals${url.search}`, 3000, () => signalsQuery(params))));
+    if (p === "/api/narratives") return send(res, 200, warmPics(cached("narratives", 20000, () => computeNarratives({ launches: launchLog }))));
+    if (p === "/api/narrative-feed") return send(res, 200, cached("narfeed", 4000, narrativeFeed));
     if (p === "/api/clusters") return send(res, 200, cached("clusters", 2000, () => ({ ...clusterBoard(), calls: brain.narrativeBoard() })));
     if (p === "/api/perf") return send(res, 200, cached("perf", 60000, perf));
     if (p === "/api/health") return send(res, 200, cached("health", 4000, healthReport));
@@ -627,14 +865,23 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/repair" && POST) return send(res, 200, rebuildFromSnapshots());
     if (p === "/api/wallets") {
       if (POST) { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
-      return send(res, 200, { wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), tracking: wallets.tracking(), rpc: { ...wallets.tracking().rpc, custom: !!settings.rpcUrl }, fomo: fomoOverview() });
+      return send(res, 200, warmPics({ wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), tracking: wallets.tracking(), rpc: { ...wallets.tracking().rpc, custom: !!settings.rpcUrl }, fomo: fomoOverview() }));
     }
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
+    // Fomo's own token lists (Discover's Top and Most held tabs), read through Aside while someone is looking (fomolists.js).
+    if (p === "/api/fomo/list") return send(res, 200, fomoList(String(params.kind || "")));
+    // Fomo's Feed tab (the Feed page), read through Aside while someone is looking (fomofeed.js).
+    if (p === "/api/fomo/feed") return send(res, 200, fomoFeed(params.groups));
+    // Fomo's leaderboard, read daily through Aside (fomoboard.js); its top traders are followed for wallet tracking.
+    if (p === "/api/fomo/board") return send(res, 200, fomoBoard.board({ range: params.range, day: params.day }));
+    if (p === "/api/fomo/board/refresh" && POST) { await fomoBoard.refreshBoard(wallets.addWallet, wallets.removeWallet); return send(res, 200, fomoBoard.board({ range: params.range })); }
+    const ftm = p.match(/^\/api\/fomo\/trader\/([A-Za-z0-9_.-]{1,64})$/);
+    if (ftm) return send(res, 200, warmPics(await fomoBoard.trader(ftm[1], { fresh: params.fresh === "1" })));
     if (p === "/api/research") return send(res, 200, cached("research", 6000, research.desk));
     if (p === "/api/pulse") return send(res, 200, pulseData());
     if (p === "/api/bot") return send(res, 200, cached("bot", 3000, () => ({ anti: antiSlop(), day: cached("bot-day", 10_000, brain.dayData), live: pulseData().live, scout: research.scoutStats, early: cached("bot-early", 10_000, earlyData) })));
     if (p === "/api/triage") return send(res, 200, cached("triage", 30000, triageRecord));
-    if (p === "/api/picks") return send(res, 200, cached("picks", 8000, brain.picksData));
+    if (p === "/api/picks") return send(res, 200, warmPics(cached("picks", 8000, brain.picksData)));
     if (p === "/api/picks/all") return send(res, 200, cached("picks-all", 3000, brain.allPicks));
     if (p === "/api/picks/review" && POST) { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && POST) { const s = brain.scoutStatus(); if (s.available) brain.scout(); return send(res, 200, { started: s.available, why: s.why }); }
@@ -643,12 +890,15 @@ const server = http.createServer(async (req, res) => {
     if (hm) { const h = holdersFor(hm[1], { top: +params.top || 25 }); return h ? send(res, 200, h) : send(res, 404, { error: "The radar has not seen this coin trade since it started." }); }
     // The paper desk: open at a preset size, sell all or part, change a position's exit rule, forget a closed one.
     // Real quotes and candles for the coin page's trade panel and chart (quote.js, candles.js).
-    if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip }));
+    if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip, estimate: true }));
     const cm = p.match(new RegExp(`^/api/candles/(${MINT})$`));
     if (cm) return send(res, 200, await candles(cm[1], params.tf, params.since));
     // The full coin page (coin.js): live ledger, top traders, early buyers, the dev's coins, recent trades.
-    const cpm = p.match(new RegExp(`^/api/coin/(${MINT})(/trades)?$`));
-    if (cpm) return send(res, 200, cpm[2] ? await coin.coinTrades(cpm[1], params) : coin.coinPage(cpm[1], params));
+    // Fomo's known holders and theses for one coin (fomoboard.js, read through Aside, cached 3 minutes).
+    const cfm = p.match(new RegExp(`^/api/coin/(${MINT})/fomo$`));
+    if (cfm) return send(res, 200, fomoBoard.coinFomo(cfm[1]));
+    const cpm = p.match(new RegExp(`^/api/coin/(${MINT})(/trades|/big)?$`));
+    if (cpm) return send(res, 200, cpm[2] === "/big" ? await coin.coinBigTrades(cpm[1]) : cpm[2] ? await coin.coinTrades(cpm[1], params) : coin.coinPage(cpm[1], params));
     // The paper wallet: how much fake SOL is left, and starting over.
     if (p === "/api/paper/wallet") return send(res, 200, cached("paper-wallet", 1000, paper.wallet));
     if (p === "/api/paper/reset" && POST) { const b = await readBody(req); forget("paper-wallet"); return send(res, 200, { wallet: paper.resetWallet(b.sol), desk: paper.desk() }); }
@@ -774,7 +1024,8 @@ const server6 = http.createServer((req, res) => server.emit("request", req, res)
 server6.on("error", () => {});
 server6.listen(PORT, "::1");
 // The new front end (web/dist) on 127.0.0.1:4421, served by this process. Not for a trial copy on another port.
-if (!process.env.RADAR_PORT) startWebApp(server, PORT);
+// The supervisor serves the page itself (so it stays up through radar restarts) and says so with BLIX_WEB_EXTERNAL.
+if (!process.env.RADAR_PORT && !process.env.BLIX_WEB_EXTERNAL) startWebApp(server, PORT);
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Blix on http://localhost:${PORT}`);
   // v30: the launch-labelling model is off (its labels barely separated winners), picks are decided by live
@@ -792,7 +1043,15 @@ server.listen(PORT, "127.0.0.1", () => {
   startHolders();
   paper.startPaper();
   startCandles();
-  startTunnel(PORT);
+  jupdisc.startJupDisc();
+  // Coins named in tracked X posts are tracked by the radar too; new posts go to open pages.
+  xtrack.onXMints((mints) => adoptFound(mints.map((mint) => ({ mint })), "x"));
+  xtrack.onXPosts((posts) => broadcast("xpost", { posts: posts.map((p) => ({ id: p.id, handle: p.handle, name: p.name, avatar: p.avatar, t: p.t, text: p.text.slice(0, 280), mints: p.mints, tickers: p.tickers })) }));
+  xtrack.startXTrack();
+  jupdisc.onTopTraded(adoptFound);
+  // trade.blixvip.com opens the new front end: the supervisor's page server (webapp.js, :4421), which checks the
+  // access key itself and forwards /api here.
+  startTunnel(Number(process.env.BLIX_WEB_PORT) || 4421);
   startTriage(research.enqueue);
   startEarly({ enqueue: research.enqueue, earlyPick: brain.earlyPick });
   // New alert types are switched on once for existing installs (they can be switched off again in Settings).
@@ -825,6 +1084,7 @@ server.listen(PORT, "127.0.0.1", () => {
     raise, adoptMint, vet,
     onTrade: (tr) => broadcast("fomoTrade", { ...tr, handle: fomo.handleOf(tr.wallet) }),
   });
+  fomoBoard.startBoard(wallets.addWallet, wallets.removeWallet);
   // First brief once there's data to talk about, then on schedule.
   const tryBrief = () => settings.aiBriefs && makeBrief().catch((e) => logEvent("error", `brief: ${e.message}`));
   setTimeout(tryBrief, 12 * MIN);

@@ -3,6 +3,7 @@
 // key export open as small windows. Real money. Talks to /api/account/* (server/accounts.js).
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { openExchange } from "@/components/Exchange";
+import { CoinImg } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Segmented } from "@/components/ui/segmented";
@@ -15,6 +16,7 @@ import { loadMe } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { Sol } from "@/shell/Rail";
+import { MyProfile } from "./profile/parts";
 
 interface Token { mint: string; ui: number; usd: number | null }
 interface Wallet { sol: number; solUsd: number; tokensUsd: number; tokens: Token[] }
@@ -77,7 +79,7 @@ function CoinCell({ mint, name }: { mint: string; name?: { symbol?: string; name
     <a href={`#/coin/${mint}`} className="flex items-center gap-2.5 hover:text-ink">
       <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-chip bg-paper-4 text-2xs font-semibold text-muted uppercase">
         {(name?.symbol || "?").slice(0, 3)}
-        <img src={`/img/${mint}`} alt="" className="absolute inset-0 size-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+        <CoinImg mint={mint} />
       </span>
       <span className="flex min-w-0 flex-col"><b className="truncate font-semibold text-ink">{name?.symbol || shortAddr(mint)}</b><span className="text-xs text-muted">{shortAddr(mint)}</span></span>
     </a>
@@ -151,25 +153,15 @@ export function Account() {
     </div>
   );
 
-  const initial = (me.name || me.email || "?").slice(0, 1).toUpperCase();
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3 p-3 max-md:pb-6">
-      <header className="flex flex-wrap items-center gap-3.5">
-        <span className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-full border border-rule-2 bg-paper-3 text-xl font-semibold text-ink-2">
-          {me.picture ? <img src={me.picture} alt="" referrerPolicy="no-referrer" className="size-full object-cover" /> : initial}</span>
-        <div className="min-w-0">
-          <h1 className="text-xl leading-tight font-semibold">{me.name || "Portfolio"}</h1>
-          <button onClick={() => { navigator.clipboard?.writeText(me.address!); toast("Address copied"); }} className="flex items-center gap-1.5 text-md text-muted hover:text-ink [&_svg]:size-3.5">
-            {shortAddr(me.address!)}<Icon.copy /><span className="max-sm:hidden">· {me.email}</span></button>
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <button onClick={() => openExchange("deposit")} className="flex h-9 items-center rounded-full bg-ink px-4 text-md font-semibold text-on-fill transition-transform duration-100 hover:bg-focus active:scale-[0.97]">Deposit</button>
-          <Button size="lg" className="rounded-full" onClick={() => setOpen("withdraw")}><Icon.send />Withdraw</Button>
-          <Button size="lg" className="rounded-full" onClick={() => setOpen("buy")}><Icon.bolt />Buy</Button>
-          <Button size="lg" variant="ghost" className="rounded-full" onClick={load} aria-label="Refresh"><Icon.refresh /></Button>
-          <Button size="lg" variant="ghost" className="rounded-full" onClick={async () => { await call("logout", {}); load(); }}>Sign out</Button>
-        </div>
-      </header>
+      <MyProfile actions={<>
+        <button onClick={() => openExchange("deposit")} className="flex h-8 items-center rounded-full bg-ink px-4 text-md font-semibold text-on-fill transition-transform duration-100 hover:bg-focus active:scale-[0.97]">Deposit</button>
+        <Button size="lg" className="rounded-full" onClick={() => setOpen("withdraw")}><Icon.send />Withdraw</Button>
+        <Button size="lg" className="rounded-full" onClick={() => setOpen("buy")}><Icon.bolt />Buy</Button>
+        <Button size="lg" variant="ghost" className="rounded-full" onClick={load} aria-label="Refresh"><Icon.refresh /></Button>
+        <Button size="lg" variant="ghost" className="rounded-full" onClick={async () => { await call("logout", {}); load(); }}>Sign out</Button>
+      </>} />
 
       {me.problem && <p className="rounded-control border border-warn/40 bg-warn/10 px-3 py-2 text-md text-ink-2"><b className="text-ink">The wallet service did not answer.</b> {me.problem}</p>}
       {confirmAgain && <p className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-md text-ink-2">

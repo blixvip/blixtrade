@@ -3,11 +3,16 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startWebApp } from "../server/webapp.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 fs.mkdirSync(path.join(ROOT, "data"), { recursive: true });
 const logFile = path.join(ROOT, "data", "server.log");
 let delay = 2000;
+
+// The page (127.0.0.1:4421) is served from here, not from the radar, so it keeps loading while the radar restarts;
+// /api is forwarded to the radar. If an older radar still holds the port, this takes it over within seconds of it exiting.
+startWebApp(null, 4420, { retryMs: 2000 });
 
 // Which Node the radar ran on, so a crash in the log can be tied to a runtime.
 const versions = new Map();
@@ -39,7 +44,7 @@ async function run() {
   const localNode = path.join(ROOT, "data", "runtime", "node.exe");
   const runtime = process.env.BLIX_NODE || (process.platform === "win32" && fs.existsSync(localNode) ? localNode : process.execPath);
   const child = spawn(runtime, ["--no-warnings", "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
-    cwd: ROOT, windowsHide: true, stdio: ["ignore", log, log],
+    cwd: ROOT, windowsHide: true, stdio: ["ignore", log, log], env: { ...process.env, BLIX_WEB_EXTERNAL: "1" },
   });
   // A radar that is running but no longer answers is as down as one that crashed, and would otherwise stay
   // that way: once it has answered at least once (or two minutes have passed), four unanswered checks in a

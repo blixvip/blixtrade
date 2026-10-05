@@ -22,5 +22,7 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src"), "@shared": path.resolve(import.meta.dirname, "../public") } },
   // 127.0.0.1 only: the proxy presents itself to the radar as a local page, so this port must never be reachable from outside.
   server: { host: "127.0.0.1", port: 4421, strictPort: true, proxy: { "/api/account": toAccounts, "/api": toRadar, "/img": toRadar }, fs: { allow: [".."] } },
-  build: { outDir: "dist", sourcemap: false, target: "es2022" },
+  // emptyOutDir false: a tab opened before a rebuild still asks for the old page chunks, so they stay; the
+  // radar (server/webapp.js) prunes ones older than a week that the current page no longer uses.
+  build: { outDir: "dist", emptyOutDir: false, sourcemap: false, target: "es2022" },
 });

@@ -7,6 +7,7 @@
 // router (the same route a real swap would take), free and keyless.
 import { live, feed } from "./livetrades.js";
 import { jupiterGet } from "./jupiter.js";
+import { db } from "./db.js";
 
 const WSOL = "So11111111111111111111111111111111111111112";
 const now = () => Date.now();
@@ -48,9 +49,13 @@ export function curveQuoteNow(mint, side, amount, slippageBps = 300, own = null)
 
 const decimalsCache = new Map();
 async function jupiterQuote(mint, side, amount, slippageBps) {
+  // pump.fun coins always have 6 decimals and the radar already holds their price, so their quote is one
+  // Jupiter call, not two; anything else asks Jupiter's price API for its decimals and spot price first.
+  const known = /pump$/.test(mint) ? db.prepare("SELECT price, liquidity FROM tokens WHERE mint = ?").get(mint) : null;
+  if (/pump$/.test(mint)) decimalsCache.set(mint, 6);
   let dec = decimalsCache.get(mint);
-  const px = await jupiterGet(`/price/v3?ids=${mint}`, { timeout: 5000, cacheMs: 30_000 });
-  const info = px[mint];
+  const info = known ? { usdPrice: known.price || null, liquidity: known.liquidity ?? null }
+    : (await jupiterGet(`/price/v3?ids=${mint}`, { timeout: 5000, cacheMs: 30_000, priority: true }))[mint];
   if (dec == null) {
     dec = info?.decimals;
     if (!Number.isInteger(dec) || dec < 0 || dec > 18) throw err(503, "Token decimals are unavailable, so its quote cannot be sized safely. Try again shortly.");
@@ -59,7 +64,8 @@ async function jupiterQuote(mint, side, amount, slippageBps) {
   }
   const [inMint, outMint, raw] = side === "buy" ? [WSOL, mint, Math.round(amount * 1e9)] : [mint, WSOL, Math.round(amount * 10 ** dec)];
   if (!(raw > 0) || !Number.isSafeInteger(raw)) throw err(400, "Amount is too small or too large to quote precisely.");
-  const j = await jupiterGet(`/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${raw}&slippageBps=${slippageBps}`);
+  // Trade panels re-quote every 3 s; two panels or a quick re-click within 2 s share one answer.
+  const j = await jupiterGet(`/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${raw}&slippageBps=${slippageBps}`, { priority: true, cacheMs: 2000 });
   if (!(Number(j.outAmount) > 0) || !Number.isFinite(Number(j.outAmount)) || !Number.isFinite(Number(j.otherAmountThreshold))) throw err(409, "No valid route on Jupiter right now.");
   const out = side === "buy" ? Number(j.outAmount) / 10 ** dec : Number(j.outAmount) / 1e9;
   const route = (j.routePlan || []).map((x) => x.swapInfo?.label).filter(Boolean);
@@ -70,8 +76,25 @@ async function jupiterQuote(mint, side, amount, slippageBps) {
     : { side, inTokens: amount, outSol: out, avgSol: avg, spotSol, impactPct: -Number(j.priceImpactPct || 0) * 100, minOut: Number(j.otherAmountThreshold) / 1e9, route, liquidityUsd: info?.liquidity ?? null };
 }
 
+// A rough quote from the radar's own pool figures (price and liquidity, both sides counted), for when Jupiter
+// is rate limited: a two-sided constant-product pool with a 1% fee. Only for showing in a trade panel; a fill
+// never uses it (the route passes `estimate`, paper and real trades do not).
+function poolEstimate(mint, side, amount, slippageBps) {
+  const t = db.prepare("SELECT price, liquidity FROM tokens WHERE mint = ?").get(mint);
+  if (!(t?.price > 0 && t?.liquidity > 0 && feed.solUsd > 0)) return null;
+  const rSol = t.liquidity / 2 / feed.solUsd, rTok = t.liquidity / 2 / t.price, k = rSol * rTok, fee = 0.01;
+  const spot = rSol / rTok;
+  if (side === "buy") {
+    const out = rTok - k / (rSol + amount * (1 - fee)), avg = amount / out;
+    return { side, inSol: amount, outTokens: out, avgSol: avg, spotSol: spot, impactPct: (avg / spot - 1) * 100, minOut: out * (1 - slippageBps / 1e4), route: ["estimate"], liquidityUsd: t.liquidity };
+  }
+  const out = (rSol - k / (rTok + amount)) * (1 - fee), avg = out / amount;
+  return { side, inTokens: amount, outSol: out, avgSol: avg, spotSol: spot, impactPct: (avg / spot - 1) * 100, minOut: out * (1 - slippageBps / 1e4), route: ["estimate"], liquidityUsd: t.liquidity };
+}
+
 // side "buy": amount in SOL. side "sell": amount in tokens. Returns sizes in SOL / tokens plus USD views.
-export async function quote(mint, side, amount, { slippageBps = 300 } = {}) {
+// `estimate`: when Jupiter is rate limited or down, answer with poolEstimate() (src "estimate") instead of failing.
+export async function quote(mint, side, amount, { slippageBps = 300, estimate = false } = {}) {
   amount = Number(amount);
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw err(400, "That is not a Solana address.");
   if (!["buy", "sell"].includes(side)) throw err(400, "side must be buy or sell.");
@@ -81,7 +104,11 @@ export async function quote(mint, side, amount, { slippageBps = 300 } = {}) {
   const s = live.get(mint);
   const onCurve = s && s.vSol > 0 && s.vTok > 0 && (s.progress ?? 0) < 0.995 && now() - (s.resT || 0) < CURVE_FRESH_MS;
   const q = onCurve ? { ...curveQuote(s, side, amount, slippageBps), src: "curve", route: ["pump.fun curve"], feeBps: s.feeBps ?? 125, reservesAgeMs: now() - s.resT }
-    : { ...(await jupiterQuote(mint, side, amount, slippageBps)), src: "jupiter" };
+    : await jupiterQuote(mint, side, amount, slippageBps).then((x) => ({ ...x, src: "jupiter" }), (e) => {
+      const est = estimate && (e.status === 429 || e.status === 503) ? poolEstimate(mint, side, amount, slippageBps) : null;
+      if (!est) throw e;
+      return { ...est, src: "estimate", note: "Jupiter is busy: estimated from the pool's price and liquidity. The trade itself fills at a real quote." };
+    });
   const usd = feed.solUsd;
   if (!feed.solKnown) throw err(503, "Waiting for the SOL price, so dollar figures would be wrong. Try again in a few seconds.");
   return { ...q, mint, slippageBps, solUsd: usd, t: now(),

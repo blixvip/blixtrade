@@ -1,5 +1,5 @@
 // The Exchange window, opened by Deposit anywhere in the app: Convert (SOL and USDC), Deposit (your
-// wallet's address and its QR code) and Buy (pay by card or bank through a payment provider, straight to
+// wallet's address and its QR code, or pay with a card right there) and Buy (pay by card or bank through a payment provider, straight to
 // the wallet). Real money. Talks to /api/account/* (server/accounts.js).
 import qrcode from "qrcode-generator";
 import { useEffect, useMemo, useState } from "react";
@@ -61,10 +61,21 @@ function Art() {
   );
 }
 
-function Deposit({ address, toBuy }: { address: string; toBuy: () => void }) {
+// Deposit: send crypto to the wallet's address, or pay with a card (the Buy providers, right here).
+function Deposit({ address, stripe }: { address: string; stripe: boolean }) {
   const [asset, setAsset] = useState("SOL");
+  const [card, setCard] = useState(false);
   return (
     <>
+      <div role="radiogroup" aria-label="Deposit with" className="grid grid-cols-2 gap-2">
+        {([[false, "Crypto", "SOL or tokens"], [true, "Card", "Apple Pay, bank"]] as const).map(([v, name, how]) => (
+          <button key={name} role="radio" aria-checked={card === v} onClick={() => setCard(v)}
+            className={cn("flex items-center gap-2.5 rounded-card border px-3 py-2.5 text-left transition-colors duration-100", card === v ? "border-ink bg-paper-4" : "border-rule-2 bg-paper hover:border-muted")}>
+            {v ? <CardIcon className="size-5 shrink-0 text-ink-2" /> : <SolanaLogo className="w-5 shrink-0" />}
+            <span className="min-w-0"><b className="block text-lg font-semibold text-ink">{name}</b><span className="block truncate text-sm text-muted">{how}</span></span>
+          </button>))}
+      </div>
+      {card ? <Buy address={address} stripe={stripe} /> : <>
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1.5 text-md text-ink-2">Deposit
           <select value={asset} onChange={(e) => setAsset(e.target.value)} className={cn(box, "h-10 px-3 text-lg font-medium text-ink outline-none focus:border-accent-dim")}>
@@ -81,9 +92,18 @@ function Deposit({ address, toBuy }: { address: string; toBuy: () => void }) {
           <button onClick={() => copy(address)} aria-label="Copy address" className="mt-auto ml-auto grid size-8 place-items-center rounded-control text-muted hover:bg-paper-4 hover:text-ink"><Icon.copy className="size-4" /></button>
         </div>
       </div>
-      <p className="text-md text-ink-2">Don't have any SOL? <button onClick={toBuy} className="text-info hover:underline">Buy it with a card.</button></p>
+      <p className="text-md text-ink-2">Don't have any SOL? <button onClick={() => setCard(true)} className="text-info hover:underline">Pay with a card.</button></p>
       <button onClick={() => copy(address)} className={big}><Icon.copy />Copy address</button>
+      </>}
     </>
+  );
+}
+
+function CardIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" /><path d="M2.5 10h19M6.5 15h4" />
+    </svg>
   );
 }
 
@@ -173,7 +193,7 @@ export function Exchange() {
               <button key={t} role="tab" aria-selected={tab === t} onClick={() => useExchange.setState({ tab: t })}
                 className={cn("h-9 rounded-control text-lg font-semibold transition-colors duration-100", tab === t ? "bg-paper-4 text-ink shadow-raised ring-1 ring-ink/70" : "text-muted hover:text-ink-2")}>{text}</button>))}
           </div>
-          {tab === "deposit" ? <Deposit address={me.address} toBuy={() => useExchange.setState({ tab: "buy" })} />
+          {tab === "deposit" ? <Deposit address={me.address} stripe={Boolean(me.onramp?.stripe)} />
             : tab === "buy" ? <Buy address={me.address} stripe={Boolean(me.onramp?.stripe)} />
             : <Convert sol={me.wallet?.sol ?? 0} usdc={+usdc} />}
         </>

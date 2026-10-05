@@ -73,6 +73,8 @@ export const watched = new Set();
 // coin carries it only for LEDGER_AFTER_BOND (while it still describes the coin); then RugCheck's or nothing.
 const LEDGER_AFTER_BOND = 3 * 60_000;
 function withLive(r) {
+  // pump.fun Mayhem Mode (its AI agent trades the coin for the first 24 h), from the launch feed.
+  if (launchIndex.get(r.mint)?.mayhem) r = { ...r, mayhem: true };
   const x = liveStats(r.mint);
   const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
   const hl = bonded && (!x || now() - x.last > LEDGER_AFTER_BOND) ? null : rowHolders(r.mint);
@@ -235,7 +237,13 @@ async function priceMigrated() {
       if (!(usd > 0)) continue;
       // Market cap from the coin's own price-to-cap ratio when the radar has one (every pump.fun coin has
       // a billion tokens, which is the fallback).
-      const t = migRatio.get(m);
+      // Without the radar's own ratio, only a pump.fun coin's supply is known (1B); any other coin is read from
+      // its stored row, or skipped (stORE: 43K tokens priced at $131.50 became a $131.5B market cap).
+      let t = migRatio.get(m);
+      if (!t && !/pump$/.test(m)) {
+        const row = db.prepare("SELECT price, mcap FROM tokens WHERE mint = ?").get(m);
+        if (row?.price > 0 && row?.mcap > 0) migRatio.set(m, (t = row.mcap / row.price)); else continue;
+      }
       const mc = usd * (t || 1e9);
       const prev = migPx.get(m);
       migPx.set(m, { mcap: mc, t: now() });

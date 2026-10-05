@@ -47,6 +47,10 @@ const P: Record<string, string> = {
   trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.7V17c0 .6-.5 1-1 1.2-1.2.5-2 2-2 3.8"/><path d="M14 14.7V17c0 .6.5 1 1 1.2 1.2.5 2 2 2 3.8"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
   buy: '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>',
   sell: '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  chevron: '<polyline points="6 9 12 15 18 9"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
+  refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/>',
 };
 export type IconName = keyof typeof P;
 export function DI({ name, className }: { name: IconName; className?: string }) {
@@ -175,14 +179,16 @@ export function SectionNav({ items }: { items: NavItem[] }) {
   );
 }
 
-export function Hero({ icon, title, lead, children }: { icon: IconName; title: string; lead: ReactNode; children?: ReactNode }) {
+// `side`: a live panel on the right on wide screens (a real call, a sample conversation), below on narrow ones.
+export function Hero({ icon, title, lead, children, side }: { icon: IconName; title: string; lead: ReactNode; children?: ReactNode; side?: ReactNode }) {
   return (
-    <header className="relative isolate flex gap-6 overflow-hidden rounded-[18px] border border-rule px-8 py-7 shadow-panel max-md:flex-col max-md:gap-4 max-md:px-5 max-md:py-6"
+    <header className="relative isolate grid items-center gap-x-8 gap-y-6 overflow-hidden rounded-[18px] border border-rule px-8 py-7 shadow-panel max-md:px-5 max-md:py-6 @min-[900px]:grid-cols-[minmax(0,1fr)_390px]"
       style={{ background: "radial-gradient(640px 240px at 0% 0%, color-mix(in oklch, var(--color-ink) 8%, transparent), transparent 70%), linear-gradient(180deg, var(--color-paper-3), var(--color-paper-2))" }}>
       {/* plotting-paper grid fading in from the top right */}
       <span aria-hidden className="pointer-events-none absolute inset-0 -z-10 opacity-35"
         style={{ backgroundImage: "linear-gradient(var(--color-rule-2) 1px, transparent 1px), linear-gradient(90deg, var(--color-rule-2) 1px, transparent 1px)", backgroundSize: "28px 28px",
           maskImage: "radial-gradient(520px 260px at 100% 0%, black, transparent 75%)", WebkitMaskImage: "radial-gradient(520px 260px at 100% 0%, black, transparent 75%)" }} />
+      <div className="flex min-w-0 gap-6 max-md:flex-col max-md:gap-4">
       <span className="chrome-fill grid size-[66px] shrink-0 place-items-center rounded-[19px] [&_svg]:size-[31px] [&_svg]:stroke-[1.9] max-md:size-[52px] max-md:rounded-[15px] max-md:[&_svg]:size-[25px]">
         <DI name={icon} />
       </span>
@@ -192,6 +198,8 @@ export function Hero({ icon, title, lead, children }: { icon: IconName; title: s
         <p className="mt-3 max-w-[66ch] text-[14.5px] leading-relaxed text-ink-2">{lead}</p>
         {children && <div className="mt-5 flex flex-wrap gap-2">{children}</div>}
       </div>
+      </div>
+      {side && <div className="min-w-0">{side}</div>}
     </header>
   );
 }
@@ -215,6 +223,18 @@ export function Section({ id, icon, title, aside, children }: { id: string; icon
       </header>
       {children}
     </section>
+  );
+}
+
+// A search box for long lists (endpoints, tools). "/" focuses it.
+export function SearchBox({ value, onChange, placeholder, className }: { value: string; onChange: (v: string) => void; placeholder: string; className?: string }) {
+  return (
+    <label className={cn("flex h-9 min-w-0 items-center gap-2 rounded-full border border-rule-2 bg-paper px-3.5 transition-colors duration-150 focus-within:border-ink-2", className)}>
+      <DI name="search" className="size-[15px] text-muted" />
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck={false}
+        className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
+      {value && <button onClick={() => onChange("")} aria-label="Clear" className="text-muted hover:text-ink"><DI name="x" className="size-3.5" /></button>}
+    </label>
   );
 }
 

@@ -25,6 +25,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS early (
   res TEXT, fill REAL, maxm REAL, endm REAL, done_t INTEGER, PRIMARY KEY (mint, cp)
 )`);
 db.exec("CREATE INDEX IF NOT EXISTS early_t ON early(t)");
+db.exec("CREATE INDEX IF NOT EXISTS early_cp ON early(cp, t)");
 // The unanswered checkpoints, asked for at every start: a small index of just those rows (the table itself is tens of MB).
 db.exec("CREATE INDEX IF NOT EXISTS early_open ON early(mint, cp) WHERE res IS NULL");
 db.exec(`CREATE TABLE IF NOT EXISTS launch_winners (mint TEXT PRIMARY KEY, symbol TEXT, t0 INTEGER, start REAL, ath REAL, ath_t INTEGER)`);
@@ -188,8 +189,13 @@ const group = (rows) => ({ n: rows.length, winPct: rows.length ? Math.round((100
 function* trainSteps(cp) {
   // Only launches whose 30 minutes are fully over: counting the ones that already resolved among the
   // recent launches would over-count quick winners and quick losers.
-  const rows = db.prepare("SELECT feat, res, fill, endm FROM early WHERE cp = ? AND res IS NOT NULL AND t > ? AND t < ? ORDER BY t").all(cp, now() - 3 * 24 * 60 * MIN, now() - HORIZON - 6 * MIN)
-    .map((r) => ({ ...r, x: vec(json(r.feat, {})), y: r.res === "win" ? 1 : 0 }));
+  // Read in slices with a yield between them: a cold read of ~20k rows held the radar up for 2+ s.
+  const rows = [];
+  let i = 0;
+  for (const r of db.prepare("SELECT feat, res, fill, endm FROM early WHERE cp = ? AND res IS NOT NULL AND t > ? AND t < ? ORDER BY t").iterate(cp, now() - 3 * 24 * 60 * MIN, now() - HORIZON - 6 * MIN)) {
+    rows.push({ ...r, x: vec(json(r.feat, {})), y: r.res === "win" ? 1 : 0 });
+    if (++i % 1000 === 0) yield;
+  }
   const wins = rows.filter((r) => r.y).length;
   const info = { cp, n: rows.length, wins, need: MIN_SAMPLES, t: now(), base: group(rows) };
   if (rows.length < MIN_SAMPLES || wins < MIN_WINS) return { ...info, status: "learning" };

@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const URL_ = `http://localhost:${process.env.RADAR_PORT || 4420}`;
+// The window opens the new front end (web/dist, served by the radar on :4421).
+const APP_URL = `http://localhost:${process.env.BLIX_WEB_PORT || 4421}`;
 const up = () => fetch(`${URL_}/api/overview`).then((r) => r.ok).catch(() => false);
 
 if (!(await up())) {
@@ -24,6 +26,6 @@ if (!process.argv.includes("--background")) {
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     path.join(process.env.LOCALAPPDATA || "", "Google\\Chrome\\Application\\chrome.exe"),
   ].find((p) => fs.existsSync(p));
-  if (chrome) spawn(chrome, [`--app=${URL_}`, "--window-size=1440,920"], { detached: true, stdio: "ignore" }).unref();
-  else spawn("explorer.exe", [URL_], { detached: true, stdio: "ignore" }).unref();
+  if (chrome) spawn(chrome, [`--app=${APP_URL}`, "--window-size=1440,920"], { detached: true, stdio: "ignore" }).unref();
+  else spawn("explorer.exe", [APP_URL], { detached: true, stdio: "ignore" }).unref();
 }

@@ -184,8 +184,11 @@ const walletName = (address, w = {}) => w.handle ? `@${w.handle}` : w.label || `
 // Tiny inline price chart.
 function spark(points, w = 84, h = 26) {
   if (!points || points.length < 2) return `<span class="spark-empty"></span>`;
+  // [time 0..1 of the window, value] pairs (drawn to time); plain numbers from older servers are spread evenly.
+  const xy = points.map((p, i) => Array.isArray(p) ? p : [i / (points.length - 1), p]);
+  points = xy.map((p) => p[1]);
   const lo = Math.min(...points), hi = Math.max(...points);
-  const d = points.map((v, i) => `${i ? "L" : "M"}${(i / (points.length - 1) * w).toFixed(1)},${(h - 3 - (v - lo) / Math.max(hi - lo, 1e-18) * (h - 6)).toFixed(1)}`).join("");
+  const d = xy.map(([x, v], i) => `${i ? "L" : "M"}${(x * w).toFixed(1)},${(h - 3 - (v - lo) / Math.max(hi - lo, 1e-18) * (h - 6)).toFixed(1)}`).join("");
   const up = points[points.length - 1] >= points[0];
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path d="${d}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
