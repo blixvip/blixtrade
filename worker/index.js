@@ -12,6 +12,7 @@ import { SCRIPT } from "./site/html.js";
 import { ROBOTS, SITEMAP, LLMS, INDEXNOW_KEY } from "./site/seo.js";
 import LANDING from "./site/landing.html";
 import { waitlist } from "./site/waitlist.js";
+import { who, record, isPageView } from "./site/track.js";
 import { isVisitorRead, keepPlan, visitorRead, overLimit } from "./edge.js";
 
 let cached = { origin: null, t: 0 };
@@ -28,10 +29,14 @@ export default {
     const url = new URL(req.url);
     // One address per page for search engines (and the key cookie is Secure anyway).
     if (url.protocol === "http:") { url.protocol = "https:"; return Response.redirect(url.toString(), 301); }
+    const defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));
+    // Every page someone opens is recorded in D1 (site/track.js), whether or not the PC is on.
+    if (isPageView(req, url)) defer(who(req, env, url).then((info) => record(env, defer, info, "view", { path: url.pathname })));
     const page = await site(req, env, url);
     if (page) return page;
-    // "Start trading": make an account, wait in line (site/waitlist.js). Sign-ups and log-ins: 20 a minute per address.
-    const wait = await waitlist(req, env, url, req.method === "POST" && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20));
+    // "Start trading": make an account and wait for access (site/waitlist.js). Sign-ups and log-ins: 20 a minute per address.
+    const limited = req.method === "POST" && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20);
+    const wait = await waitlist(req, env, url, { limited, defer });
     if (wait) return wait;
     if (url.pathname === "/__register") {
       if (req.method !== "POST" || !timingSafeEqual(req.headers.get("x-reg-key") || "", env.REG_KEY || "")) return new Response("no", { status: 403 });

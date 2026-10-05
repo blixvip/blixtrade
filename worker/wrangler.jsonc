@@ -9,6 +9,8 @@
   "compatibility_date": "2026-09-01",
   "routes": [{ "pattern": "trade.blixvip.com", "custom_domain": true }],
   "kv_namespaces": [{ "binding": "REG", "id": "950148872f48449692d579f4bd71339d" }],
+  // Waitlist accounts + page/sign-up tracking (site/waitlist.js, site/track.js); schema in migrations/.
+  "d1_databases": [{ "binding": "DB", "database_name": "blix-waitlist", "database_id": "0f208c00-af5c-45b4-8fba-a344a5d9efd6", "migrations_dir": "migrations" }],
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "observability": { "enabled": true }
 }
