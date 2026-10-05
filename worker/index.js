@@ -1,4 +1,5 @@
-// trade.blixvip.com → the live Blix terminal on Kai's PC, plus the public docs pages.
+// trade.blixvip.com → the BLIX landing page at /, the live Blix terminal on Kai's PC at /app (and every
+// other path it uses), plus the public docs pages.
 // The docs (/api, /mcp and the comparison pages, with robots.txt, sitemap.xml, llms.txt and /_pub/
 // assets) are served here at the edge, so they stay up and fast when the PC is off; see site/.
 // Blix registers its current quick-tunnel address (POST /__register with the REG_KEY secret); every other
@@ -9,6 +10,7 @@
 import { PAGES, render } from "./site/pages.js";
 import { SCRIPT } from "./site/html.js";
 import { ROBOTS, SITEMAP, LLMS, INDEXNOW_KEY } from "./site/seo.js";
+import LANDING from "./site/landing.html";
 import { isVisitorRead, keepPlan, visitorRead, overLimit } from "./edge.js";
 
 let cached = { origin: null, t: 0 };
@@ -81,13 +83,31 @@ export default {
 
 // ---------- public docs ----------
 const built = new Map(); // path → { body, etag }, rendered once per isolate
-let csp = null;
+let csp = null, landing = null;
 const sha = async (algo, text) => new Uint8Array(await crypto.subtle.digest(algo, new TextEncoder().encode(text)));
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
 
 async function site(req, env, url) {
   if (req.method !== "GET" && req.method !== "HEAD") return null;
   const p = url.pathname, lower = p.toLowerCase().replace(/\/+$/, "");
+  // The front page is the landing (site/landing.html, served from here so it is up when the PC is off);
+  // its buttons open the terminal at /app. The key form posts ?key= to /, so that goes on to the terminal.
+  if (p === "/") {
+    if (url.searchParams.has("key")) return Response.redirect(`${url.origin}/app${url.search}`, 302);
+    if (!landing) {
+      const script = LANDING.match(/<script>([\s\S]*?)<\/script>/)[1];
+      landing = {
+        etag: `"${b64(await sha("SHA-1", LANDING)).slice(0, 27)}"`,
+        csp: `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", script))}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+      };
+    }
+    const headers = {
+      "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=600", etag: landing.etag,
+      "content-security-policy": landing.csp, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin",
+    };
+    if (req.headers.get("if-none-match") === landing.etag) return new Response(null, { status: 304, headers });
+    return new Response(req.method === "HEAD" ? null : LANDING, { headers });
+  }
   if (PAGES[lower] && p !== lower) return Response.redirect(`${url.origin}${lower}${url.search}`, 301);
   if (PAGES[p]) {
     if (!built.has(p)) {

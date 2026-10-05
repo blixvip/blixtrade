@@ -23,6 +23,7 @@ Sitemap: ${ORIGIN}/sitemap.xml
 
 export const SITEMAP = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${ORIGIN}/</loc><lastmod>${UPDATED}</lastmod></url>
 ${PUBLIC_PATHS.map((p) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${UPDATED}</lastmod></url>`).join("\n")}
 </urlset>
 `;
