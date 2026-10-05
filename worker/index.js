@@ -38,6 +38,12 @@ export default {
     const limited = req.method === "POST" && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20);
     const wait = await waitlist(req, env, url, { limited, defer });
     if (wait) return wait;
+    // A visitor without the owner's key never sees the terminal's key form: /app sends them to sign up,
+    // any other page address that is not one of the site's own is a plain "not found".
+    if (isPageView(req, url) && !url.searchParams.has("key") && !/(?:^|;\s*)blix_key=/.test(req.headers.get("cookie") || "")) {
+      if (/^\/app(\/|$)/.test(url.pathname)) return Response.redirect(`${url.origin}/start`, 302);
+      return notFound();
+    }
     if (url.pathname === "/__register") {
       if (req.method !== "POST" || !timingSafeEqual(req.headers.get("x-reg-key") || "", env.REG_KEY || "")) return new Response("no", { status: 403 });
       let body = {};
@@ -107,7 +113,7 @@ async function site(req, env, url) {
       const script = LANDING.match(/<script>([\s\S]*?)<\/script>/)[1];
       landing = {
         etag: `"${b64(await sha("SHA-1", LANDING)).slice(0, 27)}"`,
-        csp: `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", script))}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        csp: `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", script))}' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
       };
     }
     const headers = {
@@ -123,7 +129,7 @@ async function site(req, env, url) {
       const body = render(p);
       built.set(p, { body, etag: `"${b64(await sha("SHA-1", body)).slice(0, 27)}"` });
     }
-    csp ||= `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", SCRIPT))}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+    csp ||= `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", SCRIPT))}' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
     const { body, etag } = built.get(p);
     const headers = {
       "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=600", etag,
@@ -147,6 +153,13 @@ async function site(req, env, url) {
   return null;
 }
 
+const notFound = () => new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Page not found · BLIX</title><meta name="robots" content="noindex">
+<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
+<style>*{box-sizing:border-box;margin:0}body{min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:radial-gradient(ellipse 70% 55% at 50% 0%,rgba(176,182,194,.14),transparent 70%),#050608;color:#f4f6fa;font:16px/1.5 system-ui,sans-serif;text-align:center}
+img{width:72px;margin-bottom:18px}h1{font-size:30px;letter-spacing:-.03em;margin-bottom:8px}p{color:#8a92a3;margin-bottom:26px}
+a{display:inline-block;padding:13px 24px;border-radius:999px;background:#f2f3f5;color:#0a0b0d;font-weight:600;text-decoration:none}</style>
+<div><img src="/_pub/home/bx-logo.webp" alt=""><h1>Page not found</h1><p>That page doesn't exist. Head back to BLIX.</p><a href="/">Back to BLIX</a></div>`,
+  { status: 404, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com", "x-robots-tag": "noindex" } });
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const offline = () => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="20"><title>Blix</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1117;color:#e6e8ef;font:15px system-ui,sans-serif;text-align:center}h1{font-size:18px;margin:0 0 6px}p{color:#8b90a0;margin:0}a{color:#7aa2ff}</style>

@@ -49,7 +49,8 @@ async function isAdmin(req, env) {
   return sameStr(cookieOf(req, ADMIN) || "", await adminToken(env));
 }
 
-const CSP = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+// Cloudflare Web Analytics (injected by Cloudflare at the zone) is the only script allowed.
+const CSP = "default-src 'none'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 const HEAD = (title, extra = "") => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} · BLIX</title><meta name="robots" content="noindex"><meta name="theme-color" content="#050608">${extra}
@@ -114,7 +115,7 @@ const go = (to, cookie) => new Response(null, { status: 303, headers: { location
 
 // Returns a Response for the waitlist's paths, or null for everything else.
 export async function waitlist(req, env, url, { limited, defer }) {
-  const p = url.pathname.replace(/\/+$/, "") || "/";
+  const p = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
   if (p === "/__admin" || p === "/__admin.csv") return admin(req, env, url, p);
   if (!["/start", "/login", "/waiting", "/logout"].includes(p)) return null;
   const info = await who(req, env, url);
