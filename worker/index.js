@@ -11,6 +11,7 @@ import { PAGES, render } from "./site/pages.js";
 import { SCRIPT } from "./site/html.js";
 import { ROBOTS, SITEMAP, LLMS, INDEXNOW_KEY } from "./site/seo.js";
 import LANDING from "./site/landing.html";
+import { waitlist } from "./site/waitlist.js";
 import { isVisitorRead, keepPlan, visitorRead, overLimit } from "./edge.js";
 
 let cached = { origin: null, t: 0 };
@@ -29,6 +30,9 @@ export default {
     if (url.protocol === "http:") { url.protocol = "https:"; return Response.redirect(url.toString(), 301); }
     const page = await site(req, env, url);
     if (page) return page;
+    // "Start trading": make an account, wait in line (site/waitlist.js). Sign-ups and log-ins: 20 a minute per address.
+    const wait = await waitlist(req, env, url, req.method === "POST" && overLimit(`w:${req.headers.get("cf-connecting-ip") || "unknown"}`, Date.now(), 20));
+    if (wait) return wait;
     if (url.pathname === "/__register") {
       if (req.method !== "POST" || !timingSafeEqual(req.headers.get("x-reg-key") || "", env.REG_KEY || "")) return new Response("no", { status: 403 });
       let body = {};
@@ -91,7 +95,7 @@ async function site(req, env, url) {
   if (req.method !== "GET" && req.method !== "HEAD") return null;
   const p = url.pathname, lower = p.toLowerCase().replace(/\/+$/, "");
   // The front page is the landing (site/landing.html, served from here so it is up when the PC is off);
-  // its buttons open the terminal at /app. The key form posts ?key= to /, so that goes on to the terminal.
+  // its buttons go to the waitlist (/start, /login); the terminal itself is /app. The key form posts ?key= to /, so that goes on to the terminal.
   if (p === "/") {
     if (url.searchParams.has("key")) return Response.redirect(`${url.origin}/app${url.search}`, 302);
     if (!landing) {
