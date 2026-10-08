@@ -2,7 +2,7 @@
 
 ## Scope
 
-Blix runs on your own machine, listens on localhost only, holds no private keys and signs no transactions. The sensitive surface is:
+Blix runs on your own machine and listens on localhost only. The radar itself holds no private keys and signs no transactions; real wallets live in Blix Vault (a separate local service, keys encrypted at rest with a master key kept outside the project), which the radar reaches only over localhost with a service token. The sensitive surface is:
 
 - the local HTTP server (`server/server.js`): origin and host checks, CSP, the remote-key gate;
 - stored secrets in `data/settings.json`: Discord webhook, Telegram token, RPC URL, Groq key, tunnel key;

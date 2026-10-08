@@ -1,0 +1,27 @@
+# Known-vulnerable dependencies fail the build. The radar itself has no npm dependencies (Node built-ins only); the
+# web app's are checked at "high" and above.
+name: audit
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays: advisories land without a push
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: radar
+        run: npm audit --omit=dev --audit-level=high
+      - name: web
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts
+          npm audit --omit=dev --audit-level=high
+          npm run build

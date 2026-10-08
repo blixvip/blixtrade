@@ -1,0 +1,33 @@
+# Is Blix up? Every 10 minutes: the landing page (the Worker) and a coin logo straight from the server's own
+# address (the tunnel + page server, no sign-in needed). A failure is said on Discord when the repository secret
+# BLIX_ALERT_WEBHOOK holds a webhook address; the run fails either way, which shows as a red cross here.
+name: uptime
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: landing page
+        id: landing
+        continue-on-error: true
+        run: curl -fsS -o /dev/null --max-time 20 -w "landing %{http_code} %{time_total}s\n" https://blixvip.com/
+      - name: terminal server through the tunnel
+        id: origin
+        continue-on-error: true
+        run: curl -fsS -o /dev/null --max-time 20 -H "Origin: https://blixvip.com" -w "origin %{http_code} %{time_total}s\n" "https://origin.blixvip.com/img/8qoFHdsy9PsGRKuZGpNGfLKxdkJcSKjNvwjQfmMPpump.webp"
+      - name: say so
+        if: steps.landing.outcome == 'failure' || steps.origin.outcome == 'failure'
+        env:
+          HOOK: ${{ secrets.BLIX_ALERT_WEBHOOK }}
+          LANDING: ${{ steps.landing.outcome }}
+          ORIGIN: ${{ steps.origin.outcome }}
+        run: |
+          msg="Blix check failed: landing=$LANDING origin=$ORIGIN ($(date -u +%H:%M) UTC)"
+          echo "$msg"
+          if [ -n "$HOOK" ]; then curl -fsS -m 10 -H "content-type: application/json" -d "$(printf '{"content":"%s"}' "$msg")" "$HOOK" || true; fi
+          exit 1
