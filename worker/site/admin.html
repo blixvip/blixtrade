@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · BLIX</title><meta name="robots" content="noindex"><meta name="theme-color" content="#050608">
+<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
+<link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}
+:root{--bg:#050608;--card:#0a0c10;--card2:#0d1015;--line:#161a21;--line2:#1f242d;--text:#f4f6fa;--soft:#cfd6e4;--mute:#8a92a3;--dim:#5d6575;--green:#22d38a;--green-bg:rgba(34,211,138,.12);--amber:#ffb020;--amber-bg:rgba(255,176,32,.1);--red:#ff6b7a;--red-bg:rgba(255,107,122,.12);--blue:#7aa7ff;--mono:"JetBrains Mono",ui-monospace,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg)}
+body{background:radial-gradient(ellipse 80% 40% at 50% -10%,rgba(176,182,194,.09),transparent 70%),var(--bg);color:var(--text);font:14px/1.45 "Inter Tight",system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh}
+button,input{font:inherit;color:inherit}
+.wrap{max-width:1440px;margin:0 auto;padding:20px clamp(16px,3vw,36px) 60px}
+/* top bar */
+.top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text)}
+.brand img{height:26px}.brand b{font-weight:600;font-size:18px;letter-spacing:-.02em}.brand span{color:var(--dim);font-size:13px;border-left:1px solid var(--line2);padding-left:10px}
+.status{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;border:1px solid var(--line2);font-size:12.5px;color:var(--mute);white-space:nowrap}
+.status i{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+.status.ok i{background:var(--green);animation:ping 2s infinite}.status.ok{color:var(--soft)}
+.status.warn{border-color:rgba(255,176,32,.35);color:#ffd88a}.status.warn i{background:var(--amber)}
+@keyframes ping{0%{box-shadow:0 0 0 0 rgba(34,211,138,.6)}70%{box-shadow:0 0 0 7px rgba(34,211,138,0)}100%{box-shadow:0 0 0 0 rgba(34,211,138,0)}}
+.grow{flex:1}
+.seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg button{border:0;background:none;padding:6px 13px;border-radius:999px;cursor:pointer;color:var(--mute);font-size:13px;font-weight:500}
+.seg button.on{background:#f2f3f5;color:#0a0b0d}
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);background:var(--card);padding:7px 13px;border-radius:999px;cursor:pointer;color:var(--soft);font-size:13px;text-decoration:none;white-space:nowrap}
+.btn:hover{border-color:#2c323d;color:var(--text)}
+.check{display:inline-flex;align-items:center;gap:7px;color:var(--mute);font-size:13px;cursor:pointer;user-select:none}
+.check input{accent-color:var(--green)}
+/* banner */
+.banner{display:none;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:14px;border:1px solid rgba(255,176,32,.3);background:var(--amber-bg);color:#ffe2a8;margin-bottom:16px;font-size:13.5px}
+.banner.show{display:flex}.banner b{color:#fff}
+/* kpis */
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:18px}
+.kpi{padding:16px 18px;min-width:0}
+.kpi .l{color:var(--mute);font-size:12.5px;display:flex;align-items:center;gap:6px}
+.kpi .v{font:500 30px/1.15 var(--mono);margin-top:8px;letter-spacing:-.02em}
+.kpi .s{color:var(--dim);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi .d{font:500 12px var(--mono);margin-left:auto;padding:1px 7px;border-radius:999px}
+.d.up{color:var(--green);background:var(--green-bg)}.d.down{color:var(--red);background:var(--red-bg)}
+.faces{display:flex;margin-top:8px;min-height:22px}.faces .av{width:22px;height:22px;margin-right:-6px;border:2px solid var(--card);font-size:9px}
+/* chart */
+.chart{padding:16px 18px 10px;margin-bottom:12px}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.head h2{font-size:13px;font-weight:600;color:var(--soft);letter-spacing:.01em}
+.head .n{color:var(--dim);font-size:12.5px}
+.legend{display:flex;gap:14px;color:var(--mute);font-size:12px;margin-left:auto}.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+svg{display:block;width:100%}
+.tip{position:fixed;pointer-events:none;background:#12161c;border:1px solid var(--line2);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--soft);display:none;z-index:9;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.tip b{color:var(--text)}
+/* layout */
+.cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:12px;margin-bottom:12px}
+.box{padding:16px 18px;min-width:0}
+/* people table */
+.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.search{background:var(--bg);border:1px solid var(--line2);border-radius:999px;padding:7px 13px;width:220px;outline:none}
+.search:focus{border-color:#3a414d}
+.chips{display:inline-flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line2);background:none;border-radius:999px;padding:5px 11px;font-size:12.5px;color:var(--mute);cursor:pointer}
+.chip.on{border-color:#3a414d;color:var(--text);background:#141820}
+.chip em{font-style:normal;color:var(--dim);margin-left:4px;font-family:var(--mono);font-size:11px}
+.tbl{overflow-x:auto;margin:0 -18px;padding:0 18px}
+table{width:100%;border-collapse:collapse;min-width:900px}
+th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap;user-select:none}
+th.s{cursor:pointer}th.s:hover{color:var(--soft)}th.on{color:var(--text)}
+td{padding:10px 10px;border-bottom:1px solid #101318;font-size:13.5px;color:var(--soft);white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr{transition:background .6s}
+tbody tr:hover{background:#0d1015}
+tr.flash{background:rgba(34,211,138,.1)}
+td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var(--mute)}
+.who{display:flex;align-items:center;gap:11px;min-width:0}
+.who div{min-width:0}.who b{display:block;font-weight:500;color:var(--text);max-width:220px;overflow:hidden;text-overflow:ellipsis}.who small{display:block;color:var(--mute);font-size:12.5px;max-width:240px;overflow:hidden;text-overflow:ellipsis}
+.av{position:relative;flex:none;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;color:#0a0b0d;overflow:hidden}
+.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.av .dot{position:absolute;right:-1px;bottom:-1px;width:10px;height:10px;border-radius:50%;background:var(--green);border:2px solid var(--card)}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;margin-left:6px;vertical-align:1px;font-weight:500}
+.tag.you{background:#1b2130;color:var(--blue)}.tag.new{background:var(--green-bg);color:var(--green)}.tag.held{background:var(--amber-bg);color:var(--amber)}.tag.rec{background:#1b1f27;color:var(--mute)}
+.pill{border:0;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:600;cursor:pointer}
+.pill.on{background:var(--green-bg);color:var(--green)}.pill.on:hover{background:var(--red-bg);color:var(--red)}
+.pill.off{background:var(--red-bg);color:var(--red)}.pill.off:hover{background:var(--green-bg);color:var(--green)}
+.pill.na{background:#141820;color:var(--dim);cursor:default}
+.on-now{color:var(--green)}
+.empty{color:var(--dim);padding:18px 0;text-align:center;font-size:13px}
+/* feed */
+.feed{display:grid;grid-template-columns:minmax(0,1fr);max-height:560px;overflow-y:auto;margin:0 -8px;padding:0 8px}
+.fi{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:11px;align-items:center;padding:9px 6px;border-bottom:1px solid #101318;border-radius:10px;transition:background .6s}
+.fi.flash{background:rgba(34,211,138,.1)}
+.fi .ic{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#141820;color:var(--mute);font-size:13px}
+.fi .ic.sg{background:var(--green-bg);color:var(--green)}.fi .ic.fail{background:var(--red-bg);color:var(--red)}.fi .ic.bot{background:#141414;color:#555}
+.fi .tx{min-width:0;font-size:13px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fi .tx b{color:var(--text);font-weight:500}.fi .tx code{font-family:var(--mono);font-size:12px;color:var(--text);background:#141820;padding:1px 6px;border-radius:6px}
+.fi .tx small{display:block;color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+.fi time{color:var(--dim);font-size:12px;font-family:var(--mono)}
+/* breakdowns */
+.bd{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.list{display:grid;grid-template-columns:minmax(0,1fr);gap:4px}
+.row{position:relative;display:flex;justify-content:space-between;gap:10px;padding:6px 9px;border-radius:8px;font-size:13px;overflow:hidden}
+.row i{position:absolute;left:0;top:0;bottom:0;background:#141922;border-radius:8px;z-index:0}
+.row span,.row b{position:relative;z-index:1}.row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--soft)}
+.row b{font:500 12px var(--mono);color:var(--mute)}
+.note{color:var(--dim);font-size:12px;margin-top:10px}
+.foot{color:var(--dim);font-size:12px;margin-top:18px;text-align:center}
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.cols{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi .v{font-size:24px}.bd{grid-template-columns:minmax(0,1fr)}.search{width:100%}.legend{margin-left:0}.brand span{display:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body>
+<div class="wrap">
+  <div class="top">
+    <a class="brand" href="/"><img src="/_pub/home/bx-logo.webp" alt=""><b>BLIX</b><span>Admin</span></a>
+    <div class="status" id="status"><i></i><span>Connecting…</span></div>
+    <div class="grow"></div>
+    <label class="check" title="Leave out page views from your own accounts and devices"><input type="checkbox" id="mine"> Include my visits</label>
+    <div class="seg" id="range"><button data-r="1">24 h</button><button data-r="7" class="on">7 days</button><button data-r="30">30 days</button></div>
+    <a class="btn" href="/__admin.csv">Export CSV</a>
+  </div>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis">
+    <div class="card kpi"><div class="l">New sign-ups <span class="d" id="k-su-d"></span></div><div class="v" id="k-su">–</div><div class="s" id="k-su-s"></div></div>
+    <div class="card kpi"><div class="l">Online now</div><div class="v" id="k-on">–</div><div class="faces" id="k-on-f"></div></div>
+    <div class="card kpi"><div class="l">Visitors <span class="d" id="k-vi-d"></span></div><div class="v" id="k-vi">–</div><div class="s" id="k-vi-s"></div></div>
+    <div class="card kpi"><div class="l">Visitor → sign-up</div><div class="v" id="k-cv">–</div><div class="s" id="k-cv-s"></div></div>
+    <div class="card kpi"><div class="l">Members active</div><div class="v" id="k-ac">–</div><div class="s" id="k-ac-s"></div></div>
+  </div>
+
+  <div class="card chart">
+    <div class="head"><h2>Traffic</h2><span class="n" id="chart-n"></span>
+      <div class="legend"><span><i style="background:#3b4250"></i>Visitors</span><span><i style="background:var(--green)"></i>Sign-ups</span></div></div>
+    <svg id="chart" height="190" aria-label="Visitors and sign-ups over time"></svg>
+  </div>
+
+  <div class="card box" style="margin-bottom:12px">
+    <div class="head"><h2>People</h2><span class="n" id="ppl-n"></span><div class="grow"></div>
+      <div class="tools"><div class="chips" id="chips"></div><input class="search" id="q" type="search" placeholder="Search name, email, place…"></div></div>
+    <div class="tbl"><table><thead><tr>
+      <th class="s" data-k="name">Person</th><th>Access</th><th class="s on" data-k="created">Joined ↓</th><th class="s" data-k="seen">Last seen</th>
+      <th class="s" data-k="logins">Logins</th><th class="s" data-k="views">Page views</th><th>Location</th><th>Came from</th></tr></thead>
+      <tbody id="ppl"></tbody></table></div>
+  </div>
+
+  <div class="cols">
+    <div class="card box">
+      <div class="head"><h2>Live activity</h2><span class="n" id="feed-n"></span><div class="grow"></div>
+        <label class="check"><input type="checkbox" id="bots"> Show bots</label></div>
+      <div class="feed" id="feed"></div>
+    </div>
+    <div class="bd">
+      <div class="card box"><div class="head"><h2>Sources</h2></div><div class="list" id="b-src"></div></div>
+      <div class="card box"><div class="head"><h2>Countries</h2></div><div class="list" id="b-cty"></div></div>
+      <div class="card box"><div class="head"><h2>Pages</h2></div><div class="list" id="b-pg"></div></div>
+      <div class="card box"><div class="head"><h2>Devices</h2></div><div class="list" id="b-dev"></div><div class="note" id="b-note"></div></div>
+    </div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+<div class="tip" id="tip"></div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var H = 3600000, D = 86400000;
+  // Scanners probing for WordPress, PHP, config files and the like: every visitor that asks for one is a bot.
+  var JUNK = /\.(php\d?|aspx?|jsp|cgi|env|git|sql|bak|old|zip|tar|gz|rar|7z|ini|ya?ml|log|sh|py|rb|pl|swp|conf|config|db|sqlite|ds_store)(\/|$)|^\/(wp-|wordpress|\.|cgi-bin|phpmyadmin|pma|myadmin|vendor\/|xmlrpc|owa|ecp|autodiscover|actuator|solr|boaform|hudson|jenkins|manager\/|druid|console|HNAP1|setup|admin\/|administrator|backup|bk\/|old\/|new\/|test\/|tmp\/|server-status|telescope|_ignition|api\/v1\/pods|remote\/|sitemap\.xml\.gz)/i;
+  var OWN = /(^|\.)blixvip\.com$|^accounts\.google\.|^localhost/i;
+  var S = { ev: [], seen: {}, acc: {}, owners: {}, pending: [], health: { db: true }, range: 7, mine: false, bots: false, chip: "all", q: "", sort: "created", desc: true, since: 0, lastOk: 0, stale: false, firstLoad: true, fresh: 0, botVis: {}, ownerVis: {} };
+  try { var r0 = +localStorage.getItem("blixadm:range"); if ([1, 7, 30].indexOf(r0) >= 0) S.range = r0; S.mine = localStorage.getItem("blixadm:mine") === "1"; } catch (e) {}
+
+  var regionName = (function () { try { var n = new Intl.DisplayNames(["en"], { type: "region" }); return function (c) { try { return n.of(c); } catch (e) { return c; } }; } catch (e) { return function (c) { return c; }; } })();
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function fmt(n) { return n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(1) + "k" : String(n); }
+  function ago(t) { var s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 45 ? "just now" : s < 3600 ? Math.max(1, Math.round(s / 60)) + "m ago" : s < 86400 ? Math.floor(s / 3600) + "h ago" : s < 86400 * 30 ? Math.floor(s / 86400) + "d ago" : new Date(t).toLocaleDateString(); }
+  function when(t) { return new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+  function place(country, city) { if (!country && !city) return ""; var c = country ? regionName(country) : ""; return city ? city + (c ? ", " + c : "") : c; }
+  var HUES = [158, 210, 265, 330, 20, 45, 190, 290];
+  function hue(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return HUES[Math.abs(h) % HUES.length]; }
+  function initials(name, email) { var b = (name || email || "?").replace(/@.*/, "").trim().split(/[\s._-]+/); return ((b[0] || "?")[0] + (b[1] ? b[1][0] : "")).toUpperCase(); }
+  function avatar(a, online, size) {
+    var bg = "hsl(" + hue(a.email || "") + " 55% 72%)";
+    var img = a.picture && /^https:\/\/lh3\.googleusercontent\.com\//.test(a.picture) ? '<img alt="" loading="lazy" src="/__admin/pic?u=' + encodeURIComponent(a.picture) + '">' : "";
+    return '<span class="av" style="background:' + bg + (size ? ";width:" + size + "px;height:" + size + "px" : "") + '">' + esc(initials(a.name, a.email)) + img + (online ? '<span class="dot"></span>' : "") + "</span>";
+  }
+  // A broken picture falls back to the initials under it (error events do not bubble: caught on the way down).
+  document.addEventListener("error", function (e) { if (e.target && e.target.tagName === "IMG" && e.target.parentNode && e.target.parentNode.classList.contains("av")) e.target.remove(); }, true);
+
+  function source(ref) {
+    if (!ref) return null;
+    var host = String(ref).split("/")[0].toLowerCase(), raw = String(ref);
+    if (!/\./.test(host)) return raw;                       // ?ref= / utm tag as given
+    if (OWN.test(host)) return null;
+    var h = host.replace(/^www\.|^m\.|^l\.|^lm\./, "");
+    if (/^google\./.test(h)) return "Google";
+    if (h === "t.co" || h === "x.com" || h === "twitter.com") return "X (Twitter)";
+    if (/threads\.(net|com)$/.test(h)) return "Threads";
+    if (/(^|\.)reddit\.com$/.test(h)) return "Reddit";
+    if (/(^|\.)youtube\.com$|^youtu\.be$/.test(h)) return "YouTube";
+    if (/(^|\.)tiktok\.com$/.test(h)) return "TikTok";
+    if (/(^|\.)(facebook|fb)\.com$/.test(h)) return "Facebook";
+    if (/(^|\.)instagram\.com$/.test(h)) return "Instagram";
+    if (/(^|\.)discord(app)?\.com$/.test(h)) return "Discord";
+    if (h === "github.com") return "GitHub";
+    if (/(^|\.)bing\.com$/.test(h)) return "Bing";
+    if (/(^|\.)duckduckgo\.com$/.test(h)) return "DuckDuckGo";
+    if (/(^|\.)linkedin\.com$|^lnkd\.in$/.test(h)) return "LinkedIn";
+    if (/(^|\.)telegram\.(org|me)$|^t\.me$/.test(h)) return "Telegram";
+    if (/chatgpt\.com$|openai\.com$/.test(h)) return "ChatGPT";
+    if (/perplexity\.ai$/.test(h)) return "Perplexity";
+    return h;
+  }
+
+  // ---- data ----
+  function unpack(o) {
+    var d = o.dict || [], g = function (i) { return i < 0 ? null : d[i]; };
+    return (o.ev || []).map(function (r) { return { id: r[0], t: r[1], kind: g(r[2]), path: g(r[3]), email: r[4], visitor: g(r[5]), country: g(r[6]), city: g(r[7]), referrer: g(r[8]), device: g(r[9]), detail: r[10] }; });
+  }
+  function addEvent(e) {
+    if (S.seen[e.id]) return false;
+    S.seen[e.id] = 1; S.ev.push(e);
+    if (e.visitor && (e.device === "bot" || (e.path && JUNK.test(e.path)))) S.botVis[e.visitor] = 1;
+    if (e.email && S.owners[e.email] && e.visitor) S.ownerVis[e.visitor] = 1;
+    return true;
+  }
+  function setAccount(a) {
+    var old = S.acc[a.email], isNew = !old && !S.firstLoad;
+    S.acc[a.email] = Object.assign(old || {}, a);
+    if (S.owners[a.email] && a.visitor) S.ownerVis[a.visitor] = 1;
+    return isNew;
+  }
+  function isBot(e) { return e.device === "bot" || (e.visitor && S.botVis[e.visitor]) || (e.path && JUNK.test(e.path)); }
+  function isMine(e) { return (e.email && S.owners[e.email]) || (e.visitor && S.ownerVis[e.visitor]); }
+  function human(e) { return !isBot(e) && (S.mine || !isMine(e)); }
+
+  // ---- render ----
+  function bounds() {
+    var now = Date.now(), n = S.range, start;
+    if (n === 1) { var h = new Date(now); h.setMinutes(0, 0, 0); start = h.getTime() - 23 * H; return { now: now, from: now - D, start: start, step: "h", count: 24 }; }
+    var d0 = new Date(now); d0.setHours(0, 0, 0, 0);
+    var s = new Date(d0); s.setDate(s.getDate() - (n - 1));
+    return { now: now, from: s.getTime(), start: s.getTime(), step: "d", count: n };
+  }
+  function bucketOf(t, b) {
+    if (b.step === "h") return Math.floor((t - b.start) / H);
+    var d = new Date(t); d.setHours(0, 0, 0, 0);
+    return Math.round((d.getTime() - b.start) / D);
+  }
+  function bucketLabel(i, b) {
+    if (b.step === "h") { var t = new Date(b.start + i * H); return t.toLocaleTimeString([], { hour: "numeric" }); }
+    var d = new Date(b.start); d.setDate(d.getDate() + i);
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  function members() { return Object.keys(S.acc).map(function (k) { return S.acc[k]; }); }
+  function realMembers() { return members().filter(function (a) { return !S.owners[a.email]; }); }
+
+  function stats(b, from, to) {
+    var vis = {}, views = 0;
+    S.ev.forEach(function (e) { if (e.kind === "view" && e.t >= from && e.t < to && human(e)) { views++; vis[e.visitor || e.email] = 1; } });
+    var su = realMembers().filter(function (a) { return a.created >= from && a.created < to; }).length;
+    return { visitors: Object.keys(vis).length, views: views, signups: su };
+  }
+  function delta(el, cur, prev, none) {
+    if (none || (!prev && !cur)) { el.textContent = ""; el.className = "d"; return; }
+    if (!prev) { el.textContent = "new"; el.className = "d up"; return; }
+    var p = Math.round(((cur - prev) / prev) * 100);
+    el.textContent = (p > 0 ? "+" : "") + p + "%"; el.className = "d " + (p >= 0 ? "up" : "down");
+  }
+
+  function renderKpis(b) {
+    var span = b.now - b.from, cur = stats(b, b.from, b.now + 1), prev = stats(b, b.from - span, b.from);
+    // No comparison against a period from before tracking began (it would read +400%).
+    var first = S.ev.reduce(function (m, e) { return Math.min(m, e.t); }, Infinity);
+    if (!(first <= b.from - span)) prev = { visitors: 0, views: 0, signups: 0, none: true };
+    var label = S.range === 1 ? "last 24 h" : "last " + S.range + " days";
+    $("k-su").textContent = fmt(cur.signups); delta($("k-su-d"), cur.signups, prev.signups, prev.none);
+    var total = realMembers().length, held = S.pending.filter(function (p) { return !S.acc[p.email]; }).length;
+    $("k-su-s").textContent = total + " member" + (total === 1 ? "" : "s") + " in all" + (held ? " · " + held + " held" : "");
+    $("k-vi").textContent = fmt(cur.visitors); delta($("k-vi-d"), cur.visitors, prev.visitors, prev.none);
+    $("k-vi-s").textContent = fmt(cur.views) + " page views · " + label;
+    $("k-cv").textContent = cur.visitors ? (cur.signups / cur.visitors * 100).toFixed(cur.signups / cur.visitors < 0.1 ? 1 : 0) + "%" : "–";
+    $("k-cv-s").textContent = cur.signups + " of " + cur.visitors + " visitors";
+    var act = realMembers().filter(function (a) { return a.last_seen >= b.from; });
+    $("k-ac").textContent = fmt(act.length);
+    $("k-ac-s").textContent = "members seen · " + label;
+    // Online: anyone (not a bot) with activity in the last 5 minutes.
+    var cut = Date.now() - 5 * 60000, on = {}, people = [];
+    members().forEach(function (a) { if (a.last_seen > cut && (S.mine || !S.owners[a.email])) { on["m:" + a.email] = 1; people.push(a); } });
+    S.ev.forEach(function (e) { if (e.t > cut && human(e)) { if (e.email) { if (!on["m:" + e.email]) { on["m:" + e.email] = 1; if (S.acc[e.email]) people.push(S.acc[e.email]); } } else if (e.visitor) on["v:" + e.visitor] = 1; } });
+    $("k-on").textContent = Object.keys(on).length;
+    $("k-on-f").innerHTML = people.slice(0, 8).map(function (a) { return avatar(a, false, 22); }).join("");
+  }
+
+  function renderChart(b) {
+    var vis = [], su = [], i;
+    for (i = 0; i < b.count; i++) { vis.push({}); su.push(0); }
+    S.ev.forEach(function (e) { if (e.kind === "view" && e.t >= b.start && human(e)) { var k = bucketOf(e.t, b); if (k >= 0 && k < b.count) vis[k][e.visitor || e.email] = 1; } });
+    realMembers().forEach(function (a) { if (a.created >= b.start) { var k = bucketOf(a.created, b); if (k >= 0 && k < b.count) su[k]++; } });
+    var vc = vis.map(function (o) { return Object.keys(o).length; });
+    var svg = $("chart"), W = svg.clientWidth || 800, Hh = 190, top = 14, bot = 24, left = 34, right = 6;
+    var max = Math.max(4, Math.max.apply(null, vc)), nice = Math.pow(10, Math.floor(Math.log10(max))), stepY = Math.ceil(max / 4 / (nice / 2)) * (nice / 2) || 1, ymax = stepY * 4;
+    var cw = (W - left - right) / b.count, bw = Math.max(3, Math.min(34, cw * 0.62)), out = [];
+    for (i = 0; i <= 4; i++) { var y = top + (Hh - top - bot) * (1 - i / 4); out.push('<line x1="' + left + '" x2="' + (W - right) + '" y1="' + y + '" y2="' + y + '" stroke="#161a21"/><text x="' + (left - 8) + '" y="' + (y + 4) + '" fill="#5d6575" font-size="10.5" text-anchor="end" font-family="JetBrains Mono,monospace">' + (stepY * i) + "</text>"); }
+    var every = Math.ceil(b.count / Math.max(2, Math.floor((W - left) / 64)));
+    for (i = 0; i < b.count; i++) {
+      var x = left + cw * i + (cw - bw) / 2, h = (Hh - top - bot) * vc[i] / ymax, yb = Hh - bot - h;
+      out.push('<rect class="bar" data-i="' + i + '" x="' + x + '" y="' + yb + '" width="' + bw + '" height="' + Math.max(h, vc[i] ? 2 : 0) + '" rx="' + Math.min(5, bw / 3) + '" fill="' + (i === b.count - 1 ? "#5a6273" : "#3b4250") + '"/>');
+      if (su[i]) out.push('<circle cx="' + (x + bw / 2) + '" cy="' + (yb - 10) + '" r="' + (6 + Math.min(4, su[i])) + '" fill="#22d38a"/><text x="' + (x + bw / 2) + '" y="' + (yb - 6.5) + '" fill="#05140d" font-size="10" font-weight="700" text-anchor="middle">' + su[i] + "</text>");
+      if (i % every === 0 || i === b.count - 1) out.push('<text x="' + (x + bw / 2) + '" y="' + (Hh - 6) + '" fill="#5d6575" font-size="10.5" text-anchor="middle">' + esc(bucketLabel(i, b)) + "</text>");
+      out.push('<rect class="hit" data-i="' + i + '" x="' + (left + cw * i) + '" y="' + top + '" width="' + cw + '" height="' + (Hh - top - bot) + '" fill="transparent"/>');
+    }
+    svg.setAttribute("viewBox", "0 0 " + W + " " + Hh);
+    svg.innerHTML = out.join("");
+    svg._data = { vc: vc, su: su, b: b };
+    var tv = vc.reduce(function (s, v) { return s + v; }, 0), ts = su.reduce(function (s, v) { return s + v; }, 0);
+    $("chart-n").textContent = (b.step === "h" ? "hourly" : "daily") + " unique visitors · " + ts + " sign-up" + (ts === 1 ? "" : "s");
+  }
+  $("chart").addEventListener("mousemove", function (ev) {
+    var t = ev.target, d = this._data, tip = $("tip");
+    if (!d || !t.getAttribute || t.getAttribute("data-i") == null) { tip.style.display = "none"; return; }
+    var i = +t.getAttribute("data-i");
+    tip.innerHTML = "<b>" + esc(bucketLabel(i, d.b)) + "</b><br>" + d.vc[i] + " visitor" + (d.vc[i] === 1 ? "" : "s") + " · " + d.su[i] + " sign-up" + (d.su[i] === 1 ? "" : "s");
+    tip.style.display = "block"; tip.style.left = Math.min(ev.clientX + 14, innerWidth - 180) + "px"; tip.style.top = (ev.clientY + 14) + "px";
+  });
+  $("chart").addEventListener("mouseleave", function () { $("tip").style.display = "none"; });
+
+  // Per person: page views, the visitor ids they used, and where they first came from (the account's own
+  // referrer unless it is the Google sign-in hop, else their earliest outside referrer before signing up).
+  function personStats() {
+    var by = {}, visTo = {};
+    members().forEach(function (a) { by[a.email] = { views: 0, src: source(a.referrer), first: Infinity, lastPath: null, lastT: 0 }; if (a.visitor) visTo[a.visitor] = a.email; });
+    S.ev.forEach(function (e) { if (e.email && by[e.email] && e.visitor && !visTo[e.visitor]) visTo[e.visitor] = e.email; });
+    S.ev.forEach(function (e) {
+      var em = e.email || (e.visitor && visTo[e.visitor]); if (!em || !by[em]) return;
+      var p = by[em];
+      if (e.kind === "view" && !isBot(e)) { p.views++; if (e.t > p.lastT) { p.lastT = e.t; p.lastPath = e.path; } }
+      var s = source(e.referrer); if (s && e.t < p.first && (!S.acc[em] || e.t <= S.acc[em].created + 60000)) { p.first = e.t; p.firstSrc = s; }
+    });
+    Object.keys(by).forEach(function (k) { var p = by[k]; p.src = p.src || p.firstSrc || null; });
+    return by;
+  }
+
+  function renderPeople(b) {
+    var cut = Date.now() - 5 * 60000, st = personStats(), q = S.q.toLowerCase();
+    var rows = members().map(function (a) { return { a: a, held: false }; });
+    S.pending.forEach(function (p) { if (!S.acc[p.email]) rows.push({ a: { email: p.email, name: p.name, picture: p.picture, created: p.t, last_seen: p.last || p.t, logins: p.logins, country: p.country, city: p.city, referrer: p.referrer, status: "member" }, held: true }); });
+    var counts = { all: 0, online: 0, new: 0, paused: 0 };
+    rows.forEach(function (r) { var a = r.a; if (S.owners[a.email] && !S.mine && S.chip !== "all") return; counts.all++; if (a.last_seen > cut) counts.online++; if (a.created >= b.from && !S.owners[a.email]) counts.new++; if (a.status === "blocked") counts.paused++; });
+    $("chips").innerHTML = [["all", "Everyone"], ["new", "New"], ["online", "Online"], ["paused", "Paused"]].map(function (c) { return '<button class="chip' + (S.chip === c[0] ? " on" : "") + '" data-c="' + c[0] + '">' + c[1] + "<em>" + counts[c[0]] + "</em></button>"; }).join("");
+    rows = rows.filter(function (r) {
+      var a = r.a;
+      if (S.chip === "online" && !(a.last_seen > cut)) return false;
+      if (S.chip === "new" && !(a.created >= b.from && !S.owners[a.email])) return false;
+      if (S.chip === "paused" && a.status !== "blocked") return false;
+      if (q && (a.email + " " + (a.name || "") + " " + place(a.country, a.city)).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    var key = function (r) { var a = r.a, s = st[a.email] || {}; return S.sort === "name" ? (a.name || a.email).toLowerCase() : S.sort === "seen" ? a.last_seen : S.sort === "logins" ? a.logins || 0 : S.sort === "views" ? s.views || 0 : a.created; };
+    rows.sort(function (x, y) { var p = key(x), r = key(y); return (p < r ? -1 : p > r ? 1 : 0) * (S.desc ? -1 : 1); });
+    var real = realMembers().length;
+    $("ppl-n").textContent = real + " member" + (real === 1 ? "" : "s") + (S.owners && Object.keys(S.owners).length ? " + you" : "");
+    $("ppl").innerHTML = rows.map(function (r) {
+      var a = r.a, s = st[a.email] || {}, online = a.last_seen > cut, you = S.owners[a.email];
+      var tags = (you ? '<span class="tag you">You</span>' : "") + (r.held ? '<span class="tag held" title="Signed up while the database was paused; moves into the list automatically">Held</span>' : "") + (a.recovered ? '<span class="tag rec" title="Recovered from their sign-in after a database outage; name fills in at their next Google sign-in">Recovered</span>' : "") + (!you && a.created >= Date.now() - D ? '<span class="tag new">New</span>' : "");
+      var access = r.held ? '<span class="pill na">Member</span>' : you ? '<span class="pill na">Owner</span>' : '<button class="pill ' + (a.status === "blocked" ? "off" : "on") + '" data-email="' + esc(a.email) + '" data-to="' + (a.status === "blocked" ? "member" : "blocked") + '" title="' + (a.status === "blocked" ? "Paused. Click to let them back in" : "Click to pause this account") + '">' + (a.status === "blocked" ? "Paused" : "Member") + "</button>";
+      return '<tr data-email="' + esc(a.email) + '"><td><div class="who">' + avatar(a, online) + "<div><b>" + esc(a.name || a.email.replace(/@.*/, "")) + tags + "</b><small>" + esc(a.email) + "</small></div></div></td>" +
+        "<td>" + access + "</td>" +
+        '<td title="' + esc(new Date(a.created).toString()) + '">' + esc(when(a.created)) + '<br><small style="color:var(--dim)">' + ago(a.created) + "</small></td>" +
+        '<td class="' + (online ? "on-now" : "m") + '" title="' + esc(new Date(a.last_seen).toString()) + (s.lastPath ? " · last page " + esc(s.lastPath) : "") + '">' + (online ? "● Online" : ago(a.last_seen)) + "</td>" +
+        '<td class="num">' + (a.logins || 0) + '</td><td class="num">' + (s.views || 0) + "</td>" +
+        '<td class="m">' + esc(place(a.country, a.city) || "–") + '</td><td class="m">' + esc(s.src || "Direct") + "</td></tr>";
+    }).join("") || '<tr><td colspan="8"><div class="empty">' + (S.q ? "No one matches that search." : "No one here yet.") + "</div></td></tr>";
+  }
+
+  function feedRow(e) {
+    var a = e.email && S.acc[e.email], who = a ? "<b>" + esc(a.name || a.email) + "</b>" : e.email ? "<b>" + esc(e.email) + "</b>" : "Someone" + (e.city || e.country ? " in " + esc(place(e.country, e.city)) : "");
+    var bot = isBot(e), ic, text;
+    if (e.kind === "signup") { ic = '<span class="ic sg">★</span>'; text = who + " signed up"; }
+    else if (e.kind === "login") { ic = a ? avatar(a, false, 30) : '<span class="ic">→</span>'; text = who + " logged in"; }
+    else if (e.kind === "logout") { ic = '<span class="ic">←</span>'; text = who + " logged out"; }
+    else if (/fail/.test(e.kind)) { ic = '<span class="ic fail">!</span>'; text = who + " couldn't " + (e.kind === "login_fail" ? "log in" : "sign up") + (e.detail ? " (" + esc(e.detail) + ")" : ""); }
+    else { ic = bot ? '<span class="ic bot">⚙</span>' : a ? avatar(a, false, 30) : '<span class="ic">◦</span>'; text = (bot ? "Bot" + (e.country ? " in " + esc(place(e.country, e.city)) : "") : who) + " opened <code>" + esc(e.path || "/") + "</code>"; }
+    var src = source(e.referrer), sub = [a && (e.city || e.country) ? esc(place(e.country, e.city)) : "", src ? "from " + esc(src) : "", e.device && e.device !== "bot" ? esc(e.device) : ""].filter(Boolean).join(" · ");
+    return '<div class="fi" data-id="' + e.id + '">' + ic + '<div class="tx">' + text + (sub ? "<small>" + sub + "</small>" : "") + '</div><time data-t="' + e.t + '">' + ago(e.t) + "</time></div>";
+  }
+  function renderFeed() {
+    var list = S.ev.filter(function (e) { return S.bots ? true : human(e) || (e.kind !== "view" && !isBot(e)); }).sort(function (x, y) { return y.t - x.t; }).slice(0, 120);
+    $("feed").innerHTML = list.map(feedRow).join("") || '<div class="empty">Nothing yet.</div>';
+    var hidden = S.ev.filter(function (e) { return e.kind === "view" && isBot(e); }).length;
+    $("feed-n").textContent = hidden ? hidden + " bot hits hidden" : "";
+  }
+
+  function bars(el, rows, fmtv) {
+    var max = Math.max(1, rows[0] ? rows[0][1] : 1);
+    $(el).innerHTML = rows.length ? rows.slice(0, 9).map(function (r) { return '<div class="row"><i style="width:' + Math.max(2, r[1] / max * 100) + '%"></i><span title="' + esc(r[0]) + '">' + esc(r[0]) + "</span><b>" + (fmtv ? fmtv(r) : r[1]) + "</b></div>"; }).join("") : '<div class="empty">Nothing yet.</div>';
+  }
+  function tally(fn) { var m = {}; S.ev.forEach(function (e) { var k = fn(e); if (k) (m[k[0]] = m[k[0]] || {})[k[1]] = 1; }); return Object.keys(m).map(function (k) { return [k, Object.keys(m[k]).length]; }).sort(function (a, b) { return b[1] - a[1]; }); }
+  function renderBreakdowns(b) {
+    var inR = function (e) { return e.t >= b.from && human(e); };
+    // Sources: each visitor counted once, by the first outside site they came from in the range.
+    var firstSrc = {};
+    S.ev.slice().sort(function (x, y) { return x.t - y.t; }).forEach(function (e) { var v = e.visitor || e.email; if (!inR(e) || !v || firstSrc[v] !== undefined) return; var s = source(e.referrer); if (s) firstSrc[v] = s; });
+    var allVis = {}; S.ev.forEach(function (e) { if (inR(e) && e.kind === "view") allVis[e.visitor || e.email] = 1; });
+    var srcCount = {}; Object.keys(allVis).forEach(function (v) { var s = firstSrc[v] || "Direct / unknown"; srcCount[s] = (srcCount[s] || 0) + 1; });
+    bars("b-src", Object.keys(srcCount).map(function (k) { return [k, srcCount[k]]; }).sort(function (a, b) { return b[1] - a[1]; }));
+    bars("b-cty", tally(function (e) { return inR(e) && e.kind === "view" && e.country ? [regionName(e.country), e.visitor || e.email] : null; }));
+    var pv = {}, pu = {};
+    S.ev.forEach(function (e) { if (inR(e) && e.kind === "view") { pv[e.path] = (pv[e.path] || 0) + 1; (pu[e.path] = pu[e.path] || {})[e.visitor || e.email] = 1; } });
+    bars("b-pg", Object.keys(pv).map(function (k) { return [k, pv[k], Object.keys(pu[k]).length]; }).sort(function (a, b) { return b[1] - a[1]; }), function (r) { return r[1] + " · " + r[2] + " ppl"; });
+    bars("b-dev", tally(function (e) { return inR(e) && e.kind === "view" && e.device ? [e.device[0].toUpperCase() + e.device.slice(1), e.visitor || e.email] : null; }));
+    var bv = {}; S.ev.forEach(function (e) { if (e.t >= b.from && e.visitor && isBot(e)) bv[e.visitor] = 1; });
+    $("b-note").textContent = Object.keys(bv).length + " bots and scanners left out of every number" + (S.mine ? "" : ", and your own visits");
+  }
+
+  function renderStatus() {
+    var st = $("status"), bn = $("banner"), fresh = Date.now() - S.lastOk < 15000;
+    if (S.health.db === false) {
+      st.className = "status warn"; st.lastChild.textContent = "Database paused · sign-ups still saved";
+      var reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
+      bn.className = "banner show";
+      bn.innerHTML = "<div><b>The database is paused until " + esc(reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) + " your time</b> (Cloudflare's free daily read limit, shared with your other projects). Nobody is lost: everyone who signs up meanwhile is saved and shows below as <b>Held</b>, and moves into the list on its own when it's back." + (S.stale ? " Numbers below are from " + esc(ago(S.dataAt)) + "." : "") + "</div>";
+    } else {
+      bn.className = "banner";
+      st.className = "status " + (fresh ? "ok" : "");
+      st.lastChild.textContent = fresh ? "Live" : S.lastOk ? "Reconnecting… updated " + ago(S.lastOk) : "Connecting…";
+    }
+    $("foot").textContent = S.lastOk ? "Updated " + new Date(S.lastOk).toLocaleTimeString() + " · new activity appears within a few seconds · times in your time zone" : "";
+  }
+
+  function render() {
+    var b = bounds();
+    renderKpis(b); renderChart(b); renderPeople(b); renderFeed(); renderBreakdowns(b); renderStatus();
+  }
+  function flashRows(sel) { [].forEach.call(document.querySelectorAll(sel), function (el) { el.classList.add("flash"); setTimeout(function () { el.classList.remove("flash"); }, 4000); }); }
+
+  // ---- network ----
+  function load(quiet) {
+    return fetch("/__admin/data" + (quiet ? "" : "?fresh=1"), { cache: "no-store", credentials: "same-origin" }).then(function (r) { if (r.status === 404) { location.href = "/login"; throw 0; } return r.json(); }).then(function (o) {
+      S.owners = {}; (o.owners || []).forEach(function (e) { S.owners[e] = 1; });
+      S.health = o.health || { db: true }; S.pending = o.pending || []; S.stale = !!o.stale; S.dataAt = o.now;
+      S.ev = []; S.seen = {}; S.botVis = {}; S.ownerVis = {};
+      (o.accounts || []).forEach(setAccount);
+      unpack(o).forEach(addEvent);
+      S.since = Math.max(S.since, (o.now || Date.now()) - 20000);
+      S.lastOk = Date.now(); S.firstLoad = false;
+      render();
+    }).catch(function () { renderStatus(); });
+  }
+  var busy = false;
+  function poll() {
+    if (busy || document.hidden) return;
+    busy = true;
+    fetch("/__admin/live?since=" + S.since, { cache: "no-store", credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) {
+      var wasDown = S.health.db === false;
+      S.health = j.health || S.health; S.pending = j.pending || S.pending;
+      if (j.error) return;
+      S.lastOk = Date.now();
+      if (wasDown && S.health.db) { load(false); return; }
+      // A little overlap with the last look: an event written while it ran is still found (ids dedupe).
+      S.since = (j.now || Date.now()) - 15000;
+      var newEv = [], newAcc = [];
+      (j.events || []).forEach(function (e) { if (addEvent(e)) newEv.push(e); });
+      (j.accounts || []).forEach(function (a) { if (setAccount(a)) newAcc.push(a.email); });
+      if (newAcc.length) { S.fresh += newAcc.length; }
+      render();
+      newEv.forEach(function (e) { flashRows('.fi[data-id="' + e.id + '"]'); });
+      newAcc.forEach(function (em) { flashRows('#ppl tr[data-email="' + (window.CSS && CSS.escape ? CSS.escape(em) : em) + '"]'); });
+    }).catch(function () {}).then(function () { busy = false; renderStatus(); document.title = (S.fresh && document.hidden ? "(" + S.fresh + " new) " : "") + "Admin · BLIX"; });
+  }
+
+  // ---- controls ----
+  $("range").addEventListener("click", function (e) { var r = e.target.getAttribute && e.target.getAttribute("data-r"); if (!r) return; S.range = +r; [].forEach.call(this.children, function (c) { c.classList.toggle("on", c === e.target); }); try { localStorage.setItem("blixadm:range", r); } catch (x) {} render(); });
+  [].forEach.call($("range").children, function (c) { c.classList.toggle("on", +c.getAttribute("data-r") === S.range); });
+  $("mine").checked = S.mine;
+  $("mine").addEventListener("change", function () { S.mine = this.checked; try { localStorage.setItem("blixadm:mine", S.mine ? "1" : "0"); } catch (x) {} render(); });
+  $("bots").addEventListener("change", function () { S.bots = this.checked; renderFeed(); });
+  $("q").addEventListener("input", function () { S.q = this.value.trim(); renderPeople(bounds()); });
+  $("chips").addEventListener("click", function (e) { var c = e.target.closest && e.target.closest(".chip"); if (!c) return; S.chip = c.getAttribute("data-c"); renderPeople(bounds()); });
+  document.querySelector("thead").addEventListener("click", function (e) {
+    var th = e.target.closest && e.target.closest("th.s"); if (!th) return;
+    var k = th.getAttribute("data-k"); S.desc = S.sort === k ? !S.desc : k !== "name"; S.sort = k;
+    [].forEach.call(this.querySelectorAll("th.s"), function (h) { h.classList.toggle("on", h === th); h.textContent = h.textContent.replace(/ [↑↓]$/, "") + (h === th ? (S.desc ? " ↓" : " ↑") : ""); });
+    renderPeople(bounds());
+  });
+  $("ppl").addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("button.pill"); if (!b) return;
+    var em = b.getAttribute("data-email"), to = b.getAttribute("data-to");
+    if (to === "blocked" && !confirm("Pause " + em + "? They'll be kept out of the terminal until you let them back in.")) return;
+    b.disabled = true;
+    var body = new URLSearchParams({ email: em, status: to });
+    fetch("/__admin/status", { method: "POST", body: body, credentials: "same-origin", redirect: "manual" }).then(function () { if (S.acc[em]) S.acc[em].status = to; renderPeople(bounds()); }).catch(function () { b.disabled = false; alert("That didn't go through. Try again."); });
+  });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { S.fresh = 0; poll(); } });
+  var rt; window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { renderChart(bounds()); }, 150); });
+  setInterval(function () { [].forEach.call(document.querySelectorAll("time[data-t]"), function (el) { el.textContent = ago(+el.getAttribute("data-t")); }); renderStatus(); }, 5000);
+  setInterval(poll, 4000);
+  setInterval(function () { if (!document.hidden) load(true); }, 5 * 60000);
+  load(false).then(poll);
+})();
+</script>
+</body></html>

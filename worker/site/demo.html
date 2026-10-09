@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Practice · BLIX</title><meta name="robots" content="noindex"><meta name="theme-color" content="#1c1c1c">
+<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+/* The terminal's own theme (web/src/styles/app.css @theme), so the replay reads as part of Blix. */
+:root{
+  --color-paper:oklch(18% 0 0);--color-paper-2:oklch(20% 0 0);--color-paper-3:oklch(24% 0 0);--color-paper-4:oklch(27.5% 0 0);--color-paper-5:oklch(31.5% 0 0);
+  --color-rule:oklch(26% 0 0);--color-rule-2:oklch(32.5% 0 0);--color-ink:oklch(95% 0 0);--color-ink-2:oklch(80% 0 0);--color-muted:oklch(64% 0 0);
+  --color-accent:oklch(92% 0 0);--color-focus:oklch(98% 0 0);--color-up:oklch(74% 0.15 160);--color-down:oklch(67% 0.20 18);--color-warn:oklch(82% 0.14 85);
+  --color-on-fill:oklch(16% 0.02 258);
+  --font-body:"SF Pro Text","SF Pro",-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --font-outlier:"JetBrains Mono","Cascadia Mono",ui-monospace,Consolas,monospace;
+  --r-control:5px;--r-card:7px;--r-chip:3px;
+}
+*{box-sizing:border-box}
+html,body{height:100%;overflow-x:clip}
+body{margin:0;background:var(--color-paper);color:var(--color-ink);font:400 .8125rem/1.4 var(--font-body);font-feature-settings:"tnum","ss01";-webkit-font-smoothing:antialiased}
+::selection{background:color-mix(in oklch,var(--color-accent) 35%,transparent)}
+:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px;border-radius:var(--r-chip)}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+button:disabled{opacity:.45;cursor:default}
+input{background:var(--color-paper-2);border:1px solid var(--color-rule-2);border-radius:var(--r-control);height:2rem;padding:0 .625rem;min-width:0;outline:none;transition:border-color .1s}
+input:focus{border-color:var(--color-muted)}
+input[type=number]{-moz-appearance:textfield}input::-webkit-inner-spin-button{-webkit-appearance:none}
+.num{font-variant-numeric:tabular-nums}
+.up{color:var(--color-up)}.dn{color:var(--color-down)}.mut{color:var(--color-muted)}
+.app{display:flex;flex-direction:column;min-height:100dvh}
+/* top bar: the terminal's TopBar */
+header{display:flex;align-items:center;gap:.75rem;height:3.25rem;flex-shrink:0;padding:0 .75rem;border-bottom:1px solid var(--color-rule);background:color-mix(in oklch,var(--color-paper) 80%,transparent)}
+.mark{display:block;width:84px;flex-shrink:0}.mark img{width:100%;height:auto;mix-blend-mode:screen;display:block}
+.tag{font-size:.6875rem;font-weight:600;color:var(--color-muted);border:1px solid var(--color-rule-2);border-radius:999px;padding:1px 8px}
+.search{display:flex;align-items:center;gap:.5rem;height:2.25rem;flex:1;max-width:30rem;min-width:0;border:1px solid var(--color-rule-2);background:var(--color-paper);border-radius:999px;padding:0 .3125rem 0 .75rem;transition:border-color .1s}
+.search:focus-within{border-color:var(--color-muted)}
+.search svg{width:1rem;height:1rem;color:var(--color-muted);flex-shrink:0}
+.search input{border:0;background:none;height:100%;padding:0;flex:1;font-family:var(--font-outlier);font-size:.75rem}
+.pill{display:inline-flex;align-items:center;gap:.375rem;height:2.25rem;padding:0 1rem;border-radius:999px;font-size:.8125rem;font-weight:600;white-space:nowrap;text-decoration:none;transition:background .1s,border-color .1s,color .1s,transform .1s}
+.pill:active:not(:disabled){transform:scale(.97)}
+.pill.fill{background:var(--color-ink);color:var(--color-paper)}.pill.fill:hover:not(:disabled){background:var(--color-focus)}
+.pill.line{border:1px solid var(--color-rule-2);color:var(--color-ink-2)}.pill.line:hover{border-color:var(--color-muted);color:var(--color-ink)}
+.pill.line.on{border-color:var(--color-ink);color:var(--color-ink)}
+.pill.sm{height:1.75rem;padding:0 .75rem;font-size:.75rem}
+#load{height:1.75rem;padding:0 .875rem}
+main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:.75rem;padding:.75rem;min-height:0}
+.card{background:var(--color-paper-2);border:1px solid var(--color-rule);border-radius:var(--r-card)}
+/* coin head */
+.coin{display:flex;align-items:center;gap:.75rem;padding:.75rem .875rem;border-bottom:1px solid var(--color-rule);min-height:3.75rem}
+.coin .pic{width:2.25rem;height:2.25rem;border-radius:var(--r-control);background:var(--color-paper-4);overflow:hidden;flex-shrink:0}.coin .pic img{width:100%;height:100%;object-fit:cover;display:block}
+.coin b{font-size:1.125rem;font-weight:700}.coin .sub{font-size:.75rem;color:var(--color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.coin .big{margin-left:auto;text-align:right;flex-shrink:0}.coin .big div:first-child{font-size:1.125rem;font-weight:700}
+/* chart: the coin page's Chart.tsx toolbar and box */
+.chartcard{display:flex;flex-direction:column;min-width:0;align-self:start}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;padding:.625rem .625rem 0}
+.seg{display:inline-flex;overflow:hidden;border-radius:var(--r-control);border:1px solid var(--color-rule)}
+.seg button{height:1.5rem;padding:0 .625rem;font-size:.6875rem;font-weight:600;color:var(--color-muted);border-right:1px solid var(--color-rule)}
+.seg button:last-child{border-right:0}.seg button:hover{color:var(--color-ink)}
+.seg button[aria-checked=true]{background:color-mix(in oklch,var(--color-accent) 20%,transparent);color:var(--color-ink)}
+.ohlc{font-size:.6875rem;color:var(--color-muted)}.ohlc b{font-weight:600;color:var(--color-ink);margin-right:.25rem}.ohlc span{color:var(--color-ink-2);margin-right:.375rem}
+.ohlc b.up{color:var(--color-up)}.ohlc b.dn{color:var(--color-down)}
+.box{position:relative;margin:.375rem .625rem 0}
+#chart{height:clamp(340px,58vh,780px);width:100%}
+.banner{position:absolute;left:50%;top:.75rem;transform:translateX(-50%);z-index:5;background:color-mix(in oklch,var(--color-paper-3) 95%,transparent);border:1px solid var(--color-rule-2);border-radius:var(--r-control);padding:.375rem .75rem;font-size:.75rem;font-weight:600;display:none;text-align:center;max-width:calc(100% - 24px);box-shadow:0 8px 24px #0006}
+.empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--color-muted);padding:24px;z-index:4;background:var(--color-paper-2);font-size:.8125rem}
+.empty h2{color:var(--color-ink);margin:0 0 .375rem;font-size:1.125rem;font-weight:700}
+.empty svg{width:2rem;height:2rem;color:var(--color-muted);margin-bottom:.5rem}
+/* replay controls */
+.ctrl{display:flex;gap:.5rem;align-items:center;padding:.625rem;flex-wrap:wrap;border-top:1px solid var(--color-rule);margin-top:.5rem}
+#play{min-width:5.25rem;justify-content:center}
+.scrub{flex:1;display:flex;gap:.625rem;align-items:center;min-width:200px}
+#slider{flex:1;padding:0;height:auto;border:0;background:none;accent-color:var(--color-ink)}
+#when{font-size:.6875rem;color:var(--color-muted);white-space:nowrap}
+aside{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+.sec{padding:.75rem .875rem}
+.sec h3{margin:0 0 .5rem;font-size:.625rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--color-muted)}
+.eq{font-size:1.5rem;font-weight:700;letter-spacing:-.01em}
+.row{display:flex;justify-content:space-between;gap:.5rem;padding:.1875rem 0;font-variant-numeric:tabular-nums}.row>span:first-child{color:var(--color-muted)}
+.amt{display:flex;gap:.375rem}.amt input{flex:1;width:100%;font-variant-numeric:tabular-nums}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:.375rem;margin-top:.375rem}
+.chip{height:1.75rem;border-radius:var(--r-control);border:1px solid var(--color-rule-2);font-size:.75rem;font-weight:600;color:var(--color-ink-2);transition:border-color .1s,color .1s,background .1s}
+.chip:hover{border-color:var(--color-muted);color:var(--color-ink)}
+.chip.s{border-color:color-mix(in oklch,var(--color-down) 35%,transparent);color:var(--color-down)}.chip.s:hover{background:color-mix(in oklch,var(--color-down) 12%,transparent)}
+.buy{height:2rem;padding:0 1.125rem;border-radius:var(--r-control);background:var(--color-up);color:var(--color-on-fill);font-weight:700;transition:transform .1s,filter .1s}
+.buy:hover{filter:brightness(1.08)}.buy:active{transform:scale(.97)}
+.set{display:flex;gap:.5rem;align-items:center;font-size:.6875rem;color:var(--color-muted);margin-top:.625rem}.set input{width:4.5rem;height:1.625rem;font-size:.75rem}
+table{width:100%;border-collapse:collapse;font-size:.75rem;font-variant-numeric:tabular-nums}
+td,th{padding:.3125rem .125rem;text-align:right;border-bottom:1px solid var(--color-rule)}th{color:var(--color-muted);font-weight:500;font-size:.6875rem}
+td:first-child,th:first-child{text-align:left}tr:last-child td{border-bottom:0}
+.keys{color:var(--color-muted);font-size:.6875rem;line-height:1.9;padding:0 .25rem}
+kbd{border:1px solid var(--color-rule-2);border-radius:var(--r-chip);padding:0 .3125rem;font-family:inherit;font-size:.625rem;color:var(--color-ink-2)}
+.toast{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);background:var(--color-paper-3);border:1px solid var(--color-rule-2);border-radius:var(--r-card);padding:.625rem 1rem;z-index:20;display:none;max-width:calc(100% - 32px);box-shadow:0 12px 32px #0008}
+@media (max-width:900px){main{grid-template-columns:1fr;padding:.5rem}#chart{height:56vh}.mark{width:64px}.tag,.hide-sm{display:none}header{gap:.5rem;padding:0 .5rem}}
+.trade h3{display:flex;align-items:center;justify-content:space-between}
+.venue{font-size:.625rem;font-weight:600;text-transform:none;letter-spacing:0;color:var(--color-ink-2);border:1px solid var(--color-rule-2);border-radius:999px;padding:0 7px}
+.side{display:grid;grid-template-columns:1fr 1fr;gap:.25rem;padding:.1875rem;border-radius:var(--r-control);background:var(--color-paper);border:1px solid var(--color-rule);margin-bottom:.5rem}
+.side button{height:1.75rem;border-radius:calc(var(--r-control) - 2px);font-weight:700;color:var(--color-muted)}
+#tbuy[aria-selected=true]{background:color-mix(in oklch,var(--color-up) 22%,transparent);color:var(--color-up)}
+#tsell[aria-selected=true]{background:color-mix(in oklch,var(--color-down) 22%,transparent);color:var(--color-down)}
+.chips.five{grid-template-columns:repeat(5,1fr);margin:0 0 .375rem}
+.chip.b{border-color:color-mix(in oklch,var(--color-up) 35%,transparent);color:var(--color-up)}.chip.b:hover{background:color-mix(in oklch,var(--color-up) 14%,transparent)}
+.amt .sol{display:grid;place-items:center;width:1.5rem;color:var(--color-muted);font-weight:700}
+.quote{margin-top:.5rem;padding:.5rem .625rem;border-radius:var(--r-control);background:var(--color-paper);border:1px solid var(--color-rule);font-size:.6875rem;color:var(--color-muted);line-height:1.6}
+.quote b{color:var(--color-ink);font-weight:600}.quote .warn{color:var(--color-warn)}
+details.set{display:block;margin-top:.625rem}details.set summary{cursor:pointer;font-size:.6875rem;color:var(--color-muted)}
+details.set label{display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-top:.375rem;font-size:.6875rem;color:var(--color-muted)}
+details.set .in{display:flex;align-items:center;gap:.25rem}details.set input{width:4.5rem;height:1.625rem;font-size:.6875rem;text-align:right}
+.small{font-size:.6875rem;margin:.5rem 0 0;line-height:1.5}
+</style></head>
+<body><div class="app">
+<header>
+  <a href="/app" class="mark" aria-label="Blix terminal"><img src="/_pub/home/blix-logo.webp" alt="Blix" draggable="false"></a>
+  <span class="tag">Practice</span>
+  <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="ca" placeholder="Paste a token CA or pool address" spellcheck="false" autocomplete="off">
+    <button id="load" class="pill fill">Load</button></label>
+  <a href="/app" class="pill line sm hide-sm" style="margin-left:auto">Terminal</a>
+  <form method="post" action="/demo" style="margin:0" id="lock"><input type="hidden" name="logout" value="1"><button class="pill line sm" title="Lock this page again">Lock</button></form>
+</header>
+<main>
+  <section class="card chartcard">
+    <div class="coin">
+      <div class="pic" id="pic"></div>
+      <div style="min-width:0"><b id="sym">No coin</b><div class="sub" id="sub">Paste a CA above to replay its chart</div></div>
+      <div class="big num"><div id="now">–</div><div class="sub" id="chg">&nbsp;</div></div>
+    </div>
+    <div class="bar">
+      <div class="seg" role="radiogroup" aria-label="Candle size" id="tfs"></div>
+      <div class="seg" role="radiogroup" aria-label="Show" id="modes"><button role="radio" data-m="mc" aria-checked="true">MC</button><button role="radio" data-m="price" aria-checked="false">Price</button></div>
+      <span class="ohlc num" id="ohlc"></span>
+    </div>
+    <div class="box"><div id="chart"></div><div class="banner" id="banner"></div>
+      <div class="empty" id="empty"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 12a8.25 8.25 0 1 0 2.4-5.83"/><path d="M3.75 3.75v3.5h3.5"/><path d="M10.25 9.25v5.5l4.5-2.75z"/></svg><h2>Practise a trade on a real chart</h2>Paste a coin's CA and press Load, click any candle to start there,<br>then play it forward and buy and sell as if it were live. Nothing here is real money.</div></div>
+    </div>
+    <div class="ctrl">
+      <button id="pick" class="pill line sm" title="Show the whole chart and click a candle to start from there (P)">Pick start</button>
+      <button id="restart" class="pill line sm" title="Back to where this run started, account reset">Restart</button>
+      <button id="play" class="pill fill sm" title="Space">Play</button>
+      <button id="step" class="pill line sm" title="Next candle (→)">Step</button>
+      <div class="seg" id="speeds" role="radiogroup" aria-label="Speed"></div>
+      <div class="scrub"><input type="range" id="slider" min="0" max="0" value="0" aria-label="Jump"><span id="when" class="num">–</span></div>
+    </div>
+  </section>
+  <aside>
+    <div class="card sec">
+      <h3>Account</h3>
+      <div class="eq num" id="equity">–</div>
+      <div class="row"><span>Worth in USD</span><span id="equsd" class="num">–</span></div>
+      <div class="row"><span>Return</span><span id="ret">0.00%</span></div>
+      <div class="row"><span>SOL free</span><span id="cash">–</span></div>
+      <div class="row"><span>Realized P&amp;L</span><span id="real">–</span></div>
+      <div class="row"><span>Fees paid</span><span id="fees">–</span></div>
+    </div>
+    <div class="card sec">
+      <h3>Position</h3>
+      <div class="row"><span>Holding</span><span id="hold">–</span></div>
+      <div class="row"><span>Tokens</span><span id="toks">–</span></div>
+      <div class="row"><span>Avg buy</span><span id="entry">–</span></div>
+      <div class="row"><span>Sell all now</span><span id="exit">–</span></div>
+      <div class="row"><span>Unrealized</span><span id="unreal">–</span></div>
+    </div>
+    <div class="card sec trade">
+      <h3>Instant trade <span class="venue" id="venue"></span></h3>
+      <div class="side" role="tablist"><button role="tab" id="tbuy" aria-selected="true">Buy</button><button role="tab" id="tsell" aria-selected="false">Sell</button></div>
+      <div id="buybox">
+        <div class="chips five" id="quick"></div>
+        <div class="amt"><span class="sol">◎</span><input id="amt" type="text" inputmode="decimal" value="0.5" aria-label="Buy size in SOL"><button class="buy" id="buy">Buy</button></div>
+      </div>
+      <div id="sellbox" hidden>
+        <div class="chips" id="sells"><button class="chip s" data-s=".1">10%</button><button class="chip s" data-s=".25">25%</button><button class="chip s" data-s=".5">50%</button><button class="chip s" data-s="1">100%</button></div>
+      </div>
+      <div class="quote num" id="quote"></div>
+      <details class="set"><summary>Fees and settings</summary>
+        <label><span>Start balance</span><span class="in"><input id="bank" type="text" inputmode="decimal" value="5"> SOL</span></label>
+        <label><span>Priority fee</span><span class="in"><input id="prio" type="text" inputmode="decimal" value="0.001"> SOL</span></label>
+        <label><span>Slippage</span><span class="in"><input id="slip" type="text" inputmode="decimal" value="10"> %</span></label>
+        <label><span>Swap fee</span><span class="in"><input id="fee" type="text" inputmode="decimal" value=""> %</span></label>
+        <p class="mut small" id="model">Fills use the pool's own maths at that moment: pump.fun's bonding curve, or the pool's liquidity after migration. Bigger buys move the price more, like a real swap.</p>
+      </details>
+    </div>
+    <div class="card sec"><h3>Trades</h3><table><thead><tr><th>When</th><th>Side</th><th id="pxh">MC</th><th>SOL</th><th>P&amp;L</th></tr></thead><tbody id="trades"><tr><td colspan="5" style="text-align:center" class="mut">No trades yet</td></tr></tbody></table></div>
+    <div class="keys"><kbd>Space</kbd> play · <kbd>→</kbd> next candle · <kbd>1</kbd>–<kbd>5</kbd> buy preset · <kbd>B</kbd> buy · <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> sell 10/25/50/100% · <kbd>P</kbd> pick start</div>
+  </aside>
+</main></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(() => {
+const $ = (s) => document.querySelector(s);
+const SPEEDS = [0.5, 1, 2, 5, 10, 25], TICKS = 4;
+const TFS = [["1s", 1], ["15s", 15], ["1m", 60], ["5m", 300], ["15m", 900], ["1h", 3600], ["4h", 14400], ["1d", 86400]];
+let chart, cs, vs, mk, entryLine = null, data = [], meta = null, idx = 0, tick = TICKS - 1, startIdx = 0, tfSel = "1s", hover = null;
+let playing = false, timer = null, speed = 1, picking = false, mode = "mc", acct, clock = 0, lastTick = 0, cache = null;
+// Blix's 1s/15s charts replay every trade at the moment it happened (clock in ms); GeckoTerminal's candles play
+// a few steps a candle.
+const byTrade = () => !!(meta && meta.blix);
+const GAP_WAIT = 2000;   // a quiet stretch with no trades never keeps you waiting longer than this (wall ms)
+const tfSec = () => (TFS.find(([k]) => k === tfSel) || TFS[1])[1];
+
+const usd = (v, d = 2) => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const signed = (v) => (v > 0 ? "+" : "") + usd(v);
+const pct = (v) => (v > 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
+const cls = (el, v) => { el.classList.toggle("up", v > 0.000001); el.classList.toggle("dn", v < -0.000001); };
+// The chart's labels, the same steps as the coin page (Chart.tsx usdP, lib/coin.ts usdK).
+const usdP = (n) => {
+  if (n == null || !isFinite(n)) return "—";
+  if (n < 0) return "";
+  const t = (s) => s.replace(/(\.\d*?)0+(?=[KMB]?$)/, "$1").replace(/\.(?=[KMB]?$)/, "");
+  return n >= 1e9 ? `$${t((n / 1e9).toFixed(3) + "B")}` : n >= 1e6 ? `$${t((n / 1e6).toFixed(3) + "M")}` : n >= 1e5 ? `$${t((n / 1e3).toFixed(1) + "K")}` : n >= 1e4 ? `$${t((n / 1e3).toFixed(2) + "K")}`
+    : n >= 1e3 ? `$${t((n / 1e3).toFixed(3) + "K")}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toPrecision(3)}`;
+};
+const usdK = (n) => { const a = Math.abs(n); return a >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : a >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : a >= 1e3 ? `$${(n / 1e3).toFixed(a >= 1e5 ? 0 : 1)}K` : `$${a >= 10 ? Math.round(n) : n.toFixed(2)}`; };
+// A coin's price: 0.000003843 → $0.0₅3843 (the small number counts the zeros after the point).
+function price(v) {
+  if (!isFinite(v) || v <= 0) return v < 0 ? "" : "$0";
+  if (v >= 1) return "$" + v.toFixed(4); if (v >= 0.001) return "$" + v.toFixed(6);
+  const z = Math.floor(-Math.log10(v)), digits = Math.round(v * 10 ** (z + 4)).toString().slice(0, 4);
+  return "$0.0" + String(z).split("").map((d) => "₀₁₂₃₄₅₆₇₈₉"[d]).join("") + digits;
+}
+const useMc = () => mode === "mc" && meta && meta.supply > 0;
+const sc = (v) => (useMc() ? v * meta.supply : v);
+const fmtScaled = (v) => (useMc() ? usdP(v) : price(v));
+const fmt = (v) => fmtScaled(sc(v));
+const when = (t) => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+function toast(msg, ms = 3200) { const t = $("#toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = "none"), ms); }
+
+// --- chart: the coin page's chart (web/src/pages/coin/Chart.tsx), the same options and colours.
+// Lightweight Charts reads hex/rgb only; the theme is OKLCH, so each token is resolved through a canvas.
+function color(name, fallback) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    if (!v) return fallback;
+    const c = document.createElement("canvas"); c.width = c.height = 1;
+    const x = c.getContext("2d"); x.fillStyle = fallback; x.fillStyle = v; x.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = x.getImageData(0, 0, 1, 1).data;
+    return a ? `rgb(${r},${g},${b})` : fallback;
+  } catch { return fallback; }
+}
+const alpha = (rgb, a) => rgb.replace(/^rgb\((.+)\)$/, `rgba($1,${a})`);
+const C = {};
+function makeChart() {
+  const LC = LightweightCharts;
+  Object.assign(C, { ink: color("--color-ink", "#f2f4f7"), muted: color("--color-muted", "#8b93a1"), rule: color("--color-rule", "#232733"), paper4: color("--color-paper-4", "#1c1f26"), up: color("--color-up", "#2ebd85"), down: color("--color-down", "#f6465d") });
+  chart = LC.createChart($("#chart"), {
+    autoSize: true,
+    layout: { background: { type: LC.ColorType.Solid, color: "transparent" }, textColor: C.muted, fontFamily: "system-ui, 'Segoe UI Variable Text', 'Segoe UI', sans-serif", fontSize: 11, attributionLogo: false },
+    grid: { vertLines: { visible: false }, horzLines: { color: alpha(C.rule, 0.55) } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.18, bottom: 0.22 }, entireTextOnly: true },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: true, rightOffset: 6, barSpacing: 9, minBarSpacing: 1.5, shiftVisibleRangeOnNewBar: true,
+      tickMarkFormatter: (t, kind) => kind <= 2
+        ? new Date(t * 1000).toLocaleDateString([], { ...(kind === 0 ? { year: "numeric" } : { month: "short", day: "numeric" }), ...(tfSec() >= 86400 ? { timeZone: "UTC" } : {}) })
+        : new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) },
+    crosshair: { mode: 0, vertLine: { color: alpha(C.ink, 0.25), width: 1, style: 3, labelBackgroundColor: C.paper4 }, horzLine: { color: alpha(C.ink, 0.25), width: 1, style: 3, labelBackgroundColor: C.paper4 } },
+    localization: { priceFormatter: fmtScaled, timeFormatter: (t) => { const tf = tfSec(), d = new Date(t * 1000); return tf >= 86400 ? d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }) : tf >= 900 ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } },
+  });
+  cs = chart.addSeries(LC.CandlestickSeries, {
+    upColor: C.up, downColor: C.down, borderVisible: false, wickUpColor: C.up, wickDownColor: C.down,
+    priceFormat: { type: "custom", formatter: fmtScaled, minMove: 1e-12 },
+    priceLineColor: alpha(C.ink, 0.5), priceLineStyle: 2, priceLineWidth: 1,
+    // A coin that moved 1% should look like it moved 1%, not fill the whole height (Chart.tsx MIN_RANGE); your
+    // average buy stays in view while it is near the candles.
+    autoscaleInfoProvider: (original) => {
+      const o = original();
+      if (!o || !o.priceRange) return o;
+      let { minValue: lo, maxValue: hi } = o.priceRange;
+      if (acct && acct.tokens > 0) { const p = sc((acct.cost * solUsd()) / acct.tokens); if (p > lo / 2 && p < hi * 2) { lo = Math.min(lo, p); hi = Math.max(hi, p); } }
+      const mid = (lo + hi) / 2, need = mid * 0.03;
+      return { ...o, priceRange: hi - lo >= need ? { minValue: lo, maxValue: hi } : { minValue: Math.max(0, mid - need / 2), maxValue: mid + need / 2 } };
+    },
+  });
+  vs = chart.addSeries(LC.HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
+  mk = LC.createSeriesMarkers(cs, []);
+  chart.subscribeClick((p) => {
+    if (!picking || p.time == null) return;
+    const i = data.findIndex((c) => c.t === p.time);
+    if (i >= 0) jumpTo(i, true);
+  });
+  chart.subscribeCrosshairMove((p) => {
+    hover = p.time != null ? data.findIndex((c) => c.t === p.time) : null;
+    if (hover != null && (hover < 0 || (!picking && hover > idx))) hover = null;
+    readout();
+  });
+}
+// A candle's moves in order: Blix's candles carry the real ones (the open, then each trade's price), others a made-up path.
+const pathOf = (c) => c.path || (c.c >= c.o ? [c.o, c.l, c.h, c.c] : [c.o, c.h, c.l, c.c]);
+const end = (i) => pathOf(data[i]).length - 1;
+const volAt = (c, k) => (c.vs ? c.vs[k] : c.v * (k + 1) / TICKS);
+function raw(i, k = end(i)) { const c = data[i], p = pathOf(c).slice(0, k + 1); let h = -Infinity, l = Infinity; for (const x of p) { if (x > h) h = x; if (x < l) l = x; } return { o: c.o, h, l, c: p[k], v: volAt(c, k) }; }
+function bar(i, k = end(i)) { const r = raw(i, k); return { time: data[i].t, open: sc(r.o), high: sc(r.h), low: sc(r.l), close: sc(r.c) }; }
+// Faint volume bars along the bottom, capped at 4x the 90th percentile so one huge bar does not flatten the rest.
+function vol(i, k = end(i)) { const c = data[i], r = raw(i, k); return { time: c.t, value: Math.min(r.v, meta.volCap), color: alpha(r.c >= r.o ? C.up : C.down, 0.32) }; }
+const cur = () => pathOf(data[idx])[tick];
+// The coin page's readout: MC (or price) with the candle's change, then O H L and volume.
+function readout() {
+  if (!data.length) { $("#ohlc").textContent = ""; return; }
+  const r = hover != null && hover !== idx ? raw(hover) : raw(idx, tick), chg = r.o ? (r.c / r.o - 1) * 100 : 0;
+  $("#ohlc").innerHTML = `${useMc() ? "MC" : "Price"} <b>${fmt(r.c)}</b><b class="${r.c >= r.o ? "up" : "dn"}" style="margin-right:.5rem">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>O <span>${fmt(r.o)}</span>H <span>${fmt(r.h)}</span>L <span>${fmt(r.l)}</span>Vol <span>${usdK(r.v)}</span>`;
+}
+function redraw(all = false) {
+  const n = all ? data.length : idx + 1, bars = [], vols = [];
+  for (let i = 0; i < n; i++) { const k = !all && i === idx ? tick : end(i); bars.push(bar(i, k)); vols.push(vol(i, k)); }
+  cs.setData(bars); vs.setData(vols); marks(); entry(); readout();
+}
+// Your buys and sells, marked the way the coin page marks paper trades.
+function marks() {
+  if (!acct) return mk.setMarkers([]);
+  const own = new Map();
+  for (const t of acct.trades) { const k = `${t.i}|${t.side}`, g = own.get(k) || { i: t.i, buy: t.side === "buy", n: 0 }; g.n++; own.set(k, g); }
+  mk.setMarkers([...own.values()].sort((a, b) => a.i - b.i).map((g) => ({ time: data[g.i].t, position: g.buy ? "belowBar" : "aboveBar", color: g.buy ? C.up : C.down, shape: g.buy ? "arrowUp" : "arrowDown", size: 1, text: `${g.buy ? "B" : "S"}${g.n > 1 ? ` ×${g.n}` : ""}` })));
+}
+function entry() {
+  if (entryLine) { cs.removePriceLine(entryLine); entryLine = null; }
+  if (acct && acct.tokens > 0) entryLine = cs.createPriceLine({ price: sc((acct.cost * solUsd()) / acct.tokens), color: alpha(C.up, 0.8), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "Avg buy" });
+}
+
+// --- replay
+const atEnd = () => idx >= data.length - 1 && tick >= end(idx);
+function setPlaying(on) {
+  playing = on && !picking && data.length > 0 && !atEnd();
+  clearInterval(timer);
+  if (playing) { lastTick = performance.now(); timer = byTrade() ? setInterval(run, 50) : setInterval(advance, 1000 / (speed * TICKS)); }
+  $("#play").textContent = playing ? "Pause" : "Play";
+}
+// One move further: the next trade (Blix) or the next step of the candle; a new candle opens on its first trade.
+function step() {
+  if (tick < end(idx)) tick++;
+  else if (idx < data.length - 1) { idx++; tick = byTrade() ? 1 : 0; }
+  else return false;
+  if (byTrade()) clock = data[idx].tt[tick];
+  cs.update(bar(idx, tick)); vs.update(vol(idx, tick));
+  if (acct.tokens > 0 && tick <= 1) entry();
+  return true;
+}
+function advance() {
+  if (!step()) { setPlaying(false); finished(); return; }
+  ui();
+}
+// When the next trade happened (ms), or Infinity at the end.
+const nextAt = () => (tick < end(idx) ? data[idx].tt[tick + 1] : idx < data.length - 1 ? data[idx + 1].tt[1] : Infinity);
+// The trade replay: the clock runs at the chosen speed and every trade it passes lands on the chart.
+function run() {
+  const now = performance.now(), dt = Math.min(250, now - lastTick);
+  lastTick = now;
+  clock += dt * speed;
+  let next = nextAt(), moved = false;
+  if (next === Infinity) { setPlaying(false); finished(); return; }
+  if (next - clock > GAP_WAIT * speed) clock = next - GAP_WAIT * speed;
+  while (next <= clock) { step(); moved = true; next = nextAt(); }
+  if (moved) ui();
+}
+// Finishes the candle that is forming, or plays the whole next one.
+function stepCandle() {
+  if (!data.length || picking) return;
+  if (atEnd()) return finished();
+  if (tick === end(idx)) step();
+  while (tick < end(idx)) step();
+  ui();
+}
+function finished() {
+  const eq = equity();
+  toast(`End of chart. You finished at ${sol(eq)} (${pct(eq / acct.start - 1)}). Pick a new start to go again.`, 6000);
+}
+function newAccount() {
+  const start = Math.max(10, Number($("#bank").value) || 1000);
+  acct = { start, cash: start, tokens: 0, cost: 0, realized: 0, trades: [] };
+}
+function jumpTo(i, fresh) {
+  if (!data.length) return;
+  if (acct && acct.trades.length && fresh && !confirm("Start from here? This run's trades will be cleared.")) return;
+  setPlaying(false); setPicking(false);
+  idx = Math.max(0, Math.min(data.length - 1, i)); tick = end(idx); startIdx = idx; newAccount();
+  if (byTrade()) clock = data[idx].tt[tick];
+  redraw();
+  chart.timeScale().setVisibleLogicalRange({ from: idx - 110, to: idx + 14 });
+  ui(); trades();
+}
+function setPicking(on) {
+  picking = on && data.length > 0;
+  $("#pick").classList.toggle("on", picking);
+  const b = $("#banner"); b.style.display = picking ? "block" : "none";
+  b.textContent = "Click a candle to start the replay there (everything after it is hidden again)";
+  if (picking) { setPlaying(false); redraw(true); chart.timeScale().fitContent(); }
+}
+
+// --- trading: a SOL account filled the way the coin's pool would fill it at that moment.
+// pump.fun's bonding curve: 30 virtual SOL against 1.073B virtual tokens (constant product, K below); the curve's
+// reserves follow from the price alone, so a buy or sell is exact for any point of the replay. After migration the
+// pool's liquidity now (GeckoTerminal) is carried back along its constant product to the replayed price. Fees: the
+// pool's swap fee (pump.fun curve 1.25%, as Blix's own quotes use), plus the network fee and your priority fee in SOL.
+const CURVE_K = 30 * 1.073e9, BASE_FEE = 0.000005, SUPPLY_CURVE = 1e9;
+const DEX_FEE = { "pump-fun": 1.25, pumpswap: 0.3, "pump-swap": 0.3, raydium: 0.25, "raydium-clmm": 0.25, "raydium-cp": 0.25, meteora: 0.25, "meteora-dlmm": 0.25, orca: 0.3 };
+const numIn = (id, def, lo, hi) => { const v = Number(String($(id).value).replace(",", ".")); return isFinite(v) && v >= lo && v <= hi ? v : def; };
+const venueOf = () => (meta && meta.pool && meta.pool.dex) || "";
+const onCurve = () => venueOf() === "pump-fun";
+const swapFee = () => { const typed = String($("#fee").value).trim(); return (typed ? numIn("#fee", 0, 0, 20) : (DEX_FEE[venueOf()] ?? 0.3)) / 100; };
+const txFee = () => BASE_FEE + numIn("#prio", 0.001, 0, 1);
+const solUsd = () => (meta && meta.solUsd) || 150;
+const pSol = (p) => p / solUsd();                       // a token's price in SOL
+// The pool's two sides (SOL, tokens) when the price is p (USD per token).
+function reserves(p) {
+  const ps = pSol(p);
+  if (onCurve()) { const vSol = Math.sqrt(CURVE_K * ps); return { x: vSol, y: vSol / ps }; }
+  const pool = meta.pool;
+  if (pool.reserveUsd > 0 && pool.priceNow > 0) { const x = (pool.reserveUsd / 2 / solUsd()) * Math.sqrt(p / pool.priceNow); return { x, y: x / ps }; }
+  return null;   // unknown liquidity: fills at the candle's price
+}
+// What a buy of `sol` (or a sell of `qty` tokens) gets at price p: out, the average price, the move against you.
+function quote(side, amount, p = cur()) {
+  const f = swapFee(), r = reserves(p), ps = pSol(p);
+  if (side === "buy") {
+    const net = amount * (1 - f);
+    const out = r ? r.y - (r.x * r.y) / (r.x + net) : net / ps;
+    return { out, avg: amount / out, impact: out > 0 ? (amount / out) / ps - 1 : 0, fee: amount * f };
+  }
+  const gross = r ? r.x - (r.x * r.y) / (r.y + amount) : amount * ps, out = gross * (1 - f);
+  return { out, avg: out / amount, impact: amount > 0 ? 1 - (gross / amount) / ps : 0, fee: gross * f };
+}
+const sol = (v, d = 3) => (v < 0 ? "-" : "") + "◎" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const ssol = (v) => (v > 0 ? "+" : "") + sol(v);
+const toks = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n.toFixed(0);
+const sellAll = () => (acct.tokens > 0 ? quote("sell", acct.tokens).out - txFee() : 0);
+const equity = () => acct.cash + (acct.tokens > 0 ? Math.max(0, sellAll()) : 0);
+function newAccount() {
+  const start = numIn("#bank", 5, 0.05, 10000);
+  acct = { start, cash: start, tokens: 0, cost: 0, realized: 0, fees: 0, trades: [] };
+}
+function buy(amount) {
+  if (!data.length) return toast("Load a coin first");
+  if (picking) return toast("Click a candle to start there, or press Play to start from the beginning");
+  const need = amount + txFee();
+  if (!(amount >= 0.001)) return toast("Enter a SOL amount");
+  if (need > acct.cash + 1e-12) return toast(acct.cash <= txFee() ? "No SOL left. Sell first." : `Not enough SOL: ${sol(amount)} plus ${sol(txFee(), 4)} network fees`);
+  const q = quote("buy", amount), slip = numIn("#slip", 10, 0.1, 100) / 100;
+  if (q.impact > slip) return toast(`Slippage limit: this buy moves the price ${(q.impact * 100).toFixed(1)}%, over your ${(slip * 100).toFixed(1)}%`, 4500);
+  acct.cash -= need; acct.tokens += q.out; acct.cost += need; acct.fees += q.fee + txFee();
+  acct.trades.push({ i: idx, side: "buy", p: cur(), sol: amount, qty: q.out, pnl: null });
+  marks(); entry(); ui(); trades();
+}
+function sell(part) {
+  if (!data.length) return toast("Load a coin first");
+  if (picking) return toast("Click a candle to start there, or press Play to start from the beginning");
+  if (!(acct.tokens > 0)) return toast("Nothing to sell");
+  const qty = part >= 1 ? acct.tokens : acct.tokens * part, q = quote("sell", qty), slip = numIn("#slip", 10, 0.1, 100) / 100;
+  if (q.impact > slip) return toast(`Slippage limit: this sell moves the price ${(q.impact * 100).toFixed(1)}%, over your ${(slip * 100).toFixed(1)}%`, 4500);
+  const got = q.out - txFee(), basis = part >= 1 ? acct.cost : acct.cost * part;
+  acct.cash += got; acct.tokens -= qty; acct.cost -= basis; acct.realized += got - basis; acct.fees += q.fee + txFee();
+  if (part >= 1 || acct.tokens < 1e-6) { acct.tokens = 0; acct.cost = 0; }
+  acct.trades.push({ i: idx, side: "sell", p: cur(), sol: got, qty, pnl: got - basis });
+  marks(); entry(); ui(); trades();
+}
+let side = "buy";
+function setSide(sd) {
+  side = sd; $("#tbuy").setAttribute("aria-selected", String(sd === "buy")); $("#tsell").setAttribute("aria-selected", String(sd === "sell"));
+  $("#buybox").hidden = sd !== "buy"; $("#sellbox").hidden = sd !== "sell"; showQuote();
+}
+// What the next trade would get, right now: refreshed every tick while the replay plays.
+function showQuote() {
+  const box = $("#quote");
+  if (!data.length || !acct) { box.innerHTML = "Load a coin to see live quotes."; return; }
+  const v = venueOf(), slip = numIn("#slip", 10, 0.1, 100) / 100;
+  $("#venue").textContent = onCurve() ? "pump.fun curve" : v ? v.replace(/-/g, " ") : "price only";
+  const flag = (q) => (q.impact > slip ? ` <span class="warn">over your ${(slip * 100).toFixed(0)}% slippage</span>` : q.impact > 0.05 ? ' <span class="warn">big move</span>' : "");
+  if (side === "buy") {
+    const amt = numIn("#amt", 0, 0, 1e6);
+    if (!(amt > 0)) { box.innerHTML = "Type a SOL amount."; return; }
+    const q = quote("buy", amt);
+    box.innerHTML = `You get <b>${toks(q.out)}</b> ${$("#sym").textContent} · ≈ ${usd(q.out * cur())}<br>Price impact <b>${(q.impact * 100).toFixed(2)}%</b>${flag(q)}<br>Fees <b>${sol(q.fee + txFee(), 4)}</b> (swap ${(swapFee() * 100).toFixed(2)}% + network) · costs <b>${sol(amt + txFee(), 4)}</b>`;
+  } else {
+    if (!(acct.tokens > 0)) { box.innerHTML = "No position to sell."; return; }
+    const q = quote("sell", acct.tokens);
+    box.innerHTML = `Selling all gets <b>${sol(q.out - txFee(), 4)}</b> · ≈ ${usd((q.out - txFee()) * solUsd())}<br>Price impact <b>${(q.impact * 100).toFixed(2)}%</b>${flag(q)}<br>Fees <b>${sol(q.fee + txFee(), 4)}</b>`;
+  }
+}
+function ui() {
+  if (!data.length) return;
+  const p = cur(), eq = equity(), un = acct.tokens > 0 ? sellAll() - acct.cost : 0;
+  $("#equity").textContent = sol(eq);
+  $("#equsd").textContent = usd(eq * solUsd());
+  $("#ret").textContent = pct(eq / acct.start - 1); cls($("#ret"), eq - acct.start);
+  $("#cash").textContent = sol(acct.cash, 4);
+  $("#real").textContent = ssol(acct.realized); cls($("#real"), acct.realized);
+  $("#fees").textContent = sol(acct.fees, 4);
+  $("#now").textContent = fmt(p);
+  const ch = p / pathOf(data[startIdx])[end(startIdx)] - 1;
+  $("#chg").textContent = `${pct(ch)} since your start`; cls($("#chg"), ch);
+  if (hover == null) readout();
+  $("#hold").textContent = acct.tokens > 0 ? `${sol(acct.tokens * pSol(p))} · ${usd(acct.tokens * p)}` : "–";
+  $("#toks").textContent = acct.tokens > 0 ? toks(acct.tokens) : "–";
+  $("#entry").textContent = acct.tokens > 0 ? fmt((acct.cost * solUsd()) / acct.tokens) : "–";
+  $("#exit").textContent = acct.tokens > 0 ? sol(sellAll(), 4) : "–";
+  $("#unreal").textContent = acct.tokens > 0 ? `${ssol(un)} (${pct(un / acct.cost)})` : "–"; cls($("#unreal"), acct.tokens > 0 ? un : 0);
+  $("#slider").value = idx;
+  $("#when").textContent = `${when(data[idx].t)} · ${idx + 1}/${data.length}`;
+  showQuote();
+}
+function trades() {
+  const tb = $("#trades");
+  $("#pxh").textContent = useMc() ? "MC" : "Price";
+  if (!acct.trades.length) { tb.innerHTML = '<tr><td colspan="5" style="text-align:center" class="mut">No trades yet</td></tr>'; return; }
+  tb.innerHTML = "";
+  for (const t of acct.trades.slice().reverse()) {
+    const tr = document.createElement("tr");
+    const cells = [new Date(data[t.i].t * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: tfSec() < 60 ? "2-digit" : undefined }), t.side === "buy" ? "Buy" : "Sell", fmt(t.p), sol(t.sol), t.pnl == null ? "" : ssol(t.pnl)];
+    cells.forEach((v, j) => { const td = document.createElement("td"); td.textContent = v; if (j === 1) td.className = t.side === "buy" ? "up" : "dn"; if (j === 4 && t.pnl != null) cls(td, t.pnl); tr.appendChild(td); });
+    tb.appendChild(tr);
+  }
+}
+
+// --- loading: candles from GeckoTerminal (free, CORS open; it turns Cloudflare's addresses away, so the browser asks
+// itself). The coin's top pool, priced in USD for the coin, oldest first. An address that is not a token is tried as a pool.
+const GT = "https://api.geckoterminal.com/api/v2/networks/solana";
+const TF = { "1m": ["minute", 1, 5], "5m": ["minute", 5, 3], "15m": ["minute", 15, 2], "1h": ["hour", 1, 2], "4h": ["hour", 4, 1], "1d": ["day", 1, 1] };
+// A busy answer (429) comes without CORS headers and shows up as a failed fetch: one more try after a pause.
+async function gt(path, retry = true) {
+  let r;
+  try { r = await fetch(GT + path); } catch (e) { r = null; }
+  if (r && r.ok) return r.json();
+  if (retry && (!r || r.status === 429 || r.status >= 500)) { await new Promise((ok) => setTimeout(ok, 2500)); return gt(path, false); }
+  if (!r) throw new Error("Chart source is busy. Try again in a minute.");
+  throw Object.assign(new Error(r.status === 429 ? "Chart source is busy. Try again in a minute." : r.status === 404 ? "No chart found for that address" : `Chart source answered ${r.status}`), { status: r.status });
+}
+const num = (v) => (v == null || v === "" ? NaN : Number(v));
+const img = (u) => (/^https:\/\//.test(u || "") ? u : null);
+async function candles(ca, tf) {
+  let token, pool, side = ca;
+  try {
+    const j = await gt(`/tokens/${ca}?include=top_pools`), a = j.data.attributes, top = (j.included || []).find((x) => x.type === "pool");
+    if (!top) throw new Error("This coin has no trading pool yet");
+    token = { name: a.name, symbol: a.symbol, image: img(a.image_url), supply: num(a.normalized_total_supply) || num(a.fdv_usd) / num(a.price_usd) };
+    pool = { address: top.attributes.address, name: top.attributes.name, dex: (top.relationships && top.relationships.dex && top.relationships.dex.data && top.relationships.dex.data.id) || "", reserveUsd: num(top.attributes.reserve_in_usd), priceNow: num(top.attributes.base_token_price_usd) };
+  } catch (e) {
+    if (e.status !== 404) throw e;
+    // A coin too new for GeckoTerminal: on the second candles Blix has it anyway (a pump.fun coin, on its curve).
+    if (TF_SEC[tf]) {
+      try { return await blixCandles(ca, tf, { name: "", symbol: ca.slice(0, 4) + "…", image: null, supply: SUPPLY_CURVE }, { address: "", name: "", dex: /pump$/.test(ca) ? "auto" : "", reserveUsd: NaN, priceNow: NaN }, NaN); }
+      catch (e2) { if (!/no second-by-second/.test(e2.message)) throw e2; }
+    }
+    const j = await gt(`/pools/${ca}?include=base_token`), a = j.data.attributes, base = ((j.included || []).find((x) => x.type === "token") || {}).attributes || {};
+    side = "base";
+    token = { name: base.name, symbol: base.symbol, image: img(base.image_url), supply: num(base.normalized_total_supply) || num(a.fdv_usd) / num(a.base_token_price_usd) };
+    pool = { address: a.address, name: a.name, dex: (j.data.relationships && j.data.relationships.dex && j.data.relationships.dex.data && j.data.relationships.dex.data.id) || "", reserveUsd: num(a.reserve_in_usd), priceNow: num(a.base_token_price_usd) };
+  }
+  const solNow = await fetch("https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/So11111111111111111111111111111111111111112").then((r) => (r.ok ? r.json() : null)).then((j) => num(Object.values((j && j.data && j.data.attributes.token_prices) || {})[0])).catch(() => NaN);
+  if (TF_SEC[tf] < 60) return blixCandles(ca, tf, token, pool, solNow);
+  const [unit, agg, pages] = TF[tf], seen = new Map();
+  let before = "";
+  for (let i = 0; i < pages; i++) {
+    $("#load").textContent = `Loading ${i + 1}/${pages}…`;
+    // Older pages are a bonus: if one fails, replay what came.
+    let j;
+    try { j = await gt(`/pools/${pool.address}/ohlcv/${unit}?aggregate=${agg}&limit=1000&currency=usd&token=${side}${before}`); }
+    catch (e) { if (i) break; throw e; }
+    const list = (j.data && j.data.attributes && j.data.attributes.ohlcv_list) || [];
+    for (const r of list) if (r.slice(0, 5).every((x) => Number.isFinite(x) && x >= 0) && r[4] > 0) seen.set(r[0], r.slice(0, 6));
+    if (list.length < 1000) break;
+    before = `&before_timestamp=${Math.min(...list.map((r) => r[0]))}`;
+  }
+  return { token, supply: token.supply > 0 && isFinite(token.supply) ? token.supply : 0, pool, solUsd: solNow > 0 ? solNow : 0, candles: [...seen.values()].sort((a, b) => a[0] - b[0]) };
+}
+// 1 and 15 second candles: built here from every trade Blix's journal holds for the coin (its last 24 hours, the
+// same trades the coin page's chart is made of), so the replay moves trade by trade the way the live chart did. A
+// candle opens at the last close; seconds without a trade have no candle, as on the live chart.
+const TF_SEC = { "1s": 1, "15s": 15 };
+async function blixCandles(ca, tf, token, pool, solNow) {
+  $("#load").textContent = "Loading…";
+  let j = cache && cache.ca === ca && Date.now() - cache.at < 60e3 ? cache.j : null;
+  if (!j) {
+    const r = await fetch(`/demo/trades/${ca}`, { credentials: "same-origin" });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `Blix answered ${r.status}`);
+    cache = { ca, at: Date.now(), j };
+  }
+  const trades = (j.trades || []).filter((x) => x[1] > 0);
+  if (trades.length < 3) throw new Error("Blix has no trades for this coin in the last 24 hours (it records coins it saw launch). Try 1m.");
+  const supply = token.supply > 0 && isFinite(token.supply) ? token.supply : SUPPLY_CURVE, step = TF_SEC[tf];
+  const sols = j.sol || [], usdPerSol = (sols.length && sols[sols.length - 1][1]) || solNow || 150;
+  // Unknown venue (a coin too new for GeckoTerminal): pump.fun's curve while its market cap is under the migration
+  // point (410.9 SOL); past it the pool is unknown, and fills go at the candle's price.
+  if (pool.dex === "auto") pool.dex = trades[trades.length - 1][1] < 410.9 * usdPerSol ? "pump-fun" : "";
+  const out = [];
+  let last = null, prev = null;
+  for (const [ms, mc, usdv] of trades) {
+    const t = Math.floor(ms / 1000 / step) * step, p = mc / supply;
+    if (!last || last.t !== t) {
+      const o = prev ?? p;
+      last = { t, o, h: o, l: o, c: o, v: 0, path: [o], vs: [0], tt: [t * 1000] };
+      out.push(last);
+    }
+    last.h = Math.max(last.h, p); last.l = Math.min(last.l, p); last.c = p; last.v += usdv;
+    last.path.push(p); last.vs.push(last.v); last.tt.push(ms);
+    prev = p;
+  }
+  return { token, supply, pool, solUsd: usdPerSol, candles: out, blix: true, trades: trades.length };
+}
+
+async function load() {
+  const ca = $("#ca").value.trim(), tf = tfSel;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) return toast("That doesn't look like a Solana address");
+  setPlaying(false);
+  const btn = $("#load"); btn.disabled = true; btn.textContent = "Loading…";
+  try {
+    const j = await candles(ca, tf);
+    if (!j.candles || j.candles.length < 10) throw new Error("Not enough chart history for this coin yet");
+    data = j.blix ? j.candles : j.candles.map(([t, o, h, l, c, v]) => ({ t, o, h, l, c, v })); meta = j; hover = null;
+    $("#speeds").querySelectorAll("button").forEach((b) => (b.title = j.blix ? `${b.dataset.x}× real time (every trade when it happened)` : `${b.dataset.x} candle${b.dataset.x === "1" ? "" : "s"} a second`));
+    if (!(meta.supply > 0)) setMode("price");
+    try { history.replaceState(null, "", `#ca=${ca}&tf=${tf}`); localStorage.setItem("blix-replay", JSON.stringify({ ca, tf })); } catch {}
+    const pic = $("#pic"); pic.innerHTML = "";
+    if (j.token.image) { const im = document.createElement("img"); im.src = j.token.image; im.alt = ""; im.referrerPolicy = "no-referrer"; im.onerror = () => im.remove(); pic.appendChild(im); }
+    $("#sym").textContent = j.token.symbol || "?";
+    $("#sub").textContent = `${j.token.name || ""} · ${j.pool.name || ""} · ${j.blix ? `${j.trades.toLocaleString()} trades · ` : ""}${data.length.toLocaleString()} ${tf} candles${j.blix ? " from Blix" : ""}`;
+    const vs90 = data.map((c) => c.v).sort((a, b) => a - b)[Math.floor(data.length * 0.9)] || 0;
+    meta.volCap = vs90 > 0 ? vs90 * 4 : Infinity;
+    $("#empty").style.display = "none";
+    $("#slider").max = data.length - 1;
+    acct = null; newAccount(); ui(); trades();
+    setPicking(true);
+  } catch (e) { toast(String(e.message || e), 5000); }
+  finally { btn.disabled = false; btn.textContent = "Load"; }
+}
+
+// --- wiring
+makeChart();
+function radio(box, attr, val) { box.querySelectorAll("button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset[attr] === String(val)))); }
+function setMode(m) {
+  if (m === "mc" && !(meta && meta.supply > 0)) { if (meta) toast("No supply known for this coin, showing price"); m = "price"; }
+  mode = m; radio($("#modes"), "m", m);
+  if (data.length) { picking ? redraw(true) : redraw(); ui(); trades(); }
+}
+TFS.forEach(([k]) => { const b = document.createElement("button"); b.setAttribute("role", "radio"); b.dataset.t = k; b.textContent = k; b.onclick = () => { if (tfSel === k) return; if (acct && acct.trades.length && !confirm("Switch candle size? This run's trades will be cleared.")) return; tfSel = k; radio($("#tfs"), "t", k); chart.applyOptions({ timeScale: { secondsVisible: tfSec() < 60 } }); if ($("#ca").value.trim()) load(); }; $("#tfs").appendChild(b); });
+radio($("#tfs"), "t", tfSel);
+SPEEDS.forEach((x) => { const b = document.createElement("button"); b.setAttribute("role", "radio"); b.dataset.x = x; b.textContent = x + "×"; b.title = `${x} candle${x === 1 ? "" : "s"} a second`; b.onclick = () => { speed = x; radio($("#speeds"), "x", x); if (playing) setPlaying(true); }; $("#speeds").appendChild(b); });
+radio($("#speeds"), "x", speed);
+$("#modes").querySelectorAll("button").forEach((b) => (b.onclick = () => setMode(b.dataset.m)));
+const PRESETS = [0.1, 0.25, 0.5, 1, 2];
+PRESETS.forEach((x, n) => { const b = document.createElement("button"); b.className = "chip b"; b.textContent = "◎" + x; b.title = `Buy ${x} SOL now (${n + 1})`; b.onclick = () => buy(x); $("#quick").appendChild(b); });
+$("#tbuy").onclick = () => setSide("buy"); $("#tsell").onclick = () => setSide("sell");
+["#amt", "#prio", "#slip", "#fee"].forEach((id) => $(id).addEventListener("input", showQuote));
+document.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => sell(Number(b.dataset.s))));
+$("#buy").onclick = () => buy(numIn("#amt", 0, 0, 1e6));
+$("#load").onclick = (e) => { e.preventDefault(); load(); };
+$("#ca").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+$("#play").onclick = () => { if (picking && data.length) { jumpTo(0, false); toast("Playing from the first candle. Use Pick start to begin anywhere else."); setPlaying(true); return; } if (!data.length) return toast("Load a coin first"); if (atEnd()) return toast("End of chart. Pick a new start."); setPlaying(!playing); };
+$("#step").onclick = () => { setPlaying(false); stepCandle(); };
+$("#pick").onclick = () => { if (!data.length) return toast("Load a coin first"); setPicking(!picking); if (!picking) { redraw(); chart.timeScale().setVisibleLogicalRange({ from: idx - 110, to: idx + 14 }); } };
+$("#restart").onclick = () => { if (data.length && !picking) jumpTo(startIdx, false); };
+$("#slider").addEventListener("input", (e) => { if (data.length) $("#when").textContent = `${when(data[+e.target.value].t)} · jump here?`; });
+$("#slider").addEventListener("change", (e) => { if (!data.length) return; const to = +e.target.value; if (to === idx && !picking) return ui(); jumpTo(to, true); ui(); });
+$("#bank").addEventListener("change", () => { if (data.length && !picking && (!acct.trades.length || confirm("Reset this run with the new starting balance?"))) jumpTo(idx, false); });
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input,select,textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === " ") { e.preventDefault(); $("#play").click(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); $("#step").click(); }
+  else if (e.key === "b" || e.key === "B") buy(numIn("#amt", 0, 0, 1e6));
+  else if (e.key >= "1" && e.key <= "5") buy(PRESETS[Number(e.key) - 1]);
+  else if ("qwerQWER".includes(e.key) && e.key.length === 1) sell([0.1, 0.25, 0.5, 1]["qwer".indexOf(e.key.toLowerCase())]);
+  else if (e.key === "s" || e.key === "S") sell(1);
+  else if (e.key === "p" || e.key === "P") $("#pick").click();
+});
+const h = new URLSearchParams(location.hash.slice(1));
+let last = null; try { last = JSON.parse(localStorage.getItem("blix-replay") || "null"); } catch {}
+const ca0 = h.get("ca") || (last && last.ca), tf0 = h.get("tf") || (last && last.tf);
+if (tf0 && TFS.some(([k]) => k === tf0) && h.get("tf")) { tfSel = tf0; radio($("#tfs"), "t", tf0); }
+chart.applyOptions({ timeScale: { secondsVisible: tfSec() < 60 } });
+if (ca0) { $("#ca").value = ca0; if (h.get("ca")) load(); }
+})();
+</script>
+</body></html>
