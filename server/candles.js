@@ -12,7 +12,7 @@ import { onLiveTrade, feed } from "./livetrades.js";
 import { slotTime } from "./feedlag.js";
 import { db, DATA } from "./db.js";
 import { gtGet, keyedStats } from "./gtgate.js";
-import { jupCandles, warmCandles, supplyOf as circulating, knownSupply } from "./jup.js";
+import { jupCandles, jupCandlesBack, warmCandles, supplyOf as circulating, knownSupply } from "./jup.js";
 import { watchPool } from "./poolwatch.js";
 import * as store from "./candlestore.js";
 
@@ -296,12 +296,32 @@ function onGecko(gt, own, extra = []) {
   return { all: sane([...gt.slice(0, -1), head, ...fresh, ...bridge]), fresh, bridge, gl };
 }
 const GT_PAGES = (tf) => (tf >= 3600 ? 2 : 1);
-function bornBefore(mint, firstSec) {
+// When the coin was made (ms), from the coin index or its pair, or 0.
+function createdOf(mint) {
   try {
     createdQ ||= db.prepare("SELECT MIN(t) t FROM (SELECT created t FROM coins WHERE mint = ? AND created > 0 UNION ALL SELECT pair_created t FROM tokens WHERE mint = ? AND pair_created > 0)");
-    const t = createdQ.get(mint, mint)?.t;
-    return t > 0 && firstSec * 1000 - t > 10 * 60_000;
-  } catch { return false; }
+    return createdQ.get(mint, mint)?.t || 0;
+  } catch { return 0; }
+}
+function bornBefore(mint, firstSec) {
+  const t = createdOf(mint);
+  return t > 0 && firstSec * 1000 - t > 10 * 60_000;
+}
+// A pump.fun coin: its trades are the radar's own from launch, whatever its address ends in. Most end in "pump",
+// but a vanity address does not (1DOG, 13qh…Va5P2L), and those charts were Jupiter's alone, whose second sizes
+// reach back under 17 minutes. Known from the coin index (coinindex.js, every pump.fun coin the radar heard made).
+let pumpQ = null;
+const pumpSeen = new Map();   // mint -> true/false, the index's answer
+function isPumpCoin(mint) {
+  if (/pump$/.test(mint)) return true;
+  let v = pumpSeen.get(mint);
+  if (v === undefined) {
+    try { pumpQ ||= db.prepare("SELECT 1 FROM coins WHERE mint = ?"); v = Boolean(pumpQ.get(mint)); } catch { v = false; }
+    // A "no" is asked again later (the index can hear a coin after its chart was first opened).
+    if (v) pumpSeen.set(mint, v);
+    if (pumpSeen.size > 5000) pumpSeen.delete(pumpSeen.keys().next().value);
+  }
+  return v;
 }
 async function ownHistory(mint, tf, since, own) {
   const key = `${mint}:${tf}`;
@@ -319,7 +339,11 @@ async function ownHistory(mint, tf, since, own) {
         source: fresh.length ? "GeckoTerminal + Blix live" : "GeckoTerminal", note: null, solUsd: feed.solUsd, chainTo: gl + tf };
     }
   }
-  const stored = store.read(mint, tf, since ? since - tf : now() / 1000 - store.REACH(tf) * tf);
+  // A second chart reaches back REACH candles (3,000 s at 1 s); a coin under 2 hours old is read from its launch
+  // instead, so its chart starts where the coin did and its first candle stays put from one poll to the next.
+  const bornS = tf < 60 ? Math.floor(createdOf(mint) / 1000) : 0, nowS = now() / 1000;
+  const reach = tf < 60 && bornS > nowS - 7200 ? Math.min(bornS, nowS - store.REACH(tf) * tf) : nowS - store.REACH(tf) * tf;
+  const stored = store.read(mint, tf, since ? since - tf : reach);
   if (!stored.length) return null;
   // The live book's buckets from the last stored candle on (it holds the same trades plus the newest ones).
   const lastT = stored[stored.length - 1].time, tail = own.filter((r) => r.time >= lastT);
@@ -332,20 +356,25 @@ async function ownHistory(mint, tf, since, own) {
   // prefix is missing, still to come or old, the whole chart is answered instead, with it.
   if (since && (!p || now() - p.t > 5 * 60_000)) return ownHistory(mint, tf, null, own);
   if (!p || now() - p.t > 5 * 60_000) {
-    let pre = [], slow = false;
+    let pre = [], slow = false, failed = false;
     // Our first candle at the curve's starting price: the coin's whole life is ours, nothing to ask Jupiter for.
     if (!(rows[0].open < BIRTH_MC) || bornBefore(mint, rows[0].time)) {
       try {
-        const j = await soon(jupCandles(mint, tf), 400);
+        // Second sizes: Jupiter's pages back to the coin's launch (one page is under 17 minutes at 1 s).
+        // Asked up to the next 5-minute mark (one key, so one set of calls, while the window's start moves).
+        const upTo = Math.ceil((rows[0].time + 1) / 300) * 300;
+        const j = await soon(tf < 60 ? jupCandlesBack(mint, tf, upTo, bornS || rows[0].time - 3600) : jupCandles(mint, tf), 400);
         if (j === SLOW) slow = true;
         else if (j.length) {
           const seam = j.filter((r) => r.time <= rows[0].time).pop();
           const k = seam && seam.close > 0 ? rows[0].open / seam.close : 1;
           if (k > 0.25 && k < 4) pre = j.filter((r) => r.time < rows[0].time).map((r) => (k === 1 ? r : { ...r, open: r.open * k, high: r.high * k, low: r.low * k, close: r.close * k }));
         }
-      } catch {}
+      } catch { failed = true; }
     }
-    if (!slow) { p = { rows: pre, t: now() }; prefixes.set(key, p); }
+    // Jupiter refusing (429s on the server's address) is asked again in 30 s, not taken as "nothing before".
+    if (failed) { p = { rows: p?.rows || [], t: now() - 5 * 60_000 + 30_000 }; prefixes.set(key, p); }
+    else if (!slow) { p = { rows: pre, t: now() }; prefixes.set(key, p); }
     else if (!p) { p = { rows: [], t: 0 }; prefixes.set(key, p); }   // t 0: asked again on the next poll
     if (prefixes.size > 300) prefixes.delete(prefixes.keys().next().value);
   }
@@ -364,7 +393,7 @@ async function ownHistory(mint, tf, since, own) {
 export async function candles(mint, tf = 60, since = null) {
   tf = [1, 5, 15, 60, 300, 900, 3600, 14400, 86400].includes(+tf) ? +tf : 60;
   since = Number(since) > 0 ? Number(since) : null;
-  if (/pump$/.test(mint)) { try { const h = await ownHistory(mint, tf, since, fromBook(mint, Math.max(tf, STEP))); if (h) return h; } catch (e) { store.storeStats.readError = e.message; } }
+  if (isPumpCoin(mint)) { try { const h = await ownHistory(mint, tf, since, fromBook(mint, Math.max(tf, STEP))); if (h) return h; } catch (e) { store.storeStats.readError = e.message; } }
   // A bonded coin outside PumpSwap: its pool is read on-chain while the chart is open (poolwatch.js), since
   // Jupiter's candles trail the chain by 6-10 s. PumpSwap pools are already read trade by trade (pumpswap.js).
   const tok = db.prepare("SELECT graduated, dex, pair FROM tokens WHERE mint = ?").get(mint);

@@ -52,7 +52,7 @@ function Avatar({ src, name, size = 32 }: { src: string | null; name?: string | 
 }
 
 // Fomo's data loads by itself (the radar reads it through Aside in a second or two). While it does, a few
-// placeholder rows; if Aside has no Fomo tab to read through, one click opens one that stays (Blix reuses it).
+// placeholder rows.
 function Skeleton() {
   return (
     <div className="flex flex-col">
@@ -66,21 +66,11 @@ function Skeleton() {
     </div>
   );
 }
-function ConnectFomo({ text }: { text: string }) {
-  return (
-    <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
-      <b className="text-md font-semibold text-ink-2">{text}</b>
-      <span className="max-w-md text-sm text-muted">Blix reads Fomo through a fomo.family tab in your browser. Open one once and leave it open: every coin then loads in about a second.</span>
-      <a href="https://fomo.family/leaderboard?blix=fomo" target="_blank" rel="noopener" className="mt-1 h-8 rounded-full bg-ink px-4 text-md leading-8 font-semibold text-on-fill hover:bg-focus">Connect Fomo</a>
-    </div>
-  );
-}
-
+// Nothing to show yet, whatever the reason (the server's Fomo login is out, or the read failed): a plain empty
+// state. Never a prompt to connect, sign in to or visit another site: it all comes from Blix's own Fomo account,
+// and the list fills in by itself once a read lands.
 function Status({ f, what }: { f: CoinFomo | null; what: string }) {
-  if (f?.signedOut) return <ConnectFomo text={`Sign in to Fomo to see this coin's ${what}`} />;
-  if (f && !f.read && f.queue?.hasTab === false) return <ConnectFomo text={`Connect Fomo to see this coin's ${what}`} />;
-  // A failed read says so, even while the next try is queued: a skeleton that never fills reads as broken.
-  if (f?.error && !f.read) return <div title={f.error}><Empty title="Fomo isn't answering right now" text="Blix keeps trying by itself and fills this in the moment Fomo answers." /></div>;
+  if (f && !f.read && (f.signedOut || f.error || f.queue?.hasTab === false)) return <Empty title={`No ${what} yet`} text={`This coin's ${what} show up here as soon as they load.`} />;
   if (!f || f.loading || !f.read) return <Skeleton />;
   return null;
 }

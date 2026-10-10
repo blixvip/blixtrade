@@ -107,7 +107,6 @@ export function Trader({ handle }: { handle: string }) {
             </div>
           </div>
           <div className="flex items-center gap-2 pb-1">
-            <a href={`https://fomo.family/profile/${encodeURIComponent(p.handle)}`} target="_blank" rel="noopener" title="Open on Fomo" className={iconBtn}><SiteLogo site="fomo" className="size-4" /></a>
             {p.wallet && <a href={`https://solscan.io/account/${p.wallet}`} target="_blank" rel="noopener" title="Wallet on Solscan" className={iconBtn}><SiteLogo site="solscan" className="size-4" /></a>}
             <button onClick={() => load(true)} disabled={busy} title="Read the profile from Fomo again" className={cn(iconBtn, "disabled:opacity-60")}><Icon.refresh className={cn("size-3.5", busy && "animate-spin")} /></button>
             <span aria-hidden className="mx-1 h-5 w-px bg-rule-2" />

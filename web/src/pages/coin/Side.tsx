@@ -1,5 +1,6 @@
 // The right column: 5-minute flow, the paper trade panel at real quotes, your paper position,
 // token info (an icon and a figure each, green when clean, red when not), addresses and links.
+import { UNLOCK_USD, useAiUnlock } from "../AiPicks";
 import { SolanaLogo } from "@/components/brand";
 import { useFeeBps } from "@/components/ShareLink";
 import { SiteLogo, PADS, padOf, type Site } from "@/components/logos";
@@ -240,18 +241,39 @@ export function Position({ pos, mint, symbol, solUsd }: { pos: Pos; mint: string
 }
 
 type Tone = boolean | null;   // true = bad (red), false = clean (green), null = neutral
+// One reading: the figure big and coloured by how it reads, the icon and name small under it. A bad one gets a red
+// wash rather than a red outline, so a column of warnings reads at a glance without the grid turning into boxes.
 function Tile({ icon, value, label, bad, tip }: { icon: ReactNode; value: ReactNode; label: string; bad: Tone; tip?: string }) {
   return (
     <Tip tip={tip}>
-      <div className={cn("flex min-w-0 flex-col items-center gap-0.5 rounded-control border bg-paper-3 px-1 pb-2 pt-2.5 text-center",
-        bad === true ? "border-down/40 [&_b]:text-down [&_svg]:text-down" : bad === false ? "border-rule [&_b]:text-up [&_svg]:text-up" : "border-rule")}>
-        <span className="text-muted [&_svg]:size-4">{icon}</span>
-        <b className="num max-w-full truncate text-lg font-semibold text-ink">{value}</b>
-        <small className="whitespace-nowrap text-xs text-muted">{label}</small>
+      <div className={cn("flex min-w-0 flex-col items-center justify-center gap-1.5 rounded-control px-1 py-2.5 text-center",
+        bad === true ? "bg-down/[0.09] [&_b]:text-down" : bad === false ? "bg-paper-3/70 [&_b]:text-up" : "bg-paper-3/70")}>
+        <b className="num max-w-full truncate text-md leading-none font-semibold text-ink">{value}</b>
+        <small className={cn("flex max-w-full items-center gap-1 truncate text-xs leading-none text-muted [&_svg]:size-3 [&_svg]:shrink-0", bad === true && "text-down/80")}>{icon}{label}</small>
       </div>
     </Tip>
   );
 }
+
+// The DexScreener banner, like Axiom's: the coin's paid header image across the top of Token info, opening its
+// DexScreener page. A picture that fails to load takes the banner away with it.
+function DexBanner({ src, href, symbol }: { src: string; href: string; symbol: string }) {
+  const [ok, setOk] = useState<boolean | null>(null);
+  useEffect(() => setOk(null), [src]);
+  if (ok === false) return null;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" title={`${symbol} on DexScreener`}
+      className={cn("group relative -mx-3 -mt-3 mb-3 block aspect-[3/1] overflow-hidden bg-paper-3", ok === null && "animate-pulse")}>
+      <img src={src} alt={`${symbol} banner`} loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false}
+        onLoad={() => setOk(true)} onError={() => setOk(false)}
+        className={cn("size-full object-cover transition-[opacity,scale] duration-500 group-hover:scale-[1.02]", ok ? "opacity-100" : "opacity-0")} />
+      <span className="absolute top-2 right-2 flex h-5.5 items-center gap-1 rounded-full bg-black/60 pr-2 pl-1 text-xs font-bold tracking-wide text-white backdrop-blur-sm">
+        <SiteLogo site="dexscreener" className="size-3.5" />DEX PAID
+      </span>
+    </a>
+  );
+}
+
 export function Info({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   // Every figure comes from /api/coin, which only passes on a reading that can still be true (unknown is "—").
   const t = r.token, i = c?.info;
@@ -262,23 +284,33 @@ export function Info({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   const from = i?.source ? `From ${i.source}${i.checked ? `, read ${sinceMs(Date.now() - i.checked)} ago` : ""}` : c && !curve ? "RugCheck has no current reading yet (a bonded coin's first reports go stale within minutes); asking it again" : undefined;
   const ledgerOnly = curve ? "Only known for coins Blix saw from the first trade" : "Unknown after bonding: Blix reads the curve, not the pool";
   const paid = Boolean(t.header) || (t.boosts || 0) > 0;
-  const grade = r.research?.report?.grade || r.research?.grade || null;
+  // The AI's grade is part of its read: behind the same $10 lock (AiPicks.tsx).
+  const ai = useAiUnlock(), aiOpen = ai.state === "open";
+  const grade = aiOpen ? r.research?.report?.grade || r.research?.grade || null : null;
   const tone = (v: number | null, max: number): Tone => v == null ? null : v > max;
+  const banner = typeof t.header === "string" && /^https:\/\//.test(t.header) ? t.header : null;
+  const devSold = c?.dev?.sold;
   return (
-    <div className={card}>
-      <H>Token info</H>
-      <div className="grid grid-cols-3 gap-1.5">
-        <Tile icon={<Icon.crown />} value={pctN(top10)} label="Top 10 H." bad={tone(top10, 30)} tip={`Share held by the 10 largest wallets. ${from || ""}`} />
-        <Tile icon={<Icon.chef />} value={dev == null ? "—" : `${pctN(dev)}${c?.dev?.sold ? (c.dev.sold === "all" ? " sold" : " selling") : ""}`} label="Dev H." bad={tone(dev, 10)} tip={`Share the dev still holds. ${from || ""}`} />
-        <Tile icon={<Icon.crosshair />} value={pctN(sn)} label="Snipers H." bad={tone(sn, 10)} tip={i?.snipers ? `${i.snipers.n} wallets bought within 2 blocks of the first trade; ${i.snipers.sold} sold out` : ledgerOnly} />
+    <div className={cn(card, "overflow-hidden")}>
+      {banner && <DexBanner src={banner} href={`https://dexscreener.com/solana/${t.pair || t.mint}`} symbol={t.symbol || "Coin"} />}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="label">Token info</h3>
+        {i?.checked ? <span className="truncate text-xs text-muted">{i.source ? `${i.source} · ` : ""}{sinceMs(Date.now() - i.checked)} ago</span> : null}
+      </div>
+      <div className="grid grid-cols-3 gap-1">
+        <Tile icon={<Icon.crown />} value={pctN(top10)} label="Top 10" bad={tone(top10, 30)} tip={`Share held by the 10 largest wallets. ${from || ""}`} />
+        <Tile icon={<Icon.chef />} value={pctN(dev)} label={devSold === "all" ? "Dev sold" : devSold ? "Dev selling" : "Dev"} bad={tone(dev, 10)} tip={`Share the dev still holds. ${from || ""}`} />
+        <Tile icon={<Icon.crosshair />} value={pctN(sn)} label="Snipers" bad={tone(sn, 10)} tip={i?.snipers ? `${i.snipers.n} wallets bought within 2 blocks of the first trade; ${i.snipers.sold} sold out` : ledgerOnly} />
         <Tile icon={<Icon.ghost />} value={pctN(ins)} label="Insiders" bad={tone(ins, 20)} tip={`RugCheck insider networks. ${from || ""}`} />
         <Tile icon={<Icon.boxes />} value={pctN(bd)} label="Bundlers" bad={tone(bd, 20)} tip={i?.bundle ? `${i.bundle.n} wallets bought in the launch block` : ledgerOnly} />
         <Tile icon={<Icon.curve />} value={curve ? "Curve" : lp == null ? "—" : pctN(lp, 0)} label={curve ? "No LP yet" : "LP locked"} bad={curve || lp == null ? null : lp < 90} />
         <Tile icon={<Icon.users />} value={i?.holders != null ? i.holders.toLocaleString() : "—"} label="Holders" bad={null} tip={from} />
         <Tile icon={<Icon.userStar />} value={i?.traders != null ? i.traders.toLocaleString() : "—"} label="Traders" bad={null} tip={curve ? "Wallets that traded it on the live feed" : "Unknown after bonding: Blix reads the curve, not the pool"} />
-        <Tile icon={<Icon.bolt />} value={paid ? "Paid" : "Unpaid"} label="Dex paid" bad={!paid} tip="A DexScreener profile or boost was bought for this coin" />
+        <Tile icon={<Icon.bolt />} value={paid ? "Paid" : "Unpaid"} label="Dex" bad={paid ? false : null} tip={paid ? "A DexScreener profile or boost was bought for this coin" : "No DexScreener profile or boost bought yet"} />
         <Tile icon={<CIcon.shield />} value={safety != null ? String(safety) : "—"} label="Safety" bad={safety == null ? null : safety < 50} tip={`RugCheck score out of 100. ${from || ""}`} />
-        <Tile icon={<Icon.ai />} value={grade || (r.research?.status === "running" ? "…" : "—")} label="AI grade" bad={grade ? /^[DF]/.test(grade) : null} tip={r.research?.report?.verdict || undefined} />
+        {aiOpen
+          ? <Tile icon={<Icon.ai />} value={grade || (r.research?.status === "running" ? "…" : "—")} label="AI grade" bad={grade ? /^[DF]/.test(grade) : null} tip={r.research?.report?.verdict || undefined} />
+          : <Tile icon={<Icon.ai />} value={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-label="Locked" className="mx-auto size-4 text-muted"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>} label="AI grade" bad={null} tip={`Hold $${UNLOCK_USD} in your Blix wallet to unlock AI reads`} />}
         <Tile icon={<Icon.candles />} value={r.triage ? String(r.triage.score) : "—"} label="Triage" bad={r.triage ? r.triage.label === "slop" : null} tip={r.triage?.why} />
       </div>
     </div>
@@ -287,19 +319,24 @@ export function Info({ r, c }: { r: TokenDetail; c: CoinData | null }) {
 
 export function Addresses({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   const t = r.token, dev = c?.dev?.wallet || t.creator || null;
-  const row = (label: string, a: string, kind: "token" | "account") => (
-    <div className="flex items-center gap-1.5">
-      <span className="label w-6">{label}</span>
-      <button onClick={() => copy(a, `${label === "CA" ? "Contract" : "Dev"} address copied`)} title={a}
-        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-control border border-rule bg-paper-3 px-2 py-1 text-ink-2 hover:border-rule-2 hover:text-ink">
-        <span className="font-outlier text-xs">{shortAddr(a)}</span><Icon.copy className="ml-auto size-3 text-muted" />
-      </button>
-      <a href={`https://solscan.io/${kind}/${a}`} target="_blank" rel="noreferrer" aria-label="Open on Solscan" title="Open on Solscan" className="grid size-7 place-items-center rounded-chip text-muted hover:bg-paper-4 hover:text-ink"><SiteLogo site="solscan" className="size-4" /></a>
+  const row = (name: string, a: string, kind: "token" | "account") => (
+    <div className="flex items-center gap-2 py-1.5 pr-1.5 pl-3">
+      <span className="w-14 shrink-0 text-xs font-medium text-muted">{name}</span>
+      <Tip tip={`Copy ${a}`}>
+        <button onClick={() => copy(a, `${name} address copied`)}
+          className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-chip px-1.5 py-1 text-ink-2 transition-colors hover:bg-paper-3 hover:text-ink">
+          <span className="font-outlier truncate text-xs">{shortAddr(a)}</span><Icon.copy className="ml-auto size-3.5 shrink-0 text-muted group-hover:text-ink" />
+        </button>
+      </Tip>
+      <Tip tip="Open on Solscan">
+        <a href={`https://solscan.io/${kind}/${a}`} target="_blank" rel="noreferrer" aria-label="Open on Solscan" className="grid size-7 shrink-0 place-items-center rounded-chip transition-colors hover:bg-paper-3"><SiteLogo site="solscan" className="size-4" /></a>
+      </Tip>
     </div>
   );
-  return <div className={cn(card, "flex flex-col gap-1.5")}>{row("CA", t.mint, "token")}{dev && row("DA", dev, "account")}</div>;
+  return <div className={cn(card, "flex flex-col divide-y divide-rule p-0")}>{row("Contract", t.mint, "token")}{dev && row("Dev", dev, "account")}</div>;
 }
 
+// Where else to look at this coin: one logo per site in an even grid, its name on hover.
 export function Links({ r }: { r: TokenDetail }) {
   const t = r.token;
   const pad = padOf({ mint: t.mint, pool: (t as { pool?: string | null }).pool, dex: (t as { dex?: string | null }).dex });
@@ -312,8 +349,18 @@ export function Links({ r }: { r: TokenDetail }) {
     ["Jupiter", `https://jup.ag/swap/SOL-${t.mint}`, "jupiter"], ["Solscan", `https://solscan.io/token/${t.mint}`, "solscan"],
   ];
   return (
-    <div className={cn(card, "flex flex-wrap gap-1.5 text-sm")}>
-      {list.map(([l, href, logo]) => <a key={l} href={href} target="_blank" rel="noopener noreferrer" title={`Open on ${l}`} className="flex h-7 items-center gap-1.5 rounded-full border border-rule-2 bg-paper-3/60 px-2.5 text-xs font-semibold text-ink-2 transition-colors hover:border-muted hover:text-ink"><SiteLogo site={logo} className="size-4" />{l}</a>)}
+    <div className={card}>
+      <h3 className="label mb-2">Open on</h3>
+      <div className="grid grid-cols-6 gap-1">
+        {list.map(([l, href, logo]) => (
+          <Tip key={l} tip={l}>
+            <a href={href} target="_blank" rel="noopener noreferrer" aria-label={`Open on ${l}`}
+              className="grid aspect-square place-items-center rounded-control bg-paper-3/70 transition-[background-color,scale] duration-150 hover:bg-paper-4 active:scale-95">
+              <SiteLogo site={logo} className="size-5" />
+            </a>
+          </Tip>
+        ))}
+      </div>
     </div>
   );
 }

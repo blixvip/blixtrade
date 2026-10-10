@@ -46,12 +46,28 @@ function memo(key, ttl, fn, stale = false) {
   return p;
 }
 
+// Jupiter's raw candles (oldest first) as chart candles of `tf` seconds, `k` of its own making one.
+function shape(raw, tf, k) {
+  if (k === 1) return raw.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 }));
+  const out = [];
+  for (const c of raw) {
+    const t = c.time - (c.time % tf), last = out[out.length - 1];
+    if (last && last.time === t) { last.high = Math.max(last.high, c.high); last.low = Math.min(last.low, c.low); last.close = c.close; last.value += c.volume || 0; }
+    else out.push({ time: t, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 });
+  }
+  return out;
+}
+// One page of Jupiter's candles (at most 1,000 of its own) ending at `toMs`, oldest first, zero closes dropped.
+async function page(mint, iv, toMs, low) {
+  const j = await get(`/v2/charts/${mint}?interval=${iv}&to=${toMs}&candles=1000&type=mcap&quote=usd`, low);
+  return (j.candles || []).filter((c) => c.close > 0).sort((a, b) => a.time - b.time);
+}
+
 // Market-cap candles in USD, oldest first: { time, open, high, low, close, value } with time in unix seconds.
 export function jupCandles(mint, tf, low = false) {
   const [iv, k] = IV[tf] || IV[60];
   return memo(`c:${mint}:${tf}`, tf < 60 ? 6_000 : tf < 300 ? 15_000 : 60_000, async () => {
-    const j = await get(`/v2/charts/${mint}?interval=${iv}&to=${now()}&candles=1000&type=mcap&quote=usd`, low);
-    const raw = (j.candles || []).filter((c) => c.close > 0).sort((a, b) => a.time - b.time);
+    const raw = await page(mint, iv, now(), low);
     // A coin's very first candle can carry a stray quote from its launch block (Fartcoin's first day "opens" at
     // $1.19B): its open and high are pulled to its close when they are 10x over anything in the next candles.
     if (raw.length > 3) {
@@ -59,19 +75,36 @@ export function jupCandles(mint, tf, low = false) {
       if (c0.open > next * 10) c0.open = c0.close;
       if (c0.high > next * 10) c0.high = Math.max(c0.open, c0.close);
     }
-    if (k === 1) return raw.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 }));
-    const out = [];
-    for (const c of raw) {
-      const t = c.time - (c.time % tf), last = out[out.length - 1];
-      if (last && last.time === t) { last.high = Math.max(last.high, c.high); last.low = Math.min(last.low, c.low); last.close = c.close; last.value += c.volume || 0; }
-      else out.push({ time: t, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 });
-    }
-    return out;
+    return shape(raw, tf, k);
   // A small size's old answer is a different chart (a 1 s series from 20 minutes ago is not this coin now):
   // shown while the fresh one loads, it drew the chart at an old price and then jumped. Seconds-sized candles
   // may be handed out at most 15 s old, minute-sized 2 min, the large ones as before.
   }, tf < 60 ? 15_000 : tf < 900 ? 120_000 : true);
 }
+// The candles before `beforeSec` back to `fromSec` (a coin's launch), page by page: one page is 1,000 of Jupiter's
+// own candles, which at 1 s is under 17 minutes, so a coin Blix heard late had its first minutes cut off its
+// 1 s and 5 s charts (1DOG, 2026-10-10: launched 18:42, its second charts began at 19:45). At most `pages` pages
+// (about 2 hours at 1 s); kept 5 minutes per coin and size.
+export function jupCandlesBack(mint, tf, beforeSec, fromSec, pages = 8) {
+  const [iv, k] = IV[tf] || IV[60];
+  return memo(`cb:${mint}:${tf}:${beforeSec}`, 5 * 60_000, async () => {
+    let raw = [], to = beforeSec * 1000;
+    for (let i = 0; i < pages; i++) {
+      const got = (await page(mint, iv, to, true)).filter((c) => c.time < to / 1000 && (!raw.length || c.time < raw[0].time));
+      if (!got.length) break;
+      raw = [...got, ...raw];
+      if (got[0].time <= fromSec || got.length < 900) break;
+      to = got[0].time * 1000;
+    }
+    if (raw.length > 3) {
+      const c0 = raw[0], next = Math.max(...raw.slice(1, 11).map((c) => c.high));
+      if (c0.open > next * 10) c0.open = c0.close;
+      if (c0.high > next * 10) c0.high = Math.max(c0.open, c0.close);
+    }
+    return shape(raw, tf, k).filter((r) => r.time < beforeSec);
+  });
+}
+
 // A chart just opened: its other sizes are fetched behind it, so switching size (or "All") draws at once.
 const warmed = new Map();
 export function warmCandles(mint) {

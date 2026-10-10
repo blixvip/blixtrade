@@ -3,6 +3,7 @@ import { pageHref } from "@/lib/route";
 import { openExchange, openLauncher, warmExchange, warmLauncher } from "@/lib/modals";
 import { CoinImg } from "@/components/page";
 import { AccountAvatar } from "@/components/AccountAvatar";
+import { ClipCoin } from "@/components/ClipCoin";
 import { AccountMenu, WalletMenu } from "@/components/WalletMenu";
 import { compact, pct, tone } from "@/lib/format";
 import { usePulse } from "@/lib/pulse";
@@ -273,13 +274,14 @@ function PaperBalance({ w, onDone }: { w: PaperWallet; onDone: () => void }) {
   );
 }
 
-// Across the top of the page: what is moving, then the search, the paper switch, Deposit and the wallet.
+// Across the top of the page: what is moving, then the coin on the clipboard (if any), the search, the paper switch, Deposit and the wallet.
 export function TopBar() {
   return (
     <header className="flex h-13 shrink-0 items-center gap-3 border-b border-rule bg-paper/80 px-3 max-md:gap-2">
       <a href="#/" aria-label="Blix" className="hidden shrink-0 max-md:block max-[379px]:hidden!"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} draggable={false} className="h-6 w-auto mix-blend-screen select-none" /></a>
       <Tape />
       <div className="ml-auto flex shrink-0 items-center gap-2.5 max-md:gap-2">
+        <ClipCoin />
         <Search />
         <PaperSwitch />
         <Wallet />

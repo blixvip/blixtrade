@@ -1,6 +1,6 @@
 // AI picks (#/ai-picks): what the AI's deep reads said today (buy, watch or avoid, with its reason), its buy calls
 // this week, and how its picks have done. Read-only: nothing is bought.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Segmented } from "@/components/ui/segmented";
 import { ago, CoinCell, Empty, gradeTone, Kpis, Loading, money, mult, Page, Panel, Problem, Scroll, td, tdR, th, thR, toneX } from "@/components/page";
 import { usePoll } from "@/lib/coin";
@@ -14,24 +14,40 @@ type J = any;
 const pct = (x: number) => `${x >= 1 ? "+" : "−"}${Math.abs((x - 1) * 100).toFixed(1)}%`;
 const actionTone = (a?: string) => (a === "buy" ? "text-up" : a === "avoid" ? "text-down" : "text-warn");
 
-// Unlocked by a deposit: the page opens once the wallet holds UNLOCK_USD or more (SOL and coins together, as the
-// wallet service values them). The owner sees the lock too (the user, 2026-10-10), with an owner-only link past it.
-// A lock on the page only: the picks API itself is open.
-const UNLOCK_USD = 10;
+// Unlocked by a deposit: AI picks and every coin's AI read (pages/coin/Tabs.tsx, AiGate) open once the wallet
+// holds UNLOCK_USD or more (SOL and coins together, as the wallet service values them). The owner sees the lock
+// too (the user, 2026-10-10), with an owner-only link past it. A lock on the pages only: the APIs are open.
+export const UNLOCK_USD = 10;
 const walletUsd = (me: Me | null) => !me?.wallet ? 0 : (me.wallet.solUsd || 0) + (me.wallet.tokens || []).reduce((n, t) => n + (t.usd || 0), 0);
+// "loading" until the account is read; "open" with UNLOCK_USD held (the owner never: they get the lock and its link).
+export function useAiUnlock() {
+  const role = useRole(), me = useMe((s) => s.me);
+  useEffect(() => { if (!me) void loadMe(); }, [me]);
+  const have = walletUsd(me);
+  const state: "loading" | "open" | "locked" = !me ? "loading" : have >= UNLOCK_USD && role !== "owner" ? "open" : "locked";
+  return { state, have, wallet: Boolean(me?.signedIn && !me.needsWallet), owner: role === "owner" };
+}
+// The same lock over one coin's AI read: nothing behind it is asked for (no read queued) until it opens.
+let peeked = false;   // the owner's "open anyway" lasts for the visit
+export function AiGate({ children }: { children: ReactNode }) {
+  const u = useAiUnlock(), [peek, setPeek] = useState(peeked);
+  if (peek || u.state === "open") return <>{children}</>;
+  if (u.state === "loading") return <div className="p-4"><Loading /></div>;
+  return (
+    <div className="p-3">
+      <Locked have={u.have} wallet={u.wallet} owner={u.owner} onPeek={() => { peeked = true; setPeek(true); }} what="read" />
+    </div>
+  );
+}
 
 export function AiPicks() {
-  const role = useRole(), me = useMe((s) => s.me);
+  const u = useAiUnlock();
   const [peek, setPeek] = useState(false);
-  useEffect(() => { if (!me) void loadMe(); }, [me]);
-  if (peek) return <Picks />;
-  if (!me) return <Page title="AI picks"><Loading /></Page>;
-  const have = walletUsd(me);
-  if (have >= UNLOCK_USD && role !== "owner") return <Picks />;
-  const wallet = me.signedIn && !me.needsWallet;
+  if (peek || u.state === "open") return <Picks />;
+  if (u.state === "loading") return <Page title="AI picks"><Loading /></Page>;
   return (
     <Page title="AI picks" sub="What the AI said about today's coins after reading them in depth, and how its picks have done. Not advice.">
-      <Locked have={have} wallet={wallet} owner={role === "owner"} onPeek={() => setPeek(true)} />
+      <Locked have={u.have} wallet={u.wallet} owner={u.owner} onPeek={() => setPeek(true)} />
     </Page>
   );
 }
@@ -65,12 +81,18 @@ function Preview() {
 
 const Check = () => <svg viewBox="0 0 16 16" aria-hidden className="mt-0.5 size-4 shrink-0 text-up"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 
-function Locked({ have, wallet, owner, onPeek }: { have: number; wallet: boolean; owner: boolean; onPeek: () => void }) {
+// what: "picks" (the AI picks page) or "read" (one coin's AI read tab, shorter).
+const COPY = {
+  picks: { title: "Unlock AI picks", lead: "and the AI's reads open up.", points: ["Buy, watch or avoid on today's coins, with the reason", "Every buy call this week, with entry and where it is now", "The full track record: win rate and average pick"] },
+  read: { title: "Unlock AI reads", lead: "and every coin's AI read opens up, along with AI picks.", points: ["A full read of this coin: dev history, holders, socials and red flags", "Buy, watch or avoid, with the reason and a grade", "AI picks: today's calls and the AI's track record"] },
+};
+function Locked({ have, wallet, owner, onPeek, what = "picks" }: { have: number; wallet: boolean; owner: boolean; onPeek: () => void; what?: "picks" | "read" }) {
+  const c = COPY[what];
   const [checking, setChecking] = useState(false);
   const left = Math.max(0, UNLOCK_USD - have), done = Math.min(1, have / UNLOCK_USD);
   const check = async () => { setChecking(true); try { await loadMe(); } finally { setChecking(false); } };
   return (
-    <div className="relative isolate min-h-[600px] overflow-hidden rounded-card border border-rule bg-paper-2">
+    <div className={cn("relative isolate overflow-hidden rounded-card border border-rule bg-paper-2", what === "read" ? "min-h-[520px]" : "min-h-[600px]")}>
       <Preview />
       <div aria-hidden className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--color-paper-2)_85%,transparent)_25%,color-mix(in_oklch,var(--color-paper-2)_30%,transparent)_100%)]" />
       <div className="absolute inset-0 grid place-items-center p-4">
@@ -80,13 +102,11 @@ function Locked({ have, wallet, owner, onPeek }: { have: number; wallet: boolean
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="size-3"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
               Locked
             </span>
-            <h2 className="text-2xl leading-tight font-bold tracking-tight">Unlock AI picks</h2>
-            <p className="text-md text-ink-2">Hold ${UNLOCK_USD} in your Blix wallet and the AI's reads open up. The money stays yours to trade with.</p>
+            <h2 className="text-2xl leading-tight font-bold tracking-tight">{c.title}</h2>
+            <p className="text-md text-ink-2">Hold ${UNLOCK_USD} in your Blix wallet {c.lead} The money stays yours to trade with.</p>
           </div>
           <ul className="flex flex-col gap-2 text-md text-ink-2">
-            <li className="flex gap-2.5"><Check />Buy, watch or avoid on today's coins, with the reason</li>
-            <li className="flex gap-2.5"><Check />Every buy call this week, with entry and where it is now</li>
-            <li className="flex gap-2.5"><Check />The full track record: win rate and average pick</li>
+            {c.points.map((x) => <li key={x} className="flex gap-2.5"><Check />{x}</li>)}
           </ul>
           {wallet && (
             <div className="flex flex-col gap-2">

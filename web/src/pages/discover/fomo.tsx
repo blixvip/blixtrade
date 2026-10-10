@@ -95,10 +95,10 @@ export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: numb
           <div className={cn(GRID, "metal-bar sticky top-0 z-10 px-4 py-2 text-sm font-medium text-muted")}>
             <span>Pair info</span><span>Price 24h</span><span className="text-right">Market cap</span><span className="text-right">Liquidity</span>
             <span className="text-right">Volume 24h</span><span className="text-right">Txns 1h</span><span>Token info</span>
-            <span className="text-right text-xs" title="Fomo's list is read every few seconds; prices and market caps move live in between">{age != null ? `fomo.family · ${age}s` : "fomo.family"}</span>
+            <span className="text-right text-xs" title="Fomo's list is read every few seconds; prices and market caps move live in between">{age != null ? `Live · ${age}s` : "Live"}</span>
           </div>
-          {d?.signedOut ? <Problem text="Aside is signed out of Fomo. Sign in at fomo.family in your Aside browser and this list fills in by itself." />
-            : !rows ? (error || d?.error ? <Problem text={d?.error || error || "Couldn't reach Fomo."} /> : <div className="p-3"><Loading /><p className="px-1 pt-2 text-sm text-muted">Reading Fomo's list through Aside (a few seconds the first time)…</p></div>)
+          {d?.signedOut ? <Problem text="Nothing to show right now. This list fills in by itself." />
+            : !rows ? (error || d?.error ? <Problem text="Nothing to show right now. This list fills in by itself." /> : <div className="p-3"><Loading /><p className="px-1 pt-2 text-sm text-muted">Loading…</p></div>)
             : rows.length ? rows.map(({ row, ext, key }) => (
               <Fragment key={key}>
                 <DiscoverRow r={row} tf="24h" sol={sol} ext={ext} />

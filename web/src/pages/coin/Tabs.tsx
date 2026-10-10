@@ -1,5 +1,6 @@
 // The tabs under the chart: recent trades, the holder ledger, top traders, Fomo's known holders (FomoTabs.tsx),
 // every thesis from pump.fun and Fomo (Theses.tsx), the dev's coins, the AI read and the safety check. Your position is in the right column.
+import { AiGate } from "../AiPicks";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { tokN, usdK, type CoinData, type TokenDetail, type Trades } from "@/lib/coin";
 import { ageStr } from "@/lib/format";
@@ -9,12 +10,11 @@ import { useReplay } from "@/lib/replay";
 import { cn, store } from "@/lib/utils";
 import { KnownHolders, type CoinFomo } from "./FomoTabs";
 import { AllTheses } from "./Theses";
-import { BubbleMapTab } from "./BubbleMap";
 import { Empty, SolAmt, Who } from "./parts";
 import { AiView, DevView, HoldersView, SafetyView, TradersView } from "./tabviews";
 
-type TabKey = "trades" | "holders" | "traders" | "known" | "theses" | "bubbles" | "dev" | "ai" | "safety";
-const TABS: [TabKey, string][] = [["known", "Known holders"], ["trades", "Trades"], ["holders", "Holders"], ["traders", "Top traders"], ["theses", "Theses"], ["bubbles", "Bubble map"], ["dev", "Dev tokens"], ["ai", "AI read"], ["safety", "Safety"]];
+type TabKey = "trades" | "holders" | "traders" | "known" | "theses" | "dev" | "ai" | "safety";
+const TABS: [TabKey, string][] = [["known", "Known holders"], ["trades", "Trades"], ["holders", "Holders"], ["traders", "Top traders"], ["theses", "Theses"], ["dev", "Dev tokens"], ["ai", "AI read"], ["safety", "Safety"]];
 type Filter = "all" | "dev" | "sniper" | "bundle" | "top10" | "followed" | "big";
 const FILTERS: [Filter, string][] = [["all", "All"], ["dev", "Dev"], ["sniper", "Snipers"], ["bundle", "Bundles"], ["top10", "Top 10"], ["followed", "Followed"], ["big", "≥ 1 SOL"]];
 
@@ -23,10 +23,13 @@ const td = "whitespace-nowrap border-b border-rule/70 px-3 py-1.5 text-ink-2";
 
 // `sideTrades`: the trades are beside the chart (SideTrades), so the Trades tab is left out here.
 export function CoinTabs({ mint, r, c, trades, onPaper, sideTrades = false, end }: { mint: string; r: TokenDetail; c: CoinData | null; trades: Trades | null; onPaper: () => void; sideTrades?: boolean; end?: ReactNode }) {
-  // Known holders first, and every coin opens on it (the user, 2026-10-10); another pick lasts while the page is open.
-  const [picked, setTabState] = useState<TabKey>("known");
+  // A coin opens on Known holders when Fomo knows any of its holders, else on Holders (the user, 2026-10-10): Holders
+  // while Fomo's answer is on its way, Known holders the moment it has some. Known holders, once shown, stays. A tab
+  // someone picks lasts while this coin is open.
+  const [pick, setTabState] = useState<{ mint: string; tab: TabKey } | null>(null);
+  const auto = useRef<{ mint: string; known: boolean }>({ mint, known: false });
+  if (auto.current.mint !== mint) auto.current = { mint, known: false };
   const tabs = sideTrades ? TABS.filter(([k]) => k !== "trades") : TABS;
-  const tab: TabKey = sideTrades && picked === "trades" ? "holders" : picked;
   // Fomo's known holders and theses, for the two tabs and their counts (read through Aside, kept 3 min).
   const [fomoMs, setFomoMs] = useState(1500);
   const fomoPoll = usePoll<CoinFomo>(`coin/${mint}/fomo`, fomoMs), fomo = fomoPoll.data;
@@ -41,7 +44,10 @@ export function CoinTabs({ mint, r, c, trades, onPaper, sideTrades = false, end 
   const replayEpoch = useReplay((st) => (st.mint === mint ? st.epoch : 0));
   const replayRev = useReplay((st) => (st.mint === mint ? st.rev : 0));
   useEffect(() => { if (replayEpoch) { fomoPoll.refresh(); calloutsPoll.refresh(); } }, [replayEpoch, replayRev]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const setTab = (t: TabKey) => setTabState(t);
+  const setTab = (t: TabKey) => setTabState({ mint, tab: t });
+  if ((fomo?.holders?.length || fomo?.totalHolders || 0) > 0) auto.current.known = true;
+  const picked: TabKey = pick?.mint === mint ? pick.tab : auto.current.known ? "known" : "holders";
+  const tab: TabKey = sideTrades && picked === "trades" ? "holders" : picked;
   // The last answer that had rows, per coin: an answer caught between sources (an empty list for a moment) never
   // blanks a tab that was showing them.
   const kept = useRef<{ mint: string; h: CoinData | null; t: CoinData | null }>({ mint, h: null, t: null });
@@ -74,10 +80,9 @@ export function CoinTabs({ mint, r, c, trades, onPaper, sideTrades = false, end 
         {tab === "traders" && (tc ? <TradersView c={tc} /> : replayEpoch && c ? finding : <Ghost />)}
         {tab === "known" && <KnownHolders f={fomo} mint={mint} mc={c?.mcUsd ?? r.token?.mcap ?? null} supply={c?.supply ?? null} />}
         {tab === "theses" && <AllTheses mint={mint} f={fomo} />}
-        {tab === "bubbles" && <BubbleMapTab mint={mint} />}
         {tab === "dev" && (c?.dev ? <DevView mint={mint} c={c} /> : c ? <Empty title="Dev unknown" text="Neither Blix nor Jupiter knows who created this coin." /> : <Ghost />)}
-        {tab === "ai" && <AiView mint={mint} r={r} onRead={onPaper} />}
-        {tab === "safety" && <SafetyView r={r} c={c} />}
+        {tab === "ai" && <AiGate><AiView mint={mint} r={r} onRead={onPaper} /></AiGate>}
+        {tab === "safety" && <SafetyView r={r} c={c} withMap={!sideTrades} />}
       </div>
     </div>
   );
@@ -121,7 +126,7 @@ export function SideTrades({ trades }: { trades: Trades | null }) {
   const flow = buy + sell, buyPct = flow ? Math.round((buy / flow) * 100) : 50;
   const big = Math.max(1, ...shown.map((x) => x.usd || 0));
   return (
-    <div className="relative w-[340px] shrink-0 bg-paper-2/40 max-2xl:w-[310px]">
+    <div className="relative w-[340px] shrink-0 bg-paper-2/40 max-2xl:w-[290px] max-xl:w-[264px]">
       <div className="absolute inset-0 flex flex-col">
         <div className="flex flex-col gap-3 px-3.5 pt-3 pb-3">
           <div className="flex items-center justify-between gap-2">

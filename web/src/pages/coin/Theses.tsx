@@ -67,7 +67,7 @@ export function AllTheses({ mint, f }: { mint: string; f: CoinFomo | null }) {
   const fresh = useArrivals(all.map((x) => x.id));
   // Nothing in hand yet from either site: the list's outline, no words.
   const waiting = !pc?.items && !(f?.error && !f.read) && (!f || f.loading || !f.read);
-  const fomoNote = f?.signedOut ? "Fomo's theses need Aside signed in to fomo.family." : f?.error && !f.read ? "Fomo isn't answering right now; its theses show here when it does." : null;
+  const fomoNote: string | null = null; // no outside-site prompts or Fomo outage notes (the user's rule)
 
   // The room at a glance: how pump.fun's calls are doing at the live market cap, the best one, who still holds.
   const calls = [...pump, ...fomo].map((x) => sinceCall(x, mcNow)).filter((m): m is number => m != null && isFinite(m) && m > 0);

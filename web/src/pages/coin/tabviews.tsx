@@ -16,6 +16,8 @@ import { rowLink, useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { Empty, SolAmt, Tags } from "./parts";
+import { SafetyConnections } from "./BubbleMap";
+import { Dot, Gauge, Row, Sheet, Tally, TONE_VAR, type STone } from "./safetyKit";
 
 // ---------- the kit ----------
 const hueOf = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h % 360; };
@@ -421,22 +423,11 @@ export function AiView({ mint, r, onRead }: { mint: string; r: TokenDetail; onRe
 // ---------- Safety ----------
 // Two separate answers, never mixed up: Blix's policy (pass / fail, with its reasons: what the bot trades by) and the
 // safety score (0-100, 100 = clean, built from RugCheck's report). Then every check, grouped (the contract, who holds
-// it, the dev and the trading), each with what its number means, then RugCheck's own warnings.
+// it, the dev and the trading), each with what its number means, then RugCheck's own warnings. Drawn with safetyKit.tsx.
 type Tone = "up" | "warn" | "down" | "muted";
 type Check = { name: string; value: string; tone: Tone; note?: string; group: "Contract" | "Holders" | "Dev & trading" };
 const level = (ok: boolean, watch: boolean): Tone => (ok ? "up" : watch ? "warn" : "down");
-const TONE_TEXT: Record<Tone, string> = { up: "text-ink", warn: "text-warn", down: "text-down", muted: "text-ink-2" };
-function Mark({ tone, className }: { tone: Tone; className?: string }) {
-  const cls = tone === "up" ? "bg-up/15 text-up" : tone === "warn" ? "bg-warn/15 text-warn" : tone === "down" ? "bg-down/15 text-down" : "bg-paper-4 text-muted";
-  return (
-    <span aria-hidden className={cn("grid size-5 shrink-0 place-items-center rounded-full", cls, className)}>
-      <svg viewBox="0 0 12 12" className="size-2.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        {tone === "up" ? <path d="m2.5 6.2 2.3 2.3 4.7-5" /> : tone === "warn" ? <path d="M6 2.5v4M6 9.3v.2" /> : tone === "down" ? <path d="m3 3 6 6M9 3 3 9" /> : <path d="M3 6h6" />}
-      </svg>
-    </span>
-  );
-}
-export function SafetyView({ r, c }: { r: TokenDetail; c: CoinData | null }) {
+export function SafetyView({ r, c, withMap = true }: { r: TokenDetail; c: CoinData | null; withMap?: boolean }) {
   const t = r.token, s = t.safety, v = r.verdict, a = c?.audit, info = c?.info;
   const read = t.safety_checked ? Date.now() - t.safety_checked : null;
   const early = Boolean(t.graduated) && read != null && read > 3 * 60_000 && (!t.pair_created || t.safety_checked! - t.pair_created < 15 * 60_000);
@@ -467,76 +458,57 @@ export function SafetyView({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   if (a?.organic) checks.push({ group: "Dev & trading", name: "Organic trading", value: a.organic[0].toUpperCase() + a.organic.slice(1), tone: a.organic === "high" ? "up" : a.organic === "medium" ? "warn" : "down", note: a.organic === "high" ? "Mostly real traders" : a.organic === "medium" ? "A mix of real traders and bots" : "Mostly bots and wash trading" });
   const fine = checks.filter((k) => k.tone === "up").length, watch = checks.filter((k) => k.tone === "warn").length, bad = checks.filter((k) => k.tone === "down").length;
   const ring = score == null ? null : Math.max(0, Math.min(100, score));
-  const scoreTone = ring == null ? "var(--color-muted)" : ring >= 70 ? "var(--color-up)" : ring >= 45 ? "var(--color-warn)" : "var(--color-down)";
   const state = !v ? null : v.ok ? "pass" : v.unknown ? "unknown" : "fail";
   const groups = (["Contract", "Holders", "Dev & trading"] as const).map((g) => [g, checks.filter((k) => k.group === g)] as const).filter(([, l]) => l.length);
+  // A share of supply gets a meter under its value.
+  const BAR: Record<string, number | null | undefined> = { "Liquidity locked": lp, "Top 10 holders": top10, "Dev holds": info?.devPct, Insiders: info?.insiders, Snipers: info?.snipers?.pct, "Bundles still held": bh, "Bot holders": a?.botHoldersPercentage };
+  const verdictTone: STone = state === "pass" ? "up" : state === "fail" ? "down" : "muted";
   return (
     <div className="flex flex-col">
-      <div className="flex flex-wrap items-stretch gap-3 border-b border-rule p-4">
-        {/* Blix's policy: what the bot itself would do. */}
-        <div className={cn("flex min-w-0 flex-1 items-start gap-3 rounded-card border p-4", state === "pass" ? "border-up/25 bg-up/[0.05]" : state === "fail" ? "border-down/25 bg-down/[0.05]" : "border-rule bg-paper")}>
-          <span className={cn("grid size-10 shrink-0 place-items-center rounded-full", state === "pass" ? "bg-up/15 text-up" : state === "fail" ? "bg-down/15 text-down" : "bg-paper-4 text-muted")}>
-            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.9 7.5-9.5V6L12 3Z" />{state === "pass" ? <path d="m8.8 12 2.2 2.2 4.2-4.4" /> : state === "fail" ? <path d="m9.5 9.5 5 5m0-5-5 5" /> : <path d="M12 8.5v4M12 15.5v.2" />}
-            </svg>
-          </span>
-          <div className="min-w-0">
-            <span className="text-2xs font-semibold tracking-[0.06em] text-muted uppercase">Blix's safety policy</span>
-            <b className={cn("block text-lg leading-tight font-semibold", state === "pass" ? "text-up" : state === "fail" ? "text-down" : "text-ink")}>{!state ? "Not judged yet" : state === "pass" ? "Passes" : state === "unknown" ? "Not checked yet" : "Fails"}</b>
-            {v?.reasons?.length ? <ul className="mt-1.5 flex flex-col gap-0.5">{v.reasons.map((x) => <li key={x} className="flex gap-1.5 text-sm text-ink-2"><span className="text-down">•</span>{x[0].toUpperCase() + x.slice(1)}</li>)}</ul>
-              : <p className="mt-1 text-sm text-muted">{state === "pass" ? "Clear on every rule the bot trades by." : "Blix judges a coin once it has real trading."}</p>}
+      {/* The score, and Blix's own verdict beside it: what the bot itself would do, and why. */}
+      <div className="flex animate-safety-in items-center gap-6 border-b border-rule px-5 py-5 motion-reduce:animate-none max-sm:flex-col max-sm:items-start max-sm:gap-4">
+        <span className="flex shrink-0 flex-col items-center gap-2" title="Safety score out of 100: 100 is clean">
+          <Gauge score={ring} />
+          <span className="text-2xs font-medium text-muted">Safety score</span>
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted">Blix's safety policy</span>
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <b className="text-2xl leading-none font-semibold tracking-tight" style={{ color: state === "pass" || state === "fail" ? TONE_VAR[verdictTone] : undefined }}>
+                {!state ? "Not judged yet" : state === "pass" ? "Passes" : state === "unknown" ? "Not checked yet" : "Fails"}
+              </b>
+            </span>
           </div>
-        </div>
-        {/* The score, and how the checks below came out. */}
-        <div className="flex items-center gap-4 rounded-card border border-rule bg-paper p-4 max-sm:w-full">
-          <span className="relative grid size-16 shrink-0 place-items-center rounded-full" style={{ background: ring == null ? "var(--color-paper-4)" : `conic-gradient(${scoreTone} ${ring * 3.6}deg, var(--color-paper-4) 0)` }}>
-            <span className="grid size-[54px] place-items-center rounded-full bg-paper"><b className="num text-xl font-bold" style={{ color: scoreTone }}>{ring ?? "—"}</b></span>
-          </span>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-2xs font-semibold tracking-[0.06em] text-muted uppercase">Safety score</span>
-            <span className="text-xs text-muted">out of 100 · 100 is clean</span>
-            {checks.length > 0 && <span className="num flex gap-1.5 text-xs font-semibold">
-              <span className="rounded-full bg-up/12 px-2 py-0.5 text-up">{fine} fine</span>
-              {watch > 0 && <span className="rounded-full bg-warn/12 px-2 py-0.5 text-warn">{watch} watch</span>}
-              {bad > 0 && <span className="rounded-full bg-down/12 px-2 py-0.5 text-down">{bad} bad</span>}
-            </span>}
-          </div>
+          {v?.reasons?.length ? (
+            <ul className="flex flex-col gap-1">
+              {v.reasons.map((x, i) => (
+                <li key={x} className="flex animate-safety-in items-center gap-2 text-sm text-ink-2 motion-reduce:animate-none" style={{ animationDelay: `${120 + i * 60}ms` }}>
+                  <Dot tone="down" />{x[0].toUpperCase() + x.slice(1)}
+                </li>))}
+            </ul>
+          ) : <p className="text-sm text-muted">{state === "pass" ? "Clear on every rule the bot trades by." : "Blix judges a coin once it has real trading."}</p>}
+          <Tally fine={fine} watch={watch} bad={bad} />
         </div>
       </div>
 
-      {groups.map(([g, list]) => (
-        <section key={g} className="border-b border-rule px-4 py-3.5">
-          <h4 className="mb-2.5 text-2xs font-semibold tracking-[0.06em] text-muted uppercase">{g}</h4>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-2">
-            {list.map((k) => (
-              <div key={k.name} className={cn("flex items-start gap-2.5 rounded-control border px-3 py-2.5", k.tone === "down" ? "border-down/20 bg-down/[0.04]" : k.tone === "warn" ? "border-warn/20 bg-warn/[0.04]" : "border-rule bg-paper")}>
-                <Mark tone={k.tone} className="mt-0.5" />
-                <div className="min-w-0">
-                  <span className="block text-xs text-muted">{k.name}</span>
-                  <b className={cn("num block text-md leading-snug font-semibold", TONE_TEXT[k.tone])}>{k.value}</b>
-                  {k.note && <span className="block text-xs leading-snug text-muted">{k.note}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+      {groups.map(([g, list], gi) => (
+        <Sheet key={g} title={g} index={gi + 1}>
+          {list.map((k, i) => <Row key={k.name} name={k.name} value={k.value} tone={k.tone} note={k.note} bar={BAR[k.name]} i={i} />)}
+        </Sheet>
       ))}
-      {!checks.length && <p className="border-b border-rule px-4 py-6 text-center text-md text-muted">No checks in yet. They fill in once the coin has real trading.</p>}
+      {!checks.length && <p className="border-b border-rule px-4 py-8 text-center text-md text-muted">No checks in yet. They fill in once the coin has real trading.</p>}
+      <SafetyConnections mint={t.mint} withMap={withMap} />
 
       {s?.risks?.length ? (
-        <section className="border-b border-rule px-4 py-3.5">
-          <h4 className="mb-2.5 text-2xs font-semibold tracking-[0.06em] text-muted uppercase">RugCheck's warnings</h4>
-          <div className="flex flex-col gap-2">
-            {s.risks.map((x, i) => (
-              <div key={i} className="flex items-start gap-2.5 text-md">
-                <Mark tone={x.level === "danger" ? "down" : x.level === "warn" ? "warn" : "muted"} className="mt-0.5" />
-                <div><b className="font-semibold text-ink">{x.name}</b>{x.value && <span className="text-muted"> · {x.value}</span>}{x.description && <small className="block text-sm text-muted">{x.description}</small>}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : s ? <p className="flex items-center gap-2.5 border-b border-rule px-4 py-3 text-md text-ink-2"><Mark tone="up" />RugCheck found no risks.</p> : null}
-      <p className="px-4 py-2.5 text-xs text-muted">
+        <Sheet title="RugCheck's warnings" extra={`${s.risks.length}`} index={groups.length + 2}>
+          {s.risks.map((x, i) => (
+            <Row key={i} i={i} name={x.name} tone={x.level === "danger" ? "down" : x.level === "warn" ? "warn" : "muted"}
+              value={x.value || (x.level === "danger" ? "Danger" : x.level === "warn" ? "Warning" : "Note")} note={x.description} />
+          ))}
+        </Sheet>
+      ) : s ? <p className="flex items-center gap-2.5 border-b border-rule px-4 py-3.5 text-sm text-ink-2"><Dot tone="up" />RugCheck found no risks.</p> : null}
+      <p className="px-4 py-3 text-xs text-muted">
         {s ? `RugCheck read it ${read != null ? `${ageStr(read)} ago` : "at an unknown time"}` : "RugCheck hasn't checked it yet (Blix asks once a coin shows real trading)"}{a ? " · Jupiter's audit" : ""}{info?.source ? ` · live figures from ${info.source}` : ""}.
         {early && <span className="block text-warn">RugCheck read it in its first minutes in the pool; holder figures move a lot right after bonding, so the live ones above are used.</span>}
       </p>

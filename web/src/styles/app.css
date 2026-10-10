@@ -6,6 +6,10 @@
 
 @keyframes chat-arrival { from { background-color: color-mix(in oklab, var(--color-up) 9%, transparent); } to { background-color: transparent; } }
 @keyframes welcome-in { from { opacity: 0; transform: translateY(6px) scale(0.94); } }
+@keyframes tip-in { from { opacity: 0; transform: translateY(2px) scale(0.97); } }
+/* No stepper arrows on number boxes anywhere: amounts are typed. */
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .chat-arrival { animation: chat-arrival 600ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .chat-arrival { animation: none; } }
 
@@ -81,6 +85,9 @@
   --animate-flash-up: flash-up 650ms var(--ease-out);
   --animate-flash-down: flash-down 650ms var(--ease-out);
   --animate-row-in: row-in 420ms var(--ease-out);
+  /* The coin's Safety tab (coin/safetyKit.tsx): rows settle in one after another, meters grow from the left. */
+  --animate-safety-in: safety-in 460ms var(--ease-out) both;
+  --animate-meter-in: meter-in 900ms var(--ease-out) both;
   /* Placeholder shapes while a list loads (Pulse columns): a soft light passing over them. */
   --animate-shimmer: shimmer 1.8s ease-in-out infinite;
   /* A new post on the Feed: opens from nothing to its height while it fades and settles in, then its highlight
@@ -124,6 +131,8 @@
 @keyframes flash-up { from { color: var(--color-up); background-color: color-mix(in oklch, var(--color-up) 22%, transparent); } }
   @keyframes flash-down { from { color: var(--color-down); background-color: color-mix(in oklch, var(--color-down) 22%, transparent); } }
   @keyframes row-in { from { opacity: 0; transform: translateY(-6px); } }
+  @keyframes safety-in { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes meter-in { from { transform: scaleX(0); } }
   @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
   @keyframes post-in { from { grid-template-rows: 0fr; opacity: 0; transform: translateY(-10px); } 55% { grid-template-rows: 1fr; opacity: 0.6; } to { grid-template-rows: 1fr; opacity: 1; transform: none; } }
   @keyframes post-glow { from { background-color: color-mix(in oklch, var(--color-info) 16%, transparent); box-shadow: inset 3px 0 0 var(--color-info); } to { background-color: transparent; box-shadow: inset 3px 0 0 transparent; } }

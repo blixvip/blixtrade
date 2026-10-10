@@ -410,7 +410,7 @@ export function Feed() {
         </div>
         <div className="divide-y divide-rule/70">
         {!groups.length ? <Empty>Pick something in Filter to see the feed.</Empty>
-          : d?.signedOut ? <Empty>Aside is signed out of Fomo. Sign in at fomo.family in Aside and the feed fills in.</Empty>
+          : d?.signedOut ? <Empty>Nothing here right now. The feed fills in by itself.</Empty>
           : items ? (items.length ? items.map((it) => fresh.has(it.id) ? <div key={it.id} className="grid animate-post-in"><div className="min-h-0 overflow-hidden"><Row it={it} /></div></div> : <Row key={it.id} it={it} />) : <Empty>Nothing on Fomo's feed for this filter right now.</Empty>)
           : error ? <div className="p-3"><Problem text={error} /></div>
           : d?.error ? <div className="p-3"><Problem text={d.error} /></div>

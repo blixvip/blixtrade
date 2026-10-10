@@ -14,15 +14,25 @@
 // Two top holders are in one cluster when any chain of these links joins them; the lines drawn are the
 // shortest such chains (a spanning tree, so a cluster of n has n-1 lines), marked with how many wallets sit
 // between them.
+//
+// Who a bubble is: a Fomo trader (Fomo's holder list for the coin: the wallet Blix verified for that trader, else
+// the one holder whose balance equals the trader's token amount exactly) or a pump.fun profile. Fomo traders
+// below the top 100 still get a bubble (up to EXTRA of them), so every Fomo holder Blix can place is on the map.
 import { db } from "./db.js";
 import { rpc, validAddress } from "./solana.js";
 import { coinPage } from "./coin.js";
-import { activeUrl, noteCall } from "./heliuskeys.js";
+import { activeUrl, keyUrls, noteCall } from "./heliuskeys.js";
 import { getJson } from "./sources.js";
+import { coinFomo } from "./fomoboard.js";
+import { pumpPeople } from "./chartpeople.js";
+import { books } from "./holders.js";
+import { holdersLive, onCurve } from "./holderslive.js";
 
 const now = () => Date.now();
 const MIN = 60_000;
 const TOP = 100;                // holders on the map
+const READ = 300;               // holders read, to place Fomo traders below the top 100
+const EXTRA = 40;               // Fomo traders below the top 100 added to the map
 const TRACE_TOP = 50;           // holders whose funder Blix traces itself
 const PAGES = 3;                // signature pages (1,000 each) walked back to find a wallet's first transaction
 const RC_TTL = 3 * MIN;         // RugCheck networks read again after this, while the tab is open
@@ -40,6 +50,10 @@ const EXCHANGES = new Map([
 // First funders, kept for good ("" = traced, nothing usable: history too long or self-funded).
 db.exec("CREATE TABLE IF NOT EXISTS bubble_funders (wallet TEXT PRIMARY KEY, funder TEXT NOT NULL, t INTEGER NOT NULL)");
 const getF = db.prepare("SELECT funder FROM bubble_funders WHERE wallet = ?");
+// How many traced wallets a funder opened, all coins together: a wallet that funds strangers by the dozen is a
+// service (an exchange or bridge Blix has no name for), and sharing it says nothing about who owns a wallet.
+const fundedN = db.prepare("SELECT count(*) AS n FROM bubble_funders WHERE funder = ?");
+const HUB = 8;
 const putF = db.prepare("INSERT OR REPLACE INTO bubble_funders (wallet, funder, t) VALUES (?, ?, ?)");
 
 export const bubbleStats = { reads: 0, rugcheck: { ok: 0, failed: 0, lastError: null }, traced: 0, day: "", today: 0, lastError: null };
@@ -138,18 +152,45 @@ function traceNew(mint, wallets) {
 }
 
 // The map, as the tab draws it.
+// The last map each coin drew, kept 20 minutes: a read that comes back without holders for a moment (a
+// snapshot being rebuilt, a slow RPC) answers the last good map, marked stale, instead of a loading screen.
+const lastGood = new Map();
 export function bubbleMap(mint) {
+  const a = buildMap(mint);
+  if (a.nodes) { lastGood.set(mint, a); if (lastGood.size > 300) lastGood.delete(lastGood.keys().next().value); return a; }
+  const g = lastGood.get(mint);
+  return g && now() - g.t < 20 * MIN ? { ...g, stale: true } : a;
+}
+
+function buildMap(mint) {
   if (!validAddress(mint)) return { error: "Not a coin address." };
   bubbleStats.reads++;
-  const page = coinPage(mint, { top: TOP });
-  const all = (page?.holders?.list || []).filter((h) => h.pct > 0 && validAddress(h.wallet)).slice(0, TOP);
+  const page = coinPage(mint, { top: READ });
+  let read = (page?.holders?.list || []).filter((h) => h.pct > 0 && validAddress(h.wallet));
+  // No holder list yet (a big bonded coin whose full snapshot has not landed, or cannot while the Helius keys
+  // rest): the chain's 20 largest accounts stand in, so the map draws at once.
+  let fallback = null;
+  if (read.length < 3) { fallback = largestHolders(mint); if (fallback.list?.length > read.length) read = fallback.list; }
+  const fomo = fomoPeople(mint, read);
+  // Fomo traders below the top 100 join as their own bubbles, from the read list or, deeper, from every balance.
+  const deeper = fomo.extra.filter((h) => !read.some((r) => r.wallet === h.wallet));
+  const all = [...read.slice(0, TOP), ...read.slice(TOP).filter((h) => fomo.byWallet.has(h.wallet)), ...deeper]
+    .filter((h, k, list) => k < TOP || fomo.byWallet.has(h.wallet)).slice(0, TOP + EXTRA);
   const r = rugNets(mint);
-  if (all.length < 3) return { mint, pending: true, rugcheck: { busy: r.busy } };
+  // Fewer than 3 holders is a real answer once the chain was read (a coin still all in its launch curve, say).
+  if (!all.length || (all.length < 3 && !fallback?.list)) return { mint, pending: true, rugcheck: { busy: r.busy }, holders: { listed: read.length, fallback: fallback && { busy: fallback.busy, n: fallback.list?.length ?? null, error: fallback.error } }, error: fallback?.error && !fallback.busy && now() - fallback.t < 60_000 && fallback.fails > 2 ? "Couldn't read this coin's holders from the chain. Trying again." : undefined };
   const pool = (h) => h.label === "Pool";
   const nodes = all.map((h) => ({
     w: h.wallet, pct: h.pct, tokens: h.tokens ?? null, tag: h.tag || null, label: h.label || null,
-    kind: pool(h) ? "pool" : EXCHANGES.has(h.wallet) ? "exchange" : "holder", cluster: null, funder: null,
+    kind: pool(h) ? "pool" : EXCHANGES.has(h.wallet) ? "exchange" : "holder", cluster: null, funder: null, rank: h.rank ?? read.indexOf(h) + 1, person: null,
   }));
+  const pump = pumpPeople(nodes.filter((n) => n.kind === "holder").map((n) => n.w));
+  for (const n of nodes) {
+    if (n.kind !== "holder") continue;
+    const f = fomo.byWallet.get(n.w), p = pump.get(n.w);
+    if (f) n.person = f;
+    else if (p) n.person = { src: "pump", name: p.name, handle: p.name, pic: p.pic || null, followers: p.followers || 0, link: `https://pump.fun/profile/${encodeURIComponent(p.name)}`, x: p.x || null, how: "wallet" };
+  }
   const tr = traceNew(mint, nodes.filter((n) => n.kind === "holder").slice(0, TRACE_TOP).map((n) => n.w));
 
   // One graph over every wallet the sources name. Edge kinds: "transfer" (RugCheck), "funded" (first funder),
@@ -171,12 +212,31 @@ export function bubbleMap(mint) {
     for (const l of net.links || []) edge(l.source, l.target, "transfer");
     rcWallets += (net.nodes || []).length;
   }
+  const localF = new Map();
+  for (const n of nodes) { const f = n.kind === "holder" ? funderOf(n.w) : null; if (f) localF.set(f, (localF.get(f) || 0) + 1); }
   for (const n of nodes) {
     if (n.kind !== "holder") continue;
     const f = funderOf(n.w);
     if (f === undefined) continue;
     n.funder = f || "";
-    if (f && !EXCHANGES.has(f)) edge(f, n.w, "funded");
+    if (!f || EXCHANGES.has(f)) continue;
+    // A hub: funded many wallets, most of them outside this coin's holders.
+    const total = fundedN.get(f)?.n ?? 0, here = localF.get(f) || 0;
+    if (total >= HUB && total > here * 2) { n.hub = total; continue; }
+    edge(f, n.w, "funded");
+  }
+  // Holders whose first buy of the coin landed in the same block (the coin's own trade ledger): a few wallets
+  // buying in one slot is how bundles look. A crowded slot (a hot coin's busy moment) proves nothing, so 2 to 6 only.
+  const book = books.get(mint);
+  if (book) {
+    const bySlot = new Map();
+    for (const n of nodes) {
+      if (n.kind !== "holder") continue;
+      const slot = book.bal.get(n.w)?.slot;
+      if (slot == null) continue;
+      const l = bySlot.get(slot) || []; l.push(n); bySlot.set(slot, l);
+    }
+    for (const l of bySlot.values()) if (l.length >= 2 && l.length <= 6) for (const n of l.slice(1)) edge(l[0].w, n.w, "block");
   }
   const launch = nodes.filter((n) => n.kind === "holder" && (n.tag === "dev" || n.tag === "bundle"));
   if (launch.length > 1) { const dev = launch.find((n) => n.tag === "dev") || launch[0]; for (const n of launch) if (n !== dev) edge(dev.w, n.w, "launch"); }
@@ -228,7 +288,7 @@ export function bubbleMap(mint) {
   clusters.forEach((c, k) => { for (const i of c.members) nodes[i].cluster = k; });
 
   const traced = nodes.filter((n) => n.funder != null).length;
-  const outNodes = nodes.map(({ funder, ...n }) => ({ ...n, via: funder && EXCHANGES.get(funder) || null, traced: funder != null, untraceable: funder === "" }));
+  const outNodes = nodes.map(({ funder, hub, ...n }) => ({ ...n, via: funder && EXCHANGES.get(funder) || (hub ? `a wallet that funded ${hub} others` : null), traced: funder != null, untraceable: funder === "" }));
   return {
     mint, t: now(),
     nodes: outNodes,
@@ -237,12 +297,93 @@ export function bubbleMap(mint) {
     // For a page loaded before 2026-10-10's rewrite (its tab drew `map` after a Generate button).
     map: { nodes: outNodes, links: links.map((l) => [l.a, l.b]), clusters, traced, t: now() }, building: null, rebuildMs: 30 * MIN,
     sources: {
-      holders: page?.info?.source || page?.holders?.source || null, holderCount: page?.info?.holders ?? page?.holders?.count ?? null,
+      fomo: { holders: fomo.total, placed: nodes.filter((n) => n.person?.src === "fomo").length, read: fomo.read },
+      people: nodes.filter((n) => n.person).length,
+      holders: fallback?.list && read === fallback.list ? "largest 20 (chain)" : page?.info?.source || page?.holders?.source || null, holderCount: page?.info?.holders ?? page?.holders?.count ?? null,
       rugcheck: { t: r.t || null, busy: r.busy, error: r.error, networks: (r.nets || []).length, wallets: rcWallets },
-      trace: { error: tr.failed ? bubbleStats.lastError : null, traced: nodes.filter((n) => n.kind === "holder").slice(0, TRACE_TOP).filter((n) => n.funder != null).length, of: Math.min(TRACE_TOP, nodes.filter((n) => n.kind === "holder").length), busy: tr.busy, done: tr.done, total: tr.total },
+      trace: { error: tr.failed ? bubbleStats.lastError : null, traced: nodes.filter((n) => n.kind === "holder").slice(0, TRACE_TOP).filter((n) => n.funder != null).length, of: Math.min(TRACE_TOP, nodes.filter((n) => n.kind === "holder").length), busy: tr.busy, done: tr.done, total: tr.total, resting: !activeUrl() },
     },
   };
 }
 
 // The old Generate button's POST: every read builds the map now, so it is the same read.
 export const makeBubbleMap = bubbleMap;
+
+// Fomo's traders in this coin, each placed on a holder wallet: the wallet Blix verified for the trader
+// (fomoresolve.js), else the one holder holding exactly the trader's token amount (to 0.2%). An amount two
+// holders share, or none does (the trader bought or sold since Fomo's read), places no one.
+function fomoPeople(mint, holders) {
+  const byWallet = new Map();
+  let f;
+  try { f = coinFomo(mint); } catch { return { byWallet, extra: [], total: 0, read: null }; }
+  const list = (f?.holders || []).filter((x) => x && x.handle);
+  // Every holder Blix can see: the coin's own ledger (curve coins) or the chain's live balances, else the read list.
+  const supply = holders.find((h) => h.pct > 0 && h.tokens > 0);
+  const per = supply ? supply.tokens / supply.pct : null;   // tokens per 1%
+  let free = holders.filter((h) => h.label !== "Pool" && !EXCHANGES.has(h.wallet));
+  const shown = new Set(holders.map((h) => h.wallet));
+  try {
+    const b = books.get(mint);
+    let more = b ? [...b.bal].filter(([, w]) => w.b > 0.5).map(([wallet, w]) => [wallet, w.b]) : null;
+    if (!more) { const live = holdersLive(mint, { n: 50_000 }); if (live?.top?.length) more = live.top; }
+    if (more && per) for (const [wallet, tokens] of more) if (!shown.has(wallet) && !EXCHANGES.has(wallet)) free.push({ wallet, tokens: Math.round(tokens), pct: +(tokens / per).toFixed(4), tag: null, label: null, deep: true });
+  } catch {}
+  for (const x of list) {
+    let w = x.wallet && free.some((h) => h.wallet === x.wallet) ? x.wallet : null, how = "wallet";
+    if (!w && x.amount > 0) {
+      const tol = Math.max(x.amount * 0.002, 2);
+      const hits = free.filter((h) => h.tokens != null && Math.abs(h.tokens - x.amount) <= tol && !byWallet.has(h.wallet));
+      if (hits.length === 1) { w = hits[0].wallet; how = "amount"; }
+    }
+    if (!w || byWallet.has(w)) continue;
+    byWallet.set(w, {
+      src: "fomo", name: x.name || x.handle, handle: x.handle, pic: x.pic || null, followers: x.followers || 0, verified: Boolean(x.verified),
+      link: `https://fomo.family/profile/${encodeURIComponent(x.handle)}`, how, usd: x.value ?? null, pnl: x.pnl ?? null, dev: Boolean(x.dev), thesis: x.thesis?.text || null,
+    });
+  }
+  const extra = free.filter((h) => h.deep && byWallet.has(h.wallet)).map(({ deep, ...h }) => ({ ...h, rank: 1 + free.filter((x) => x.tokens > h.tokens).length + holders.filter((x) => x.label === "Pool" || EXCHANGES.has(x.wallet)).filter((x) => x.tokens > h.tokens).length }));
+  return { byWallet, extra, total: f?.totalHolders ?? list.length, read: f?.heldAt ?? f?.read ?? null };
+}
+
+// The 20 largest token accounts of a coin, by owner (two cheap RPC calls, any endpoint): getTokenLargestAccounts,
+// then the accounts' owners. An owner that is not a wallet (off the ed25519 curve: a program's PDA) is a pool or
+// a program vault, labelled Pool. Read at most once a minute per coin.
+const largest = new Map();   // mint -> { t, busy, list, error, fails, seen }
+function largestHolders(mint) {
+  let e = largest.get(mint);
+  if (!e) { e = { t: 0, busy: false, list: null, error: null, fails: 0 }; largest.set(mint, e); }
+  e.seen = now();
+  if (!e.busy && now() - e.t > (e.list ? MIN : 15_000)) {
+    e.busy = true;
+    (async () => {
+      const [big, sup] = await Promise.all([small("getTokenLargestAccounts", [mint, { commitment: "confirmed" }]), small("getTokenSupply", [mint])]);
+      const accs = (big?.value || []).filter((a) => +a.uiAmount > 0);
+      const total = +sup?.value?.uiAmount || 0;
+      if (!accs.length || !total) throw new Error("no accounts");
+      const info = await small("getMultipleAccounts", [accs.map((a) => a.address), { encoding: "jsonParsed", commitment: "confirmed" }]);
+      const by = new Map();
+      accs.forEach((a, i) => { const o = info?.value?.[i]?.data?.parsed?.info?.owner; if (o) by.set(o, (by.get(o) || 0) + (+a.uiAmount || 0)); });
+      e.list = [...by].map(([wallet, tokens]) => ({ wallet, tokens: Math.round(tokens), pct: +((tokens / total) * 100).toFixed(3), tag: null, label: onCurve(wallet) ? null : "Pool" }))
+        .sort((a, b) => b.tokens - a.tokens);
+      e.error = null; e.fails = 0;
+    })().catch((err) => { e.error = err.message; e.fails++; }).finally(() => { e.t = now(); e.busy = false; });
+  }
+  if (largest.size > 300) for (const [k, v] of largest) if (!v.busy && now() - (v.seen || 0) > 30 * MIN) largest.delete(k);
+  return e;
+}
+
+// A small read for the holder fallback: on a Helius key even while its daily pacing rests (three 1-credit calls a
+// minute per open coin; the public endpoint answers 429 to getTokenLargestAccounts), else the public endpoint.
+// A 429 (the keys' 10 calls a second are shared with the chart stream) waits and tries the other key.
+async function small(method, params) {
+  const keys = [...new Set([activeUrl(), ...keyUrls()].filter(Boolean))].map((k) => k.replace(/^ws/i, "http"));
+  if (!keys.length) return rpc(method, params);
+  for (let tries = 0; tries < 6; tries++) {
+    const url = keys[tries % keys.length];
+    noteCall(url, method);
+    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(20_000) }).catch(() => null);
+    if (r?.ok) { const j = await r.json(); if (j.error) throw new Error(j.error.message || "RPC error"); return j.result; }
+    await new Promise((ok) => setTimeout(ok, 300 * 2 ** Math.min(tries, 4) + Math.random() * 300));
+  }
+  return rpc(method, params);
+}

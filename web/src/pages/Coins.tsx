@@ -296,12 +296,11 @@ export function Coins() {
             </button>
           </Tip>
           </>)}
-          <label className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper pr-1 pl-3 text-muted" title={paper ? "Quick buy spends paper SOL" : "Quick buy spends REAL SOL"}>
+          <label className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper pr-3 pl-3 text-muted" title="Select the amount you want to buy">
             <Icon.bolt className="size-3.5" /><span className="text-sm">Quick buy</span>
             <input type="number" min={0.001} step={0.05} value={sol} onChange={(e) => { const v = Math.max(0.001, +e.target.value || 0.1); setSol(v); store.set("discover:sol", v); }}
-              className="num w-14 bg-transparent text-right text-md font-semibold text-ink outline-none" aria-label="Quick buy amount in SOL" />
+              className="num w-14 [appearance:textfield] bg-transparent text-right text-md font-semibold text-ink outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" aria-label="Quick buy amount in SOL" />
             <SolanaLogo className="w-3.5" />
-            <span className={cn("rounded-full px-2 py-0.5 text-2xs font-bold uppercase", paper ? "bg-ink/10 text-ink-2" : "bg-down/15 text-down")}>{paper ? "Paper" : "Live"}</span>
           </label>
         </div>
       </div>

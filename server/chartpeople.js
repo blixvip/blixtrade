@@ -62,6 +62,16 @@ async function lookup(wallets) {
   }
 }
 
+// pump.fun profiles for a set of wallets (the bubble map's holders): the known ones at once; the never-asked
+// ones looked up in the background (one batch at a time, 300 wallets at most), so a later read has them.
+let peopleBusy = false;
+export function pumpPeople(wallets) {
+  const out = new Map(), ask = [];
+  for (const w of wallets) { const p = profile(w); if (p) { if (p.name) out.set(w, p); } else ask.push(w); }
+  if (ask.length && !peopleBusy) { peopleBusy = true; lookup(ask.slice(0, 300)).catch(() => {}).finally(() => { peopleBusy = false; }); }
+  return out;
+}
+
 async function refresh(mint, c) {
   c.busy = true;
   try {

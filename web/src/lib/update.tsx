@@ -3,6 +3,7 @@
 // old build again. Every minute (and when the tab comes back) the page asks which build is on the server
 // (GET /api/build, answered by the page server, webapp.js); when it differs from its own, a small bar offers the
 // update. Updating asks for the page until it is the new one, clears the service worker's kept copy, then reloads.
+// A page that opens on an old build updates itself straight away (below).
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Icon } from "@/shell/icons";
@@ -60,6 +61,13 @@ if (typeof window !== "undefined") {
   const host = document.createElement("div");
   document.body.appendChild(host);
   createRoot(host).render(<UpdateBar />);
+  // Opened on an old copy (the service worker or the edge drew the last visit's page): moved to the new build at
+  // once, before anyone starts using it, instead of waiting for the bar. Once per build per tab, so it never loops.
+  window.setTimeout(async () => {
+    await check();
+    const key = fresh && `blix:auto-update:${fresh}`;
+    if (key && !sessionStorage.getItem(key)) { sessionStorage.setItem(key, "1"); void update(); }
+  }, 1200);
   window.setTimeout(check, 15_000);
   window.setInterval(check, 60_000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void check(); });

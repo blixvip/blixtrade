@@ -17,6 +17,7 @@ import { QuickTrade } from "./coin/QuickTrade";
 import { setQuickCoin } from "@/lib/quick";
 import { Addresses, Flow, Info, Links, Position, TradePanel } from "./coin/Side";
 import { CoinTabs, SideTrades } from "./coin/Tabs";
+import { BubbleMapTab } from "./coin/BubbleMap";
 import { Empty } from "./coin/parts";
 import { ReplayBar } from "./coin/Replay";
 import { useReplay } from "@/lib/replay";
@@ -34,6 +35,10 @@ const ORDER: Record<string, [string, string]> = {
 // it arrives (index.html asks for it with the page, lib/coin.ts on hover). The space it takes is held meanwhile.
 const CoinChart = lazy(() => import("./coin/Chart").then((m) => ({ default: m.CoinChart })));
 const ChartSpace = () => <div className="flex flex-col gap-1.5 p-2.5" aria-hidden><div className="h-7" /><div className="h-[clamp(340px,52vh,760px)]" /></div>;
+
+// The three-column page (chart | live trades and bubble map | trade panel) from this content width: every PC
+// screen from 1366 px wide (and 1920 px at 125% scaling) gets it, the columns narrowing on smaller screens.
+const WIDE = 1100;
 
 const MIGRATE_MC_SOL = 410.9;   // pump.fun market cap at migration, in SOL (see the levels below)
 
@@ -102,9 +107,27 @@ export function Coin({ mint }: { mint: string }) {
   const mainRef = useCallback((el: HTMLElement | null) => {
     ro.current?.disconnect(); ro.current = null;
     if (!el) return;
-    ro.current = new ResizeObserver(([e]) => setWide(e.contentRect.width >= 1410));
+    ro.current = new ResizeObserver(([e]) => setWide(e.contentRect.width >= WIDE));
     ro.current.observe(el);
   }, []);
+  // The wide trade list runs from the top of the page down to the line under the tab bar (Known holders …
+  // Instant Trade), not to the foot of the tall trade column: measured, as that bar moves with the chart.
+  const tabsRef = useRef<HTMLElement>(null), tradesRef = useRef<HTMLDivElement>(null);
+  const [tradesH, setTradesH] = useState<number | undefined>();
+  useEffect(() => {
+    const sec = tabsRef.current, tr = tradesRef.current;
+    if (!wide || !sec || !tr) return;
+    const fit = () => {
+      const bar = sec.querySelector('[role="tablist"]')?.parentElement;
+      if (bar) setTradesH(Math.round(bar.getBoundingClientRect().bottom - tr.getBoundingClientRect().top));
+    };
+    const obs = new ResizeObserver(fit);
+    // Every other box in the grid: the tall trade column fixes the grid's height, so the chart growing moves the bar without resizing it.
+    const col = tr.parentElement;
+    for (const el of Array.from(col?.parentElement?.children || [])) if (el !== col) obs.observe(el);
+    fit();
+    return () => obs.disconnect();
+  }, [wide, !!token.data?.token]);
 
   // Every tagged trade becomes a chart icon: the server's ring of them (from before the page opened) plus
   // each one seen in the trade list while it is open (bonded coins' pool trades too). Kept, not just the last 150.
@@ -145,7 +168,7 @@ export function Coin({ mint }: { mint: string }) {
   }
   if (!r) {
     return token.error
-      ? <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><div><EmptyState icon="search" title="Couldn't load this coin" hint="Blix hasn’t indexed this token yet, or its market data is unavailable." action={{ label: location.hash.endsWith('/feed') ? "Back to Feed" : "Go back", onClick: () => { if (location.hash.endsWith('/feed')) location.hash = '#/feed'; else if (history.length > 1) history.back(); else location.hash = '#/coins'; } }} /><a href={`https://pump.fun/coin/${encodeURIComponent(mint)}`} target="_blank" rel="noopener noreferrer" className="mt-4 block text-center text-info underline">Open source page on pump.fun</a><button onClick={token.refresh} className="mx-auto mt-3 block text-sm text-muted hover:text-ink">Try again</button></div></div>
+      ? <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><div><EmptyState icon="search" title="Couldn't load this coin" hint="Blix hasn’t indexed this token yet, or its market data is unavailable." action={{ label: location.hash.endsWith('/feed') ? "Back to Feed" : "Go back", onClick: () => { if (location.hash.endsWith('/feed')) location.hash = '#/feed'; else if (history.length > 1) history.back(); else location.hash = '#/coins'; } }} /><button onClick={token.refresh} className="mx-auto mt-3 block text-sm text-muted hover:text-ink">Try again</button></div></div>
       : <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><BrandLoader label="Loading coin" /></div>;
   }
   const c = coin.data;
@@ -171,8 +194,9 @@ export function Coin({ mint }: { mint: string }) {
 
   return (
     <div className="flex min-w-0 flex-col p-3 max-md:pb-20">
-      {/* The header, chart and tabs on the left; the live trades (wide) run down beside both, the trade column from the top of the page. */}
-      <div ref={mainRef} className={cn("grid items-start gap-2.5 lg:grid-rows-[auto_1fr] grid-cols-[minmax(0,1fr)_340px] max-xl:grid-cols-[minmax(0,1fr)_300px] max-lg:grid-cols-1", wide && "grid-cols-[minmax(0,1fr)_auto_340px]")}>
+      {/* The header, chart and tabs on the left; the live trades (wide) run down to the tab bar with the coin's live
+          bubble map under them, filling the rest of that column; the trade column from the top of the page. */}
+      <div ref={mainRef} className={cn("grid items-start gap-2.5 lg:grid-rows-[auto_1fr] grid-cols-[minmax(0,1fr)_340px] max-xl:grid-cols-[minmax(0,1fr)_300px] max-lg:grid-cols-1", wide && "grid-cols-[minmax(0,1fr)_340px_340px] max-2xl:grid-cols-[minmax(0,1fr)_290px_310px] max-xl:grid-cols-[minmax(0,1fr)_264px_290px]")}>
         <div className="flex min-w-0 flex-col gap-2.5 lg:col-start-1 lg:row-start-1">
           <CoinHeader r={r} c={c} sizes={sizes} onPaper={refresh} />
           {warn.map(([bad, text]) => <p key={text} className={bad ? "rounded-control border border-down/50 bg-down/10 px-3 py-2 text-sm text-ink-2" : "rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-sm text-ink-2"}>{text}</p>)}
@@ -181,8 +205,14 @@ export function Coin({ mint }: { mint: string }) {
             <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
           </section>
         </div>
-        {wide && <div className="surface col-start-2 row-span-2 row-start-1 flex self-stretch overflow-hidden [&>div]:border-l-0"><SideTrades trades={trades.data} /></div>}
-        <section className="surface min-w-0 overflow-hidden lg:col-start-1 lg:row-start-2">
+        {wide && (
+          <div className="col-start-2 row-span-2 row-start-1 flex min-h-0 min-w-0 flex-col gap-2.5 self-stretch">
+            <div ref={tradesRef} style={{ height: tradesH }} className="surface flex shrink-0 overflow-hidden [&>div]:w-full [&>div]:border-l-0"><SideTrades trades={trades.data} /></div>
+            {/* A square as wide as the trades above it; it does not stretch down with the page. */}
+            <section aria-label="Bubble map" className="surface flex aspect-square w-full shrink-0 flex-col overflow-hidden"><BubbleMapTab mint={mint} compact /></section>
+          </div>
+        )}
+        <section ref={tabsRef} className="surface min-w-0 overflow-hidden lg:col-start-1 lg:row-start-2">
           <CoinTabs mint={mint} r={r} c={c} trades={trades.data} onPaper={refresh} sideTrades={wide} end={<InstantButton />} />
         </section>
         {/* The trade column scrolls on its own (screen height less the top bar, status bar and margins), so its lower
