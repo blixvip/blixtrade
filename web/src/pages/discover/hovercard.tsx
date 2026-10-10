@@ -1,7 +1,7 @@
 // The card that opens when the pointer rests on a Discover coin's pair cell, like Axiom's: the coin's
 // DexScreener banner (its own picture, blurred, when it has none), picture, ticker, market cap and change, then
 // volume, liquidity, holders, top 10, dev, age and the contract with a copy button, and a watchlist star.
-// It opens 220 ms after the pointer rests on the pair cell (not on its picture, links, buttons or faces), beside it, stays while
+// It opens 220 ms after the pointer rests on the pair cell (not on its picture, links, buttons or faces), at the pointer and following it, stays while
 // the pointer is on the cell or the card, and closes
 // 150 ms after it has left both. One card at a time on the page; scrolling closes it.
 import { cloneElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -24,7 +24,7 @@ type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLea
 const OWN = "a, button, [data-known-holders], [data-coin-pic]";
 export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigger }) {
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
-  const anchor = useRef<HTMLElement | null>(null), timer = useRef(0), waiting = useRef(false), open = useRef(false);
+  const anchor = useRef<HTMLElement | null>(null), timer = useRef(0), waiting = useRef(false), open = useRef(false), at = useRef({ x: 0, y: 0 });
   open.current = pos != null;
   useEffect(() => () => clearTimeout(timer.current), []);
   const close = () => { clearTimeout(timer.current); waiting.current = false; setPos(null); };
@@ -33,21 +33,23 @@ export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigg
     const ev = e as PointerEvent;
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
     if ((ev?.target as Element | null)?.closest?.(OWN)) { if (open.current || waiting.current) close(); return; }
-    if (open.current) { clearTimeout(timer.current); return; }
+    at.current = { x: ev.clientX, y: ev.clientY };
+    if (open.current) { clearTimeout(timer.current); setPos(near(at.current)); return; }
     if (waiting.current) return;
     waiting.current = true;
     timer.current = window.setTimeout(() => {
       waiting.current = false;
-      const el = anchor.current;
-      if (!el) return;
+      if (!anchor.current) return;
       if (closeOthers && closeOthers !== close) closeOthers();
       closeOthers = close;
-      // Beside the cell, level with its row, so moving down the column goes from coin to coin (not onto the card).
-      const b = el.getBoundingClientRect();
-      const left = b.right + 8 + W <= innerWidth - 10 ? b.right + 8 : Math.max(10, b.left - W - 8);
-      setPos({ left, top: Math.max(10, Math.min(b.top - 6, innerHeight - H - 10)) });
+      setPos(near(at.current));
     }, 220);
   };
+  // At the pointer (just right of it, or left near the window's edge), following it while it moves over the cell.
+  const near = (c: { x: number; y: number }) => ({
+    left: c.x + 18 + W <= innerWidth - 10 ? c.x + 18 : Math.max(10, c.x - W - 18),
+    top: Math.max(10, Math.min(c.y - 60, innerHeight - H - 10)),
+  });
   const leave = () => { clearTimeout(timer.current); waiting.current = false; timer.current = window.setTimeout(close, 150); };
   useEffect(() => { if (!pos) return; const s = () => close(); addEventListener("scroll", s, true); return () => removeEventListener("scroll", s, true); }, [pos]);
   const p = children.props;
