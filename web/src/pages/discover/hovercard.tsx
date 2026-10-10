@@ -1,7 +1,7 @@
 // The card that opens when the pointer rests on a Discover coin's pair cell, like Axiom's: the coin's
 // DexScreener banner (its own picture, blurred, when it has none), picture, ticker, market cap and change, then
 // volume, liquidity, holders, top 10, dev, age and the contract with a copy button, and a watchlist star.
-// It opens 220 ms after the pointer rests on the pair cell (not on its own links, buttons or faces), beside it, stays while
+// It opens 220 ms after the pointer rests on the pair cell (not on its picture, links, buttons or faces), beside it, stays while
 // the pointer is on the cell or the card, and closes
 // 150 ms after it has left both. One card at a time on the page; scrolling closes it.
 import { cloneElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -19,8 +19,9 @@ const W = 300, H = 400;   // the card's width and (about) its height
 let closeOthers: (() => void) | null = null;
 
 type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; ref?: unknown }>;
-// Inside the trigger, these keep their own hover (links, the X card, buttons, the known-holder faces): no coin card there.
-const OWN = "a, button, [data-known-holders]";
+// Inside the trigger, these keep their own hover (links, the X card, buttons, the known-holder faces, and the coin's
+// picture, which shows itself big: PicPreview): no coin card there.
+const OWN = "a, button, [data-known-holders], [data-coin-pic]";
 export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigger }) {
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
   const anchor = useRef<HTMLElement | null>(null), timer = useRef(0), waiting = useRef(false), open = useRef(false);

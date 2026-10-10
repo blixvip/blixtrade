@@ -110,7 +110,7 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
     // so the scrollbar does not jump): opening and scrolling a 50-row list costs only the rows on screen.
     className={cn(grid, "group cursor-pointer border-b border-rule px-4 py-2.5 transition-colors duration-100 [contain-intrinsic-size:auto_74px] [content-visibility:auto] hover:bg-paper-3/60", fresh && "animate-row-in")}>
       {lead}
-      {/* pair info: resting anywhere on it opens the coin card (hovercard.tsx), except on its own buttons and faces */}
+      {/* pair info: resting anywhere on it opens the coin card (hovercard.tsx), except on its own buttons and faces; the picture shows itself big instead */}
       {(() => { const cell = (
       <div className="flex min-w-0 items-center gap-3">
         <span className="relative shrink-0">
@@ -124,9 +124,9 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
           )}
           {(() => {
             const pic = (
-              <span className="relative grid size-12 place-items-center overflow-hidden rounded-[10px] border border-rule-2 bg-paper-4 text-xs font-semibold text-muted uppercase">
+              <span data-coin-pic className="relative grid size-12 place-items-center overflow-hidden rounded-[10px] border border-rule-2 bg-paper-4 text-xs font-semibold text-muted uppercase">
                 {(r.symbol || "?").slice(0, 3)}
-                {ext ? ext.img && <img src={ext.img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <CoinImg mint={r.mint} fallback={r.image} preview={false} />}
+                {ext ? ext.img && <img src={ext.img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <CoinImg mint={r.mint} fallback={r.image} />}
               </span>
             );
             return pic;
