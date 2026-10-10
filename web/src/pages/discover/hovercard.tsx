@@ -22,18 +22,26 @@ import { pick, type Row, type Tf } from "./parts";
 // Banners for coins whose row came without one (Fomo's lists, the stream's new pairs): asked of the server once
 // per coin (server/banner.js), kept for the visit. undefined = not asked yet, null = it has none.
 const banners = new Map<string, string | null | Promise<string | null>>();
+// Asked as soon as the pointer is on the row (CoinHover), so it is usually in hand before the card opens; the
+// picture itself is fetched then too.
+function loadBanner(r: Row): string | null | Promise<string | null> {
+  if (r.header) return r.header;
+  let b = banners.get(r.mint);
+  if (b === undefined) {
+    b = api<{ header: string | null }>(`banner?m=${r.mint}`).then((x) => x?.header ?? null, () => null);
+    banners.set(r.mint, b);
+    b.then((h) => { banners.set(r.mint, h); if (h) new Image().src = h; });
+  }
+  return b;
+}
 function useBanner(r: Row) {
-  const have = r.header || null;
-  const [got, setGot] = useState<string | null | undefined>(() => { const b = banners.get(r.mint); return have ?? (typeof b === "string" || b === null ? b : undefined); });
+  const [got, setGot] = useState<string | null | undefined>(() => { const b = loadBanner(r); return typeof b === "string" || b === null ? b : undefined; });
   useEffect(() => {
-    if (have) return;
     let alive = true;
-    let b = banners.get(r.mint);
-    if (b === undefined) { b = api<{ header: string | null }>(`banner?m=${r.mint}`).then((x) => x?.header ?? null, () => null); banners.set(r.mint, b); b.then((h) => banners.set(r.mint, h)); }
-    Promise.resolve(b).then((h) => { if (alive) setGot(h); });
+    Promise.resolve(loadBanner(r)).then((h) => { if (alive) setGot(h); });
     return () => { alive = false; };
-  }, [r.mint, have]);
-  return have ?? got ?? null;
+  }, [r.mint, r.header]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return got ?? null;
 }
 
 const W = 300, GAP = 14;   // the card's width; how far its corner sits from the pointer
@@ -95,6 +103,7 @@ export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigg
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
     if ((ev?.target as Element | null)?.closest?.(OWN)) return closeNow();
     cancelClose();
+    loadBanner(r);
     follow(ev.clientX, ev.clientY);
     const s = useCard.getState();
     if (s.open) { if (s.r?.mint !== r.mint) useCard.setState({ r, tf }); return; }
@@ -189,12 +198,10 @@ function Card({ r, tf }: { r: Row; tf: Tf }) {
   const copy = () => navigator.clipboard?.writeText(r.mint).then(() => toast("Contract copied"), () => toast("Couldn't copy the contract"));
   return (
     <div className="flex flex-col">
-      {/* banner: DexScreener's header when the coin paid for one, else its own picture blurred */}
-      <div className="relative h-[88px] overflow-hidden bg-paper-4">
-        {header
-          ? <img key={header} src={header} alt="" className="absolute inset-0 size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-          : <span className="absolute inset-0 scale-125 opacity-60 blur-xl"><CoinImg mint={r.mint} fallback={r.image} preview={false} /></span>}
-        <span className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-paper-2" />
+      {/* banner: DexScreener's header, sharp, when the coin has one; else (and while it loads) a plain striped band */}
+      <div className="relative h-[88px] overflow-hidden bg-paper-3 bg-[repeating-linear-gradient(135deg,transparent_0_14px,color-mix(in_oklch,var(--color-ink)_4%,transparent)_14px_15px)]">
+        {header && <img key={header} src={header} alt="" decoding="async" className="absolute inset-0 size-full object-cover opacity-0 transition-opacity duration-200" onLoad={(e) => { e.currentTarget.style.opacity = "1"; }} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
+        <span className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-paper-2" />
         <button onClick={toggleStar} aria-label={starred ? "Remove from watchlist" : "Add to watchlist"} aria-pressed={starred}
           className={cn("absolute top-2 right-2 grid size-8 place-items-center rounded-full bg-paper/70 backdrop-blur transition-colors", starred ? "text-warn" : "text-ink-2 hover:text-ink")}>
           <Icon.star className={cn("size-4", starred && "fill-current")} />
