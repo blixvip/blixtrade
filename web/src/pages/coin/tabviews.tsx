@@ -135,63 +135,22 @@ function Pnl({ x }: { x: Holder }) {
   );
 }
 
-// The coin's holdings in one bar: the ten biggest wallets, the pool or curve, everyone else.
-function ShareBar({ list }: { list: Holder[] }) {
-  const pools = list.filter((x) => x.label === "Pool"), people = list.filter((x) => x.label !== "Pool").slice(0, 10);
-  const poolPct = pools.reduce((s, x) => s + x.pct, 0), topPct = people.reduce((s, x) => s + x.pct, 0);
-  const rest = Math.max(0, 100 - poolPct - topPct);
-  return (
-    <div className="flex flex-col gap-1.5 border-b border-rule px-4 py-3">
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-paper-4">
-        {poolPct > 0 && <Tip tip={`Pool / curve ${pctN(poolPct, 1)}`}><i className="block h-full bg-info/70" style={{ width: `${poolPct}%` }} /></Tip>}
-        {people.map((x, i) => (
-          <Tip key={x.wallet} tip={`#${i + 1} ${shortAddr(x.wallet)} · ${pctN(x.pct, 2)}`}>
-            <i className="block h-full border-r border-paper-2" style={{ width: `${x.pct}%`, background: `oklch(${72 - i * 3}% ${x.tag === "dev" ? 0.16 : 0.12} ${x.tag === "dev" ? 70 : x.tag === "sniper" || x.tag === "bundle" ? 25 : 150})` }} />
-          </Tip>
-        ))}
-        <i className="block h-full bg-paper-5" style={{ width: `${rest}%` }} />
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-        {poolPct > 0 && <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-info/70" />Pool / curve <b className="num font-semibold text-ink-2">{pctN(poolPct, 1)}</b></span>}
-        <span className="flex items-center gap-1.5"><i className="size-2 rounded-full" style={{ background: "oklch(68% 0.12 150)" }} />Top 10 wallets <b className="num font-semibold text-ink-2">{pctN(topPct, 1)}</b></span>
-        <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-paper-5" />Everyone else <b className="num font-semibold text-ink-2">{pctN(rest, 1)}</b></span>
-      </div>
-    </div>
-  );
-}
-
-const SOURCE: Record<string, string> = { ledger: "Blix's own ledger, live", chain: "Read from the chain, live", jupiter: "From Jupiter", rugcheck: "From RugCheck" };
-function sourceNote(c: CoinData) {
-  const h = c.holders!;
-  if (h.source === "ledger" || !h.source) return h.frozen ? "As of bonding" : h.genesis && !h.partial ? "Complete ledger · every trade since launch" : h.genesis ? "Ledger · a few early sells unseen" : "Partial ledger · started after launch";
-  return SOURCE[h.source] || h.source;
-}
-
 // ---------- Holders ----------
 type HFilter = "all" | "tagged" | "followed";
 export function HoldersView({ c, bonding }: { c: CoinData; bonding: boolean }) {
   const now = useNow();
   const [f, setF] = useState<HFilter>("all");
-  const h = c.holders!, info = c.info;
+  const h = c.holders!;
   const list = h.list;
   const scale = Math.max(...list.filter((x) => x.label !== "Pool").map((x) => x.pct), 0.0001);
   // The curve or pool first (it is not a person, so it gets no rank), then the wallets biggest first.
   const ordered = [...list.filter((x) => x.label === "Pool"), ...list.filter((x) => x.label !== "Pool")];
   const shown = ordered.filter((x) => f === "all" || (f === "tagged" ? Boolean(x.tag) || x.top10 : x.followed || x.fomo));
   const flows = list.filter((w) => w.boughtSol || w.soldSol).length > list.length * 0.3;
-  const snip = info.snipers, bund = info.bundle;
   let rank = 0;
   return (
     <div className="flex flex-col">
-      <Strip right={sourceNote(c)}>
-        <Stat label="Holders" value={<Flash value={h.count}>{h.count.toLocaleString()}</Flash>} />
-        <Stat label="Top 10" value={pctN(info.top10 ?? h.top10, 1)} tone={toneOf((info.top10 ?? h.top10) > 50, (info.top10 ?? h.top10) > 30)} tip="Share held by the ten biggest wallets, pools and the curve left out" />
-        <Stat label="Dev" value={info.devPct != null ? pctN(info.devPct, 2) : "—"} tone={info.devPct == null ? "muted" : toneOf(info.devPct > 15, info.devPct > 5)} />
-        <Stat label="Snipers" value={snip ? pctN(snip.pct, 1) : "—"} sub={snip ? `${snip.n} wallets${snip.sold ? ` · ${snip.sold} sold` : ""}` : undefined} tone={snip ? toneOf(snip.pct > 20, snip.pct > 8) : "muted"} />
-        <Stat label="Bundles" value={bund ? pctN(bund.pct, 1) : "—"} sub={bund ? `${bund.n} wallets` : undefined} tone={bund ? toneOf(bund.pct > 20, bund.pct > 8) : "muted"} />
-        <Stat label="Insiders" value={info.insiders != null ? pctN(info.insiders, 1) : "—"} tone={info.insiders == null ? "muted" : toneOf(info.insiders > 20, info.insiders > 8)} />
-      </Strip>
-      {list.length > 0 && <ShareBar list={list} />}
+      {/* No summary strip or share bar above the list (the owner, 2026-10-10): the holders themselves. */}
       <div className="flex items-center gap-1 px-3 py-2">
         {([["all", "All"], ["tagged", "Dev, snipers, bundles"], ["followed", "Followed"]] as [HFilter, string][]).map(([k, l]) => (
           <button key={k} onClick={() => setF(k)} className={cn("h-6 rounded-chip border px-2 text-xs font-semibold", f === k ? "border-accent bg-accent/15 text-ink" : "border-rule text-muted hover:text-ink")}>{l}</button>
@@ -488,9 +447,10 @@ export function SafetyView({ r, c, withMap = true }: { r: TokenDetail; c: CoinDa
     <div className="flex flex-col">
       {/* The score, and Blix's own verdict beside it: what the bot itself would do, and why. */}
       <div className="flex animate-safety-in items-center gap-6 border-b border-rule px-5 py-5 motion-reduce:animate-none max-sm:flex-col max-sm:items-start max-sm:gap-4">
-        <span className="flex shrink-0 flex-col items-center gap-2" title="Safety score out of 100: 100 is clean">
+        {/* The score as "how sure it is not a rug", with the catch said plainly: safe from a rug is not a good coin. */}
+        <span className="flex w-32 shrink-0 flex-col items-center gap-2" title="How sure Blix is this coin is not a rug (from RugCheck's report). Not a rug does not mean it will go up: the price can still fall.">
           <Gauge score={ring} />
-          <span className="text-2xs font-medium text-muted">Safety score</span>
+          <span className="text-center text-2xs leading-snug text-muted">(not a rug ≠ a good coin: it can still go down)</span>
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex flex-col gap-1">

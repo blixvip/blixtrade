@@ -43,8 +43,8 @@ export function Gauge({ score, size = 96 }: { score: number | null; size?: numbe
           style={{ transition: "stroke-dashoffset 1100ms cubic-bezier(0.16, 1, 0.3, 1)" }} />
       </svg>
       <span className="relative flex flex-col items-center leading-none">
-        <b className="num text-[28px] font-semibold tracking-tight" style={{ color: TONE_VAR[tone] }}>{shown ?? "—"}</b>
-        <span className="mt-1 text-2xs font-medium text-muted">/ 100</span>
+        <b className="num text-[26px] font-semibold tracking-tight" style={{ color: TONE_VAR[tone] }}>{shown == null ? "—" : `${shown}%`}</b>
+        <span className="mt-1 text-2xs font-semibold text-ink-2">not a rug</span>
       </span>
     </span>
   );
