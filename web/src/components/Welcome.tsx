@@ -18,6 +18,7 @@ const MODELS: [name: string, logo: string][] = [["Blix AI", "brand/blix-eye.webp
 // Card three: claim a handle (server/handles.js, the same call as the Invite & earn card), then copy or share it.
 function ClaimHandle() {
   const [h, setH] = useState<Handle | null>(null), [value, setValue] = useState(""), [error, setError] = useState(""), [busy, setBusy] = useState(false), [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);   // the pencil: change a handle already claimed
   const check = useHandleCheck(value, h?.handle ?? null);
   useEffect(() => {
     fetch("api/account/handle", { signal: AbortSignal.timeout(20_000) }).then((r) => (r.ok ? r.json() : null)).then((r: Handle | null) => {
@@ -31,7 +32,7 @@ function ClaimHandle() {
       const r = await fetch("api/account/handle", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ handle: value }), signal: AbortSignal.timeout(30_000) });
       const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
       if (!r.ok) throw new Error(j.error || String(r.status));
-      setH(j);
+      setH(j); setEditing(false);
     } catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   };
@@ -43,9 +44,15 @@ function ClaimHandle() {
     if (navigator.share) navigator.share({ title: "BLIX", text, url: link }).catch(() => {});
     else window.open(`https://x.com/intent/post?${new URLSearchParams({ text, url: link })}`, "_blank", "noopener");
   };
-  if (link) return (
+  if (link && !editing) return (
     <div className="flex items-center gap-1.5 rounded-xl border border-up/25 bg-paper py-1.5 pr-1.5 pl-3.5">
-      <span className="flex min-w-0 flex-1 items-center truncate text-md font-semibold text-ink"><img src="brand/blix-eye.webp" alt="" className="mr-2 size-5 shrink-0 rounded-full" /><span className="text-muted">blixvip.com/@</span>{h!.handle}</span>
+      <span className="flex min-w-0 flex-1 items-center text-md font-semibold text-ink">
+        <img src="brand/blix-eye.webp" alt="" className="mr-2 size-5 shrink-0 rounded-full" /><span className="truncate"><span className="text-muted">blixvip.com/@</span>{h!.handle}</span>
+        <button type="button" onClick={() => { setValue(h!.handle || ""); setError(""); setEditing(true); }} aria-label="Change your handle" title="Change your handle"
+          className="ml-1.5 grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-paper-4 hover:text-ink">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-3.5" aria-hidden><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+        </button>
+      </span>
       <button onClick={copy} className={cn("h-8 min-w-[68px] rounded-full px-3.5 text-sm font-semibold transition-colors", copied ? "bg-up text-on-fill" : "bg-paper-4 text-ink hover:bg-paper-3")}>{copied ? "Copied" : "Copy"}</button>
       <button onClick={share} className="h-8 rounded-full bg-ink px-3.5 text-sm font-semibold text-on-fill hover:bg-focus">Share</button>
     </div>
@@ -58,9 +65,11 @@ function ClaimHandle() {
           <input value={value} onChange={(e) => { setValue(e.target.value.replace(/[^A-Za-z0-9_]/g, "").slice(0, 20)); setError(""); }} aria-label="Handle" placeholder="yourname" autoComplete="off" spellCheck={false}
             className="min-w-0 flex-1 bg-transparent font-semibold text-ink outline-none" />
         </label>
-        <button type="submit" disabled={busy || value.length < 3 || check.state === "taken"} className="h-10 rounded-full bg-ink px-5 text-md font-semibold text-on-fill hover:bg-focus disabled:opacity-50">{busy ? "Saving…" : "Claim"}</button>
+        {editing && <button type="button" onClick={() => { setEditing(false); setValue(h?.handle || ""); setError(""); }} className="h-10 rounded-full px-3.5 text-md text-ink-2 hover:bg-paper-4 hover:text-ink">Cancel</button>}
+        <button type="submit" disabled={busy || value.length < 3 || check.state === "taken" || (editing && value === h?.handle)} className="h-10 rounded-full bg-ink px-5 text-md font-semibold text-on-fill hover:bg-focus disabled:opacity-50">{busy ? "Saving…" : editing ? "Save" : "Claim"}</button>
       </div>
       <HandleStatus check={check} value={value} error={error} />
+      {editing && !error && <p className="text-xs text-muted">You can change your handle once a day. Your old one stays reserved for you for 30 days, so nobody else can take it.</p>}
     </form>
   );
 }
