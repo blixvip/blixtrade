@@ -17,7 +17,7 @@ import { onCoinTrade, onFomoBar, pushCoinMc, usePulse } from "@/lib/pulse";
 import { pickStart, replaying, replayNow, startReplay, useReplay } from "@/lib/replay";
 import { useRole } from "@/lib/role";
 import { CHART_BG, geckoRes, mountGecko, unmountGecko } from "@/lib/gecko";
-import { GT_TFS, geckoBars } from "@/lib/geckoBars";
+import { TV_TFS, firstBars, keepBars, keptBars, tvBars } from "@/lib/tvBars";
 import { peek, solN, usdK, type Trades } from "@/lib/coin";
 import { cn, store } from "@/lib/utils";
 import { ChartIcons, type Badge, type Flag, type IconKind, type TipCard } from "./chartIcons";
@@ -38,6 +38,13 @@ type Src = "tv" | "gecko" | "fomo" | "blix";
 // TradingView chart. The GeckoTerminal embed and Fomo mode stay in the code, not offered.
 // GeckoTerminal candles already drawn, per coin and size, so a chart opened again draws on its first frame.
 const gmemo = new Map<string, { raw: Row[]; at: number }>();
+// Per coin: what Jupiter's market caps are multiplied by to sit on the header's level (1: the same supply).
+const tvLevel = {
+  m: new Map<string, number>(),
+  has(mint: string) { return this.get(mint) != null; },
+  get(mint: string): number | undefined { const v = this.m.get(mint); if (v != null) return v; try { const x = Number(localStorage.getItem(`tvk:${mint}`)); return x > 0 ? x : undefined; } catch { return undefined; } },
+  set(mint: string, v: number) { this.m.set(mint, v); try { localStorage.setItem(`tvk:${mint}`, String(v)); } catch { /* blocked */ } },
+};
 // pump.fun's opening market cap, in SOL: 30 virtual SOL over 1.073B virtual tokens, on the 1B supply. Every pump
 // coin's chart starts there, flat until its first trade, as pump.fun's own does.
 const START_SOL = 27.96;
@@ -239,7 +246,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   const [fres, setFresState] = useState<string>(() => { const v = store.get("coin:fres", ""); return FOMO_TFS.some(([r]) => r === v) ? v : defaultTf === 1 ? "1S" : defaultTf === 15 ? "15S" : "1"; });
   const setSrc = (v: Src) => { if (geckoOnly && v === "blix") return; picked.current = mint; setSrcState(v); setFomoDown(null); };
   // TradingView mode's candle size (GeckoTerminal's free sizes, 1m to 1d): by default the size its embed opens on.
-  const [tvTf, setTvTfState] = useState<number>(() => { const v = store.get("coin:tvtf", 0); return GT_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[geckoRes(born)] ?? 60; });
+  const [tvTf, setTvTfState] = useState<number>(() => { const v = store.get("coin:tvtf", 0); return TV_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[geckoRes(born)] ?? 60; });
   const setTvTf = (v: number) => { store.set("coin:tvtf", v); setTvTfState(v); };
   // Fomo's bars could not be had (the server's Fomo sign-in is out, Fomo is down): the chart shows Blix's own
   // candles for this visit and says so in a line, instead of an error where the chart should be.
@@ -520,12 +527,18 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       return () => { alive = false; unframe(); offLive(); clearTimeout(timer); removeChart(); s.current = {}; setHover(null); setTip(null); };
     }
     if (tv) {
-      // ---- TradingView mode: GeckoTerminal's candles (the same pool and market caps its embed shows) on this chart,
-      // so the faces, dev and sniper marks sit on them. The browser reads them (lib/geckoBars.ts): the newest 1,000
-      // first, then older history in the background (the view stays put); after that the newest few every 15 s,
-      // and the open candle follows Blix's own read of GeckoTerminal's price every 5 s in between.
-      const gkey = `${mint}:G${tf}`;
-      let rows: Row[] = (() => { const m = gmemo.get(gkey); return m && Date.now() - m.at < FRESH ? m.raw : []; })();
+      // ---- TradingView mode (a coin past its first day): candles read by the browser (lib/tvBars.ts: Jupiter, else
+      // GeckoTerminal, else Blix's server) on this chart, so the faces, dev and sniper marks sit on them.
+      // Instant: this page's last copy, else this browser's kept copy (localStorage), else the read a link's hover
+      // started, drawn at once; the fresh read replaces it. Then older history in the background (the view stays
+      // put), the newest few candles every 2-3 s, and the open candle on Blix's price read in between.
+      const gkey = `${mint}:T${tf}`;
+      let rows: Row[] = (() => { const m = gmemo.get(gkey); return m && Date.now() - m.at < FRESH ? m.raw : keptBars(mint, tf) || []; })();
+      let source = "";
+      // Jupiter's market caps are on its own supply (circulating, for some coins far under the full supply Blix
+      // shows): the candles are put on the header's level when the two differ by more than 15%.
+      let k = tvLevel.get(mint) ?? 1;
+      const scaled = (list: Row[]) => (k === 1 ? list : list.map((x) => ({ ...x, open: x.open * k, high: x.high * k, low: x.low * k, close: x.close * k })));
       const keep = () => { gmemo.delete(gkey); gmemo.set(gkey, { raw: rows, at: Date.now() }); if (gmemo.size > 14) gmemo.delete(gmemo.keys().next().value!); };
       const paint = (list: Row[], reframe: boolean) => {
         const right = reframe || !framed ? null : chart.timeScale().scrollPosition();
@@ -534,9 +547,9 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         if (right != null) chart.timeScale().scrollToPosition(right, false);
         if (reframe && list.length) frame(list.length);
         last = list[list.length - 1] ?? null; firstTime = list[0]?.time ?? null;
-        if (box.current) Object.assign(box.current.dataset, { last: String(last?.time ?? ""), n: String(list.length), first: String(firstTime ?? ""), src: "GeckoTerminal", polls: String(polls), close: String(last?.close ?? "") });
+        if (box.current) Object.assign(box.current.dataset, { last: String(last?.time ?? ""), n: String(list.length), first: String(firstTime ?? ""), src: source || "kept", polls: String(polls), close: String(last?.close ?? "") });
       };
-      if (rows.length) { paint(rows, true); setMeta({ tf, early: true, source: "GeckoTerminal", empty: false, last: rows[rows.length - 1] }); }
+      if (rows.length) { paint(rows, true); setMeta({ tf, early: true, source: "TradingView", empty: false, last: rows[rows.length - 1] }); }
       // A new or changed newest candle: drawn in place; an older one that changed redraws the lot.
       const merge = (got: Row[]) => {
         let older = false;
@@ -546,63 +559,78 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         if (older || !last) paint(rows, false);
         else for (const x of got) if (x.time >= last.time) { put(x); s.current.byTime?.set(x.time, x); last = x; }
       };
+      let loaded = false;
       const gload = async () => {
-        if (first) {
-          const got = await geckoBars(mint, tf);
+        if (!loaded) {
+          const got = await firstBars(mint, tf);
           if (!alive) return;
-          first = false;
-          if (!got.length) {
+          source = got.source;
+          if (!got.rows.length) {
+            first = false;
             if (rows.length) return;
             if (!geckoOnlyNow()) { setSrcState("blix"); return; }
-            setMeta({ tf, source: "GeckoTerminal", note: "No GeckoTerminal candles for this coin yet", empty: true, last: null }); return;
+            setMeta({ tf, source: "TradingView", note: "No candles for this coin yet", empty: true, last: null }); return;
           }
-          rows = got; paint(rows, true); keep();
-          setMeta({ tf, source: "GeckoTerminal", live: true, empty: false, last });
-          // Older history, up to 5,000 candles more, a read every 2.5 s (the free API's pace), the view kept.
-          for (let i = 0; i < 5 && alive && got.length >= 1000; i++) {
-            await new Promise((ok) => setTimeout(ok, 2500));
-            if (!alive) return;
-            const older = (await geckoBars(mint, tf, { before: rows[0].time }).catch(() => [] as Row[])).filter((x) => x.time < rows[0].time);
-            if (!alive || !older.length) break;
-            rows = [...older, ...rows]; paint(rows, false); keep();
-            if (older.length < 990) break;
+          loaded = true; first = false;
+          rows = scaled(got.rows); paint(rows, true); keep(); keepBars(mint, tf, rows);
+          setMeta({ tf, source: "TradingView", live: true, empty: false, last });
+          // Older history, up to 5,000 candles more, a read every 0.4 s, the view kept.
+          for (let i = 0; i < 5 && alive && got.rows.length >= 990; i++) {
+            await new Promise((ok) => setTimeout(ok, 400));
+            if (!alive || !rows.length) return;
+            const older = await tvBars(mint, tf, { before: rows[0].time }).catch(() => null);
+            const add = scaled((older?.rows || []).filter((x) => x.time < rows[0].time));
+            if (!alive || !add.length) break;
+            rows = [...add, ...rows]; paint(rows, false); keep();
+            if (add.length < 990) break;
           }
           return;
         }
-        const got = await geckoBars(mint, tf, { limit: 5 });
-        if (!alive || !got.length) return;
-        merge(got); keep();
-        setMeta({ tf, source: "GeckoTerminal", live: true, empty: false, last });
+        const got = await tvBars(mint, tf, { limit: 5 });
+        if (!alive || !got.rows.length) return;
+        source = got.source;
+        merge(scaled(got.rows)); keep();
+        if (box.current && last) Object.assign(box.current.dataset, { last: String(last.time), close: String(last.close), src: source, polls: String(polls) });
+        if (polls % 10 === 0) keepBars(mint, tf, rows);
+        setMeta({ tf, source: "TradingView", live: true, empty: false, last });
       };
-      // The open candle between reads: Blix's 5-second read of GeckoTerminal's price (market cap).
+      // The open candle between reads: Blix's own read of the coin's market cap every 3 s. Its first answer also sets
+      // the level (k) when Jupiter's caps sit on another supply.
       let ptimer = 0;
       const price = async () => {
         try {
           const d = await api<{ mc: number | null }>(`gecko/price/${mint}`);
-          if (alive && d.mc && last && !first) {
+          if (alive && d.mc && last && loaded) {
+            const r = d.mc / last.close;
+            if (k === 1 && !tvLevel.has(mint) && (r > 1.15 || r < 1 / 1.15) && r < 20 && r > 1 / 20) {
+              k = r; tvLevel.set(mint, r);
+              rows = rows.map((x) => ({ ...x, open: x.open * r, high: x.high * r, low: x.low * r, close: x.close * r }));
+              paint(rows, false); keep(); keepBars(mint, tf, rows);
+            } else if (!tvLevel.has(mint)) tvLevel.set(mint, 1);
             pushCoinMc(mint, d.mc);
             const time = Math.floor(Date.now() / 1000 / tf) * tf;
-            if (time >= last.time) {
+            if (time >= last.time && Math.abs(d.mc / last.close - 1) < 0.5) {
               const x: Row = time === last.time ? { ...last, high: Math.max(last.high, d.mc), low: Math.min(last.low, d.mc), close: d.mc } : { time, open: last.close, high: Math.max(last.close, d.mc), low: Math.min(last.close, d.mc), close: d.mc, value: 0 };
               if (time === last.time) rows[rows.length - 1] = x; else rows.push(x);
               put(x); s.current.byTime?.set(x.time, x); last = x;
               setMeta((m) => ({ ...m, last: x }));
+              if (box.current) Object.assign(box.current.dataset, { last: String(x.time), close: String(x.close), px: String(Date.now()) });
             }
           }
         } catch { /* the next read */ }
-        if (alive) ptimer = window.setTimeout(price, document.hidden ? 20_000 : 5_000);
+        if (alive) ptimer = window.setTimeout(price, document.hidden ? 20_000 : 3_000);
       };
       let gfails = 0;
       const gtick = async () => {
-        if (!document.hidden || first) {
+        if (!document.hidden || !loaded) {
           try { await gload(); polls++; gfails = 0; if (box.current) box.current.dataset.err = ""; }
           catch (e) {
             gfails++;
             if (box.current) box.current.dataset.err = (e as Error).message;
-            if (alive && first && !rows.length) setMeta({ tf, source: "GeckoTerminal", note: (e as { busy?: boolean }).busy ? "GeckoTerminal is busy" : (e as Error).message, empty: true, last: null });
+            if (alive && !loaded && !rows.length) setMeta({ tf, source: "TradingView", note: "The chart's sources are busy", empty: true, last: null });
           }
         }
-        if (alive) timer = window.setTimeout(gtick, gfails ? Math.max(8000, backoff(gfails) * 2) : first ? 1500 : 15_000);
+        if (alive) timer = window.setTimeout(gtick, gfails ? Math.min(10_000, 1000 * 2 ** gfails) : !loaded ? 800 : tf < 60 ? 2000 : 3000);
       };
       gtick(); price();
       return () => { alive = false; unframe(); clearTimeout(timer); clearTimeout(ptimer); removeChart(); s.current = {}; setHover(null); setTip(null); };
@@ -897,7 +925,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   // is off screen). The chart keeps asking every few seconds, so it fills in by itself.
   // [title, text, button]: the button switches to Blix's own candles in Fomo mode, to 1m candles in Blix mode.
   const why: [string, string, boolean] | null = gecko || !shown || !meta.empty ? null
-    : tv && meta.note ? [/busy/i.test(meta.note) ? "Waiting for the chart" : "No candles yet", /busy/i.test(meta.note) ? "GeckoTerminal is busy. Blix asks again in a few seconds." : "GeckoTerminal has no candles for this coin at this size yet. Try a larger size.", false]
+    : tv && meta.note ? [/busy/i.test(meta.note) ? "Waiting for the chart" : "No candles yet", /busy/i.test(meta.note) ? "The chart's sources didn't answer. Blix asks again in a moment." : "There are no candles for this coin at this size yet. Try another size.", false]
     : fomo && meta.note ? ["Couldn't load Fomo's chart", `${meta.note.replace(/\.$/, "")}. Trying again every few seconds.`, true]
     : fomo ? ["No bars on Fomo yet", "Fomo has no candles for this coin at this size yet. Blix's own candles are built from every trade it reads from the chain.", true]
     : meta.note && /GeckoTerminal/i.test(meta.note) ? ["Waiting for the price history", "This coin's candles come from GeckoTerminal, which is busy right now. Blix asks again every few seconds.", false]
@@ -917,7 +945,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         )}
           {fomoDown && !fomo && <span className="ml-2 truncate text-[11px] text-muted" title={fomoDown}>{fomoDown}</span>}
         {!gecko && <div role="radiogroup" aria-label="Candle size" className="relative inline-flex items-center gap-0.5 rounded-full border border-rule bg-paper-3/70 p-0.5">
-          {tv ? GT_TFS.map(([v, l]) => (
+          {tv ? TV_TFS.map(([v, l]) => (
             <button key={v} role="radio" aria-checked={tvTf === v} onClick={() => setTvTf(v)}
               className={cn("num flex h-6 min-w-8 items-center justify-center rounded-full px-2.5 text-xs font-semibold transition-colors duration-100", tvTf === v ? "bg-ink text-paper shadow-sm" : "text-muted hover:bg-paper-4/60 hover:text-ink")}>{l}</button>
           )) : fomo ? FOMO_TFS.map(([r, l]) => (
@@ -957,7 +985,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
           );
         })()}
         {/* Blix live shows no countdown or source label here (the owner, 2026-10-10): the chart speaks for itself. */}
-        {tv && <a href={`https://www.geckoterminal.com/solana/pools/${mint}`} target="_blank" rel="noopener" title="Candles from GeckoTerminal" className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-ink"><SiteLogo site="geckoterminal" className="size-3.5" />GeckoTerminal ↗</a>}
+        {tv && <a href="https://www.tradingview.com/" target="_blank" rel="noopener" title="Charts by TradingView; candles from Jupiter, GeckoTerminal when Jupiter has none" className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-ink">Chart by TradingView ↗</a>}
         {gecko && <span className="ml-auto flex items-center gap-2 text-xs text-muted">
           <a href={`https://www.geckoterminal.com/solana/pools/${mint}`} target="_blank" rel="noopener" className="inline-flex items-center gap-1 hover:text-ink"><SiteLogo site="geckoterminal" className="size-3.5" />GeckoTerminal ↗</a>
         </span>}

@@ -152,9 +152,9 @@ export function prefetchCoin(mint: string, bornKnown?: number | null) {
   import("./pulse").then((p) => {
     const born = bornKnown || p.usePulse.getState().coins[mint]?.born || null;
     if (born && Date.now() - born < 24 * 3600e3) return;
-    return Promise.all([import("./geckoBars"), import("./gecko")]).then(([b, g]) => {
+    return Promise.all([import("./tvBars"), import("./gecko")]).then(([b, g]) => {
       const v = store.get("coin:tvtf", 0);
-      b.warmGeckoBars(mint, b.GT_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[g.geckoRes(born)] ?? 60);
+      b.warmTvBars(mint, b.TV_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[g.geckoRes(born)] ?? 60);
     });
   }).catch(() => {});
   prefetch(`token/${mint}`); prefetch(`coin/${mint}`); prefetch(`coin/${mint}/trades?limit=150`); prefetch(`coin/${mint}/people`);
