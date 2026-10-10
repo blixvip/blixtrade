@@ -160,9 +160,9 @@ export function layout(p) {
 <meta name="twitter:title" content="${esc(p.ogTitle || p.title)}">
 <meta name="twitter:description" content="${esc(p.description)}">
 <meta name="twitter:image" content="${ORIGIN}/_pub/${p.og}">
-<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml">
-<link rel="icon" href="/_pub/icon-96.png?v=eye" sizes="96x96" type="image/png">
-<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye">
+<link rel="icon" href="/_pub/icon.svg?v=eye2" type="image/svg+xml">
+<link rel="icon" href="/_pub/icon-96.png?v=eye2" sizes="96x96" type="image/png">
+<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye2">
 <link rel="alternate" type="text/plain" title="LLM summary" href="/llms.txt">
 <link rel="preload" href="/_pub/fonts/space-grotesk-600.woff2" as="font" type="font/woff2" crossorigin>
 <style>@font-face{font-family:'Space Grotesk';font-style:normal;font-weight:600;font-display:swap;src:url(/_pub/fonts/space-grotesk-600.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>

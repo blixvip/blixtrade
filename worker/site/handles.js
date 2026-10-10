@@ -89,7 +89,7 @@ export async function handlePage(req, env, url, { defer, viewer }) {
 <meta property="og:type" content="profile"><meta property="og:site_name" content="BLIX"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}">
 <meta property="og:url" content="https://blixvip.com/@${esc(p.handle)}"><meta property="og:image" content="https://blixvip.com/_pub/home/og.jpg"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(title)}"><meta name="twitter:description" content="${esc(desc)}"><meta name="twitter:image" content="https://blixvip.com/_pub/home/og.jpg">
-<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml"><link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="/_pub/icon.svg?v=eye2" type="image/svg+xml"><link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
 <style>@font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}
 *{box-sizing:border-box;margin:0}body{min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:radial-gradient(ellipse 70% 55% at 50% 0%,rgba(176,182,194,.14),transparent 70%),#050608;color:#f4f6fa;font:16px/1.5 'Inter Tight',system-ui,sans-serif;text-align:center}
 .card{width:100%;max-width:380px;display:flex;flex-direction:column;align-items:center;animation:rise .5s ease-out both}
