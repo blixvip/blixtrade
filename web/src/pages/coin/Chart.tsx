@@ -547,6 +547,8 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         if (right != null) chart.timeScale().scrollToPosition(right, false);
         if (reframe && list.length) frame(list.length);
         last = list[list.length - 1] ?? null; firstTime = list[0]?.time ?? null;
+        // The header shows exactly the chart's last close (never a figure from elsewhere that the next candle would contradict).
+        if (last) pushCoinMc(mint, last.close);
         if (box.current) Object.assign(box.current.dataset, { last: String(last?.time ?? ""), n: String(list.length), first: String(firstTime ?? ""), src: source || "kept", polls: String(polls), close: String(last?.close ?? "") });
       };
       if (rows.length) { paint(rows, true); setMeta({ tf, early: true, source: "TradingView", empty: false, last: rows[rows.length - 1] }); }
@@ -557,7 +559,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         for (const x of got) { const o = by.get(x.time); if (o && x.time < (last?.time ?? Infinity) && !sameRow(o, x)) older = true; by.set(x.time, x); }
         rows = [...by.values()].sort((a, b) => a.time - b.time);
         if (older || !last) paint(rows, false);
-        else for (const x of got) if (x.time >= last.time) { put(x); s.current.byTime?.set(x.time, x); last = x; }
+        else { for (const x of got) if (x.time >= last.time) { put(x); s.current.byTime?.set(x.time, x); last = x; } pushCoinMc(mint, last.close); }
       };
       let loaded = false;
       const gload = async () => {
@@ -607,12 +609,12 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
               rows = rows.map((x) => ({ ...x, open: x.open * r, high: x.high * r, low: x.low * r, close: x.close * r }));
               paint(rows, false); keep(); keepBars(mint, tf, rows);
             } else if (!tvLevel.has(mint)) tvLevel.set(mint, 1);
-            pushCoinMc(mint, d.mc);
             const time = Math.floor(Date.now() / 1000 / tf) * tf;
             if (time >= last.time && Math.abs(d.mc / last.close - 1) < 0.5) {
               const x: Row = time === last.time ? { ...last, high: Math.max(last.high, d.mc), low: Math.min(last.low, d.mc), close: d.mc } : { time, open: last.close, high: Math.max(last.close, d.mc), low: Math.min(last.close, d.mc), close: d.mc, value: 0 };
               if (time === last.time) rows[rows.length - 1] = x; else rows.push(x);
               put(x); s.current.byTime?.set(x.time, x); last = x;
+              pushCoinMc(mint, x.close);
               setMeta((m) => ({ ...m, last: x }));
               if (box.current) Object.assign(box.current.dataset, { last: String(x.time), close: String(x.close), px: String(Date.now()) });
             }
