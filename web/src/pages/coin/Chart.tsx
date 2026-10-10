@@ -12,10 +12,12 @@ import { EmptyState } from "@/components/page";
 import { CandlestickSeries, LineSeries, ColorType, createChart, createSeriesMarkers, HistogramSeries, LineStyle, type AutoscaleInfo, type IPriceLine, type CandlestickData, type IChartApi, type ISeriesApi, type ISeriesMarkersPluginApi, type SeriesMarker, type Time, type UTCTimestamp } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 import { api, apiAged } from "@/lib/api";
+import { earlyBars, onLevel } from "@/lib/jupEarly";
 import { onCoinTrade, onFomoBar, pushCoinMc, usePulse } from "@/lib/pulse";
 import { pickStart, replaying, replayNow, startReplay, useReplay } from "@/lib/replay";
 import { useRole } from "@/lib/role";
-import { CHART_BG, mountGecko, unmountGecko } from "@/lib/gecko";
+import { CHART_BG, geckoRes, mountGecko, unmountGecko } from "@/lib/gecko";
+import { GT_TFS, geckoBars } from "@/lib/geckoBars";
 import { peek, solN, usdK, type Trades } from "@/lib/coin";
 import { cn, store } from "@/lib/utils";
 import { ChartIcons, type Badge, type Flag, type IconKind, type TipCard } from "./chartIcons";
@@ -28,10 +30,15 @@ const TFS: [number, string][] = [[1, "1s"], [5, "5s"], [15, "15s"], [60, "1m"], 
 // Blix mode is the radar's own candles (every trade it reads from the chain, 1s to 1h, and All).
 // Gecko (the default): GeckoTerminal's own chart in a frame, the official embed: TradingView with 1s to daily
 // candles and a market-cap toggle, live over its socket, no sign-in and nothing to expire. Fomo and Blix as before.
-type Src = "gecko" | "fomo" | "blix";
-// The switch offers Gecko and Blix. Fomo mode's code stays for when the server's Fomo login is back in use, but it
-// is not offered (its session on the server runs out hourly).
-const SRCS: Src[] = ["gecko", "blix"];
+// TradingView (tv): GeckoTerminal's candles drawn on this chart (TradingView's chart library), with the faces and
+// marks on them: the embed is another site's page, so nothing of Blix's can be drawn over its candles. The embed
+// stays one click away (GeckoTerminal) for its drawing tools and indicators.
+type Src = "tv" | "gecko" | "fomo" | "blix";
+// The switch offers TradingView, Blix (a coin's first day) and the GeckoTerminal embed. Fomo mode's code stays for
+// when the server's Fomo login is back in use, but it is not offered (its session on the server runs out hourly).
+const SRCS: Src[] = ["tv", "blix", "gecko"];
+// GeckoTerminal candles already drawn, per coin and size, so a chart opened again draws on its first frame.
+const gmemo = new Map<string, { raw: Row[]; at: number }>();
 // pump.fun's opening market cap, in SOL: 30 virtual SOL over 1.073B virtual tokens, on the 1B supply. Every pump
 // coin's chart starts there, flat until its first trade, as pump.fun's own does.
 const START_SOL = 27.96;
@@ -215,7 +222,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   // the overlays), an older one on the TradingView chart by Gecko (its complete history matters more than the
   // last second). A switch made by hand holds for that coin while it is open.
   const firstDay = (b?: number | null) => Boolean(b && b > 0 && Date.now() - b < 24 * 3600e3);
-  const autoSrc = (b?: number | null): Src => (firstDay(b) ? "blix" : "gecko");
+  const autoSrc = (b?: number | null): Src => (firstDay(b) ? "blix" : "tv");
   // A coin a day old or more: the Gecko chart only. Blix's own candles (and the per-coin chain subscription they
   // hold on the server) are for coins in their first day, where the second-by-second feed is worth its cost.
   // A replay (lib/replay.ts): Blix's candles built from the replayed trades, read again on every jump (epoch).
@@ -227,12 +234,15 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   const picked = useRef<string | null>(null);   // the coin whose source was chosen by hand
   useEffect(() => { if (picked.current !== mint) setSrcState(autoSrc(born)); }, [mint, born]);
   const [fres, setFresState] = useState<string>(() => { const v = store.get("coin:fres", ""); return FOMO_TFS.some(([r]) => r === v) ? v : defaultTf === 1 ? "1S" : defaultTf === 15 ? "15S" : "1"; });
-  const setSrc = (v: Src) => { if (geckoOnly) return; picked.current = mint; setSrcState(v); setFomoDown(null); };
+  const setSrc = (v: Src) => { if (geckoOnly && v === "blix") return; picked.current = mint; setSrcState(v); setFomoDown(null); };
+  // TradingView mode's candle size (GeckoTerminal's free sizes, 1m to 1d): by default the size its embed opens on.
+  const [tvTf, setTvTfState] = useState<number>(() => { const v = store.get("coin:tvtf", 0); return GT_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[geckoRes(born)] ?? 60; });
+  const setTvTf = (v: number) => { store.set("coin:tvtf", v); setTvTfState(v); };
   // Fomo's bars could not be had (the server's Fomo sign-in is out, Fomo is down): the chart shows Blix's own
   // candles for this visit and says so in a line, instead of an error where the chart should be.
   const [fomoDown, setFomoDown] = useState<string | null>(null);
   const setFres = (v: string) => { store.set("coin:fres", v); setFresState(v); };
-  const fomo = src === "fomo", gecko = src === "gecko";
+  const fomo = src === "fomo", gecko = src === "gecko", tv = src === "tv";
   // Gecko mode: the coin's frame (loaded already when its row was hovered) placed over this box, and Gecko's own
   // price asked for every few seconds so the figures around the chart (header, ticker) say what the chart says.
   const geckoBox = useRef<HTMLDivElement>(null);
@@ -245,7 +255,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     tick();
     return () => { alive = false; clearTimeout(timer); unmountGecko(); setGeckoMc(null); };
   }, [gecko, mint]);
-  const all = !fomo && pick === ALL, tf = fomo ? (FOMO_TFS.find(([r]) => r === fres)?.[2] ?? 60) : all ? allSize : pick;
+  const all = !fomo && !tv && pick === ALL, tf = fomo ? (FOMO_TFS.find(([r]) => r === fres)?.[2] ?? 60) : tv ? tvTf : all ? allSize : pick;
   const [hover, setHover] = useState<Row | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; r: number; lines: string[]; card?: TipCard } | null>(null);
   // tf: the size these figures are for (until the new size's first candles are drawn, nothing is shown);
@@ -506,6 +516,90 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       ftick();
       return () => { alive = false; unframe(); offLive(); clearTimeout(timer); removeChart(); s.current = {}; setHover(null); setTip(null); };
     }
+    if (tv) {
+      // ---- TradingView mode: GeckoTerminal's candles (the same pool and market caps its embed shows) on this chart,
+      // so the faces, dev and sniper marks sit on them. The browser reads them (lib/geckoBars.ts): the newest 1,000
+      // first, then older history in the background (the view stays put); after that the newest few every 15 s,
+      // and the open candle follows Blix's own read of GeckoTerminal's price every 5 s in between.
+      const gkey = `${mint}:G${tf}`;
+      let rows: Row[] = (() => { const m = gmemo.get(gkey); return m && Date.now() - m.at < FRESH ? m.raw : []; })();
+      const keep = () => { gmemo.delete(gkey); gmemo.set(gkey, { raw: rows, at: Date.now() }); if (gmemo.size > 14) gmemo.delete(gmemo.keys().next().value!); };
+      const paint = (list: Row[], reframe: boolean) => {
+        const right = reframe || !framed ? null : chart.timeScale().scrollPosition();
+        draw(list);
+        s.current.byTime = new Map(list.map((x) => [x.time, x])); s.current.first = list[0]?.time;
+        if (right != null) chart.timeScale().scrollToPosition(right, false);
+        if (reframe && list.length) frame(list.length);
+        last = list[list.length - 1] ?? null; firstTime = list[0]?.time ?? null;
+        if (box.current) Object.assign(box.current.dataset, { last: String(last?.time ?? ""), n: String(list.length), first: String(firstTime ?? ""), src: "GeckoTerminal", polls: String(polls), close: String(last?.close ?? "") });
+      };
+      if (rows.length) { paint(rows, true); setMeta({ tf, early: true, source: "GeckoTerminal", empty: false, last: rows[rows.length - 1] }); }
+      // A new or changed newest candle: drawn in place; an older one that changed redraws the lot.
+      const merge = (got: Row[]) => {
+        let older = false;
+        const by = new Map(rows.map((x) => [x.time, x]));
+        for (const x of got) { const o = by.get(x.time); if (o && x.time < (last?.time ?? Infinity) && !sameRow(o, x)) older = true; by.set(x.time, x); }
+        rows = [...by.values()].sort((a, b) => a.time - b.time);
+        if (older || !last) paint(rows, false);
+        else for (const x of got) if (x.time >= last.time) { put(x); s.current.byTime?.set(x.time, x); last = x; }
+      };
+      const gload = async () => {
+        if (first) {
+          const got = await geckoBars(mint, tf);
+          if (!alive) return;
+          first = false;
+          if (!got.length) { if (!rows.length) setMeta({ tf, source: "GeckoTerminal", note: "No GeckoTerminal candles for this coin yet", empty: true, last: null }); return; }
+          rows = got; paint(rows, true); keep();
+          setMeta({ tf, source: "GeckoTerminal", live: true, empty: false, last });
+          // Older history, up to 5,000 candles more, a read every 2.5 s (the free API's pace), the view kept.
+          for (let i = 0; i < 5 && alive && got.length >= 1000; i++) {
+            await new Promise((ok) => setTimeout(ok, 2500));
+            if (!alive) return;
+            const older = (await geckoBars(mint, tf, { before: rows[0].time }).catch(() => [] as Row[])).filter((x) => x.time < rows[0].time);
+            if (!alive || !older.length) break;
+            rows = [...older, ...rows]; paint(rows, false); keep();
+            if (older.length < 990) break;
+          }
+          return;
+        }
+        const got = await geckoBars(mint, tf, { limit: 5 });
+        if (!alive || !got.length) return;
+        merge(got); keep();
+        setMeta({ tf, source: "GeckoTerminal", live: true, empty: false, last });
+      };
+      // The open candle between reads: Blix's 5-second read of GeckoTerminal's price (market cap).
+      let ptimer = 0;
+      const price = async () => {
+        try {
+          const d = await api<{ mc: number | null }>(`gecko/price/${mint}`);
+          if (alive && d.mc && last && !first) {
+            pushCoinMc(mint, d.mc);
+            const time = Math.floor(Date.now() / 1000 / tf) * tf;
+            if (time >= last.time) {
+              const x: Row = time === last.time ? { ...last, high: Math.max(last.high, d.mc), low: Math.min(last.low, d.mc), close: d.mc } : { time, open: last.close, high: Math.max(last.close, d.mc), low: Math.min(last.close, d.mc), close: d.mc, value: 0 };
+              if (time === last.time) rows[rows.length - 1] = x; else rows.push(x);
+              put(x); s.current.byTime?.set(x.time, x); last = x;
+              setMeta((m) => ({ ...m, last: x }));
+            }
+          }
+        } catch { /* the next read */ }
+        if (alive) ptimer = window.setTimeout(price, document.hidden ? 20_000 : 5_000);
+      };
+      let gfails = 0;
+      const gtick = async () => {
+        if (!document.hidden || first) {
+          try { await gload(); polls++; gfails = 0; if (box.current) box.current.dataset.err = ""; }
+          catch (e) {
+            gfails++;
+            if (box.current) box.current.dataset.err = (e as Error).message;
+            if (alive && first && !rows.length) setMeta({ tf, source: "GeckoTerminal", note: (e as { busy?: boolean }).busy ? "GeckoTerminal is busy" : (e as Error).message, empty: true, last: null });
+          }
+        }
+        if (alive) timer = window.setTimeout(gtick, gfails ? Math.max(8000, backoff(gfails) * 2) : first ? 1500 : 15_000);
+      };
+      gtick(); price();
+      return () => { alive = false; unframe(); clearTimeout(timer); clearTimeout(ptimer); removeChart(); s.current = {}; setHover(null); setTip(null); };
+    }
     // Before the server's answer: only this size's own candles drawn before (a return to a size, instant and
     // identical). Candles built from the page's trades used to go first and were reframed a moment later by the
     // real answer, which read as a stray chart flashing between sizes.
@@ -572,6 +666,15 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         // bar positions over fewer bars). Candles already drawn from the same source before the new start stay.
         const keep = got.length && d.source === src ? raw.filter((x) => x.time < got[0].time).slice(-20_000) : [];
         raw = [...keep, ...got]; rawFirst = d.first ?? got[0]?.time ?? null;
+      }
+      // A second chart whose history starts after the launch (the radar heard the coin late; Jupiter's window is
+      // under 17 minutes at 1 s): the browser reads the minutes before from Jupiter (lib/jupEarly.ts) and they are
+      // put on the server's level where the two meet. Asked on every poll until they are in; then the chart starts
+      // at the launch and this no longer applies. Coins under 3 hours old, never in a replay.
+      const bornS = born && born > 0 ? born / 1000 : 0;
+      if (tf < 60 && !replayOn && bornS && Date.now() / 1000 - bornS < 3 * 3600 && raw.length && raw[0].time > bornS + 2 * tf && !/Jupiter before/.test(d.source || "")) {
+        const e = earlyBars(mint, tf, raw[0].time), pre = e ? onLevel(e, raw) : [];
+        if (pre.length) raw = [...pre, ...raw];
       }
       // A pump coin's chart begins at launch, at the opening cap, flat until the first trade the history holds:
       // a history that starts later (the radar met the coin mid-way, Jupiter's window) no longer opens the chart
@@ -787,6 +890,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   // is off screen). The chart keeps asking every few seconds, so it fills in by itself.
   // [title, text, button]: the button switches to Blix's own candles in Fomo mode, to 1m candles in Blix mode.
   const why: [string, string, boolean] | null = gecko || !shown || !meta.empty ? null
+    : tv && meta.note ? [/busy/i.test(meta.note) ? "Waiting for GeckoTerminal" : "No TradingView candles yet", /busy/i.test(meta.note) ? "GeckoTerminal is busy. Blix asks again in a few seconds." : "GeckoTerminal has no candles for this coin at this size yet. Blix live builds them from every trade it reads.", !geckoOnly]
     : fomo && meta.note ? ["Couldn't load Fomo's chart", `${meta.note.replace(/\.$/, "")}. Trying again every few seconds.`, true]
     : fomo ? ["No bars on Fomo yet", "Fomo has no candles for this coin at this size yet. Blix's own candles are built from every trade it reads from the chain.", true]
     : meta.note && /GeckoTerminal/i.test(meta.note) ? ["Waiting for the price history", "This coin's candles come from GeckoTerminal, which is busy right now. Blix asks again every few seconds.", false]
@@ -796,24 +900,22 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   return (
     <div className="flex flex-col gap-1.5 p-2.5">
       <div className="flex flex-wrap items-center gap-3">
-        {geckoOnly ? (
-          <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-rule bg-paper-3/70 px-3 text-xs font-semibold text-ink" title="TradingView chart by GeckoTerminal: market-cap candles, live. Blix's own live candles are for coins in their first day.">
-            <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 2v3M4 11v3M4 5h0a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 4 11h0a1.5 1.5 0 0 1-1.5-1.5v-3A1.5 1.5 0 0 1 4 5ZM11 1v2M11 9v6M11 3h0a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 11 9h0A1.5 1.5 0 0 1 9.5 7.5v-3A1.5 1.5 0 0 1 11 3Z" /></svg>
-            TradingView
-          </span>
-        ) : <div role="radiogroup" aria-label="Chart source" className="inline-flex items-center gap-0.5 rounded-full border border-rule bg-paper-3/70 p-0.5">
-          {SRCS.map((v) => (
+        <div role="radiogroup" aria-label="Chart source" className="inline-flex items-center gap-0.5 rounded-full border border-rule bg-paper-3/70 p-0.5">
+          {SRCS.filter((v) => !(geckoOnly && v === "blix")).map((v) => (
             <button key={v} role="radio" aria-checked={src === v} onClick={() => setSrc(v)}
-              title={v === "gecko" ? "TradingView chart by GeckoTerminal: 1m market-cap candles, live, every coin from its first trade" : "Blix's own candles: every trade read live from the chain, 1s to 1h, with traders, dev and sniper marks on the candles"}
+              title={v === "tv" ? "TradingView chart with the traders on it: GeckoTerminal's market-cap candles, 1m to 1d, every coin's whole history, with Fomo and pump.fun traders' faces, the dev and snipers on their candles"
+                : v === "gecko" ? "GeckoTerminal's own TradingView chart, with its drawing tools and indicators (no trader faces: it is another site's page)"
+                : "Blix's own candles: every trade read live from the chain, 1s to 1h, with traders, dev and sniper marks on the candles"}
               className={cn("flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition-colors duration-100",
                 src === v ? "bg-ink text-paper shadow-sm" : "text-muted hover:text-ink")}>
-              {v === "gecko"
+              {v === "tv"
                 ? <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 2v3M4 11v3M4 5h0a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 4 11h0a1.5 1.5 0 0 1-1.5-1.5v-3A1.5 1.5 0 0 1 4 5ZM11 1v2M11 9v6M11 3h0a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 11 9h0A1.5 1.5 0 0 1 9.5 7.5v-3A1.5 1.5 0 0 1 11 3Z" /></svg>
+                : v === "gecko" ? <SiteLogo site="geckoterminal" className="size-3.5" />
                 : <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor"><path d="M9.2 1 3 9h4l-1 6 7-8.5H8.6L9.2 1Z" /></svg>}
-              {v === "gecko" ? "TradingView" : "Blix live"}
+              {v === "tv" ? "TradingView" : v === "gecko" ? "GeckoTerminal" : "Blix live"}
             </button>
           ))}
-        </div>}
+        </div>
         {/* Developer only (the user, 2026-10-10). Replay this coin's last day from a bar you pick (lib/replay.ts opens on the whole day: click a candle). */}
         {owner && !replayOn && (
           <button onClick={() => void startReplay(mint)} title="Replay this coin: see its whole day, click the bar to start from, then play it forward and paper-trade it"
@@ -824,7 +926,10 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         )}
           {fomoDown && !fomo && <span className="ml-2 truncate text-[11px] text-muted" title={fomoDown}>{fomoDown}</span>}
         {!gecko && <div role="radiogroup" aria-label="Candle size" className="relative inline-flex items-center gap-0.5 rounded-full border border-rule bg-paper-3/70 p-0.5">
-          {fomo ? FOMO_TFS.map(([r, l]) => (
+          {tv ? GT_TFS.map(([v, l]) => (
+            <button key={v} role="radio" aria-checked={tvTf === v} onClick={() => setTvTf(v)}
+              className={cn("num flex h-6 min-w-8 items-center justify-center rounded-full px-2.5 text-xs font-semibold transition-colors duration-100", tvTf === v ? "bg-ink text-paper shadow-sm" : "text-muted hover:bg-paper-4/60 hover:text-ink")}>{l}</button>
+          )) : fomo ? FOMO_TFS.map(([r, l]) => (
             <button key={r} role="radio" aria-checked={fres === r} onClick={() => setFres(r)}
               className={cn("num flex h-6 min-w-8 items-center justify-center rounded-full px-2.5 text-xs font-semibold transition-colors duration-100", fres === r ? "bg-ink text-paper shadow-sm" : "text-muted hover:bg-paper-4/60 hover:text-ink")}>{l}</button>
           )) : [...TFS, [ALL, "All"] as [number, string]].map(([v, l]) => (
@@ -860,10 +965,10 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
             </span>
           );
         })()}
-        <span className="ml-auto flex items-center gap-2 text-xs text-muted">
-          {shown && !all && tf >= 5 && <span className="num tabular-nums text-ink-2" title="Until this candle closes">{countdown(left)}</span>}
-          {gecko ? <a href={`https://www.geckoterminal.com/solana/pools/${mint}`} target="_blank" rel="noopener" className="inline-flex items-center gap-1 hover:text-ink"><SiteLogo site="geckoterminal" className="size-3.5" />GeckoTerminal ↗</a> : shown && !meta.early ? <>{meta.live ? "● " : ""}{meta.source || ""}</> : null}
-        </span>
+        {/* Blix live shows no countdown or source label here (the owner, 2026-10-10): the chart speaks for itself. */}
+        {gecko && <span className="ml-auto flex items-center gap-2 text-xs text-muted">
+          <a href={`https://www.geckoterminal.com/solana/pools/${mint}`} target="_blank" rel="noopener" className="inline-flex items-center gap-1 hover:text-ink"><SiteLogo site="geckoterminal" className="size-3.5" />GeckoTerminal ↗</a>
+        </span>}
       </div>
       <div className="relative">
         {gecko
@@ -892,7 +997,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
         {why ? (
           <div className="absolute inset-0 z-[1]">
             <EmptyState icon="chart" loading={!why[2] && /^Waiting/.test(why[0])} title={why[0]} hint={why[1]}
-              action={why[2] ? { label: fomo ? "Use Blix's candles" : "Show 1m", onClick: () => (fomo ? setSrc("blix") : setTf(60)) } : null} />
+              action={why[2] ? { label: fomo || tv ? "Use Blix's candles" : "Show 1m", onClick: () => (fomo || tv ? setSrc("blix") : setTf(60)) } : null} />
           </div>
         ) : !gecko && !shown ? (
           <div className="absolute inset-0 z-[1] bg-paper/60 backdrop-blur-[1px]">
