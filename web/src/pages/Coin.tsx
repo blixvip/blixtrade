@@ -2,14 +2,14 @@
 // the candle chart with the dev's, snipers', bundles' and followed wallets' trades marked and your average
 // buy and sell drawn across it, tabs under it, a trading column on the right, and the floating instant trade
 // panel (one-click presets). main.tsx loads this lazily; keep the export and the prop.
-// Data: /api/token/<mint> every 15 s, /api/coin/<mint> every 3 s, /api/coin/<mint>/trades every 8 s (4 s without the stream), and from
+// Data: /api/token/<mint> every 15 s, /api/coin/<mint> every 3 s, /api/coin/<mint>/trades every 2 s, and from
 // the stream, every trade the moment the radar reads it from the chain (`ctrade`) and the holder figures each
 // time the chain changes them (`cholders`).
 import { cn } from "@/lib/utils";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadPaperSizes } from "@/lib/mode";
 import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
-import { onCoinRows, useCoinHolders, usePulse } from "@/lib/pulse";
+import { onCoinRows, useCoinHolders } from "@/lib/pulse";
 import type { ChartEvent, ChartPeople, Level, Mark } from "./coin/Chart";
 import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
@@ -48,9 +48,9 @@ export function Coin({ mint }: { mint: string }) {
   const token = usePoll<TokenDetail>(`token/${mint}`, 15_000);
   // Every trade arrives on the stream the moment the radar reads it (ctrade, below); these reads fill in the rest.
   const coinPolled = usePoll<CoinData>(`coin/${mint}`, 3_000);
-  // With the stream connected the pushed rows are the live list and this read only fills in what Jupiter indexed.
-  const streaming = usePulse((s) => s.connected);
-  const polled = usePoll<Trades>(`coin/${mint}/trades?limit=150`, streaming ? 8_000 : 4_000);
+  // Read every 2 s: a bonded coin's pool trades come only from this read (Jupiter's list, the chain's rows on top),
+  // and trades the radar recovers late from a block land here, not on the stream.
+  const polled = usePoll<Trades>(`coin/${mint}/trades?limit=150`, 2_000);
   // Trades pushed by the stream as the radar reads them, newest first, applied once a frame.
   const [pushed, setPushed] = useState<{ mint: string; rows: Trade[] }>({ mint, rows: [] });
   // A replay jump (lib/replay.ts) starts the pushed list over: rows from after the new moment must go.
@@ -64,18 +64,27 @@ export function Coin({ mint }: { mint: string }) {
     });
     return () => { un(); cancelAnimationFrame(raf); };
   }, [mint, replayEpoch]);
-  // The list: the polled rows (a transaction Jupiter has indexed shows as it lists it, every leg exact), and the
-  // pushed rows of transactions not in it yet. Same rule as the server's coinTrades.
+  // Every trade with a signature that any read brought is kept while the page is open, so a read that comes back
+  // short or empty (a pool source answering with nothing for a while) never takes rows off the list.
+  const held = useRef<{ key: string; rows: Map<string, Trade> }>({ key: "", rows: new Map() });
+  // The list: the kept rows (a transaction Jupiter has indexed shows as it lists it, every leg exact), the latest
+  // read's rows without a signature, and the pushed rows of transactions not in either yet.
   const trades = useMemo(() => {
-    const p = polled.data;
+    const key = `${mint}:${replayEpoch}`;
+    if (held.current.key !== key) held.current = { key, rows: new Map() };
+    const h = held.current.rows, p = polled.data?.mint === mint || !polled.data?.mint ? polled.data : null;
+    const leg = (x: Trade) => `${x.tx}:${x.side}:${x.tokens ?? ""}:${x.wallet ?? ""}`;
+    for (const x of p?.trades || []) if (x.tx) h.set(leg(x), x);
+    if (h.size > 400) [...h.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, h.size - 300).forEach(([k]) => h.delete(k));
+    const kept = [...h.values()], untagged = (p?.trades || []).filter((x) => !x.tx);
+    const seen = new Set(kept.map((x) => x.tx));
+    const newest = kept.reduce((m, x) => Math.max(m, x.t), 0);
     const rows = pushed.mint === mint ? pushed.rows : [];
-    if (!rows.length) return polled;
-    const seen = new Set((p?.trades || []).map((x) => x.tx).filter(Boolean));
-    const newest = (p?.trades || []).reduce((m, x) => Math.max(m, x.t), 0);
     const fresh = rows.filter((x) => (x.tx ? !seen.has(x.tx) : x.t > newest));
-    const list = [...fresh, ...(p?.trades || [])].sort((a, b) => b.t - a.t).slice(0, 150);
+    const list = [...fresh, ...kept, ...untagged].sort((a, b) => b.t - a.t).slice(0, 150);
+    if (!p && !list.length) return polled;
     return { ...polled, data: { mint, source: p?.source ?? "live", note: p?.note, ...p, trades: list } as Trades };
-  }, [polled, pushed, mint]);
+  }, [polled, pushed, mint, replayEpoch]);
   // Holder figures from the chain the moment they change, over the polled ones.
   // (Not in a replay: the chain's holder figures are today's, the replay's come from its own ledger.)
   const liveHolders = useCoinHolders(mint), liveH = replayEpoch ? null : liveHolders;

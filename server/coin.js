@@ -22,6 +22,7 @@ import { levelNow, chartClose } from "./candles.js";
 let fastMcUsd = () => null;
 export const setFastMc = (fn) => { fastMcUsd = fn; };
 import { holdersLive, onCurve, soldOut } from "./holderslive.js";
+import { tradesWithWallets } from "./journal.js";
 
 const now = () => Date.now();
 const WINDOW = 30 * 60_000;         // coins are kept while they traded within this long (holders.js keeps its books as long)
@@ -554,16 +555,46 @@ function devCoins(creator, self) {
   return { count: list.length, others: list.filter((x) => x.mint !== self).length, list: list.slice(0, 40), window: "launches in the last 6 hours plus every coin Blix tracked" };
 }
 
+// A coin's ring starts empty after a restart (or once dropped), so an opened coin's list read "no trades" until its
+// next trade: its last 15 minutes come back from the journal instead (every trade the radar stored, with wallets;
+// no signature or token count there). Asked at most every 30 s per coin.
+const seeded = new Map();
+function seedTape(mint) {
+  const r = tapes.get(mint);
+  if (r?.trades.length) return r;
+  const usd = feed.solUsd, was = seeded.get(mint);
+  if (!usd || (was && now() - was < 30_000)) return r;
+  seeded.set(mint, now()); if (seeded.size > 500) seeded.delete(seeded.keys().next().value);
+  let rows = [];
+  try { rows = tradesWithWallets(mint, now() - 15 * 60_000); } catch { return r; }
+  if (!rows.length) return r;
+  const t = r || tapeOf(mint, rows[0].t);
+  for (const x of rows.slice(-PER_FOCUS)) t.trades.push([x.t, x.buy ? 1 : 0, x.usd / usd, null, x.mc / usd, x.w || null, null, null]);
+  t.since = Math.min(t.since, rows[0].t);
+  t.last = now();
+  return t;
+}
+// A bonded coin's pool list from Jupiter (GeckoTerminal behind it): either can answer with nothing for a while
+// (seen 2026-10-10: 61 of 81 reads empty on a busy coin), which emptied the page's list. The last list that had
+// trades is kept and shown instead, for up to 10 minutes, with the chain's newer rows on top.
+const goodPool = new Map();
+async function poolTradesKept(mint, t, n) {
+  const v = await poolTrades(mint, t, n);
+  if (v.trades.length) { goodPool.set(mint, { t: now(), v }); if (goodPool.size > 300) goodPool.delete(goodPool.keys().next().value); return v; }
+  const g = goodPool.get(mint);
+  return g && now() - g.t < 10 * 60_000 ? { ...g.v, note: "The pool's last trades; Jupiter and GeckoTerminal are slow right now, retrying." } : v;
+}
+
 // GET /api/coin/<mint>/trades?limit=100
 export async function coinTrades(mint, { limit = 100 } = {}) {
   const n = Math.min(Math.max(+limit || 100, 10), 500);
-  const r = tapes.get(mint);
+  const r = seedTape(mint);
   if (r) r.focus = now();
   const t = tokenRow(mint);
   const L = liveStats(mint);
   const bonded = Boolean(t?.graduated) || (L?.progress ?? 0) >= 0.995;
   if (bonded && t?.pair) {
-    const asked = poolTrades(mint, t, n);
+    const asked = poolTradesKept(mint, t, n);
     if (!r?.trades.length) return asked;
     // The radar's own chain rows go out at once when Jupiter and GeckoTerminal are slow (8 s, then 12 s, seen
     // 2026-10-06): the pool's list is kept by both (jup.js, pools) and joins on the page's next ask.
@@ -578,7 +609,7 @@ export async function coinTrades(mint, { limit = 100 } = {}) {
     return { ...pool, source: pool.trades.length ? "pool" : "live", trades, note: pool.trades.length ? "Bonded: the pool's trades, live from the chain, checked against Jupiter's list." : pool.note };
   }
   if (r?.trades.length) return cached(`trades:${mint}:${n}`, 500, () => liveTrades(mint, r, n));
-  if (t?.pair) return poolTrades(mint, t, n);
+  if (t?.pair) return poolTradesKept(mint, t, n);
   return { mint, source: "none", trades: [], note: "No trades seen yet. Trades appear here as soon as the coin trades on a bonding curve Blix reads." };
 }
 
