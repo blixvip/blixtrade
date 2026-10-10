@@ -53,6 +53,12 @@ export function addTrade(mint, mc, vol, buy, atMs = now()) {
 
 // A coin's trade buckets rebuilt from the trade journal (journal.js buckets(): the same rule as addTrade), after
 // a restart or when a provisional trade turned out never to have happened.
+// Where a coin's live trade buckets stand: when the last trade came in (ms) and the newest bucket's time (s).
+export function bookAt(mint) {
+  const e = book.get(mint);
+  return e ? { at: e.last || 0, t: e.b[e.b.length - 1]?.[0] ?? 0 } : null;
+}
+
 export function setBook(mint, b) {
   if (b.length) book.set(mint, { b: b.slice(-KEEP), last: now() });
   else book.delete(mint);

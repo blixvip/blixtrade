@@ -595,6 +595,7 @@ export async function coinTrades(mint, { limit = 100 } = {}) {
   const bonded = Boolean(t?.graduated) || (L?.progress ?? 0) >= 0.995;
   if (bonded && t?.pair) {
     const asked = poolTradesKept(mint, t, n);
+    asked.then((p) => feedPool(mint, p?.trades)).catch(() => {});
     if (!r?.trades.length) return asked;
     // The radar's own chain rows go out at once when Jupiter and GeckoTerminal are slow (8 s, then 12 s, seen
     // 2026-10-06): the pool's list is kept by both (jup.js, pools) and joins on the page's next ask.
@@ -623,6 +624,21 @@ function liveTrades(mint, r, n) {
 
 // Bonded coins: the pool's last trades from GeckoTerminal (free, rate limited; cached 10 s per pool).
 const pools = new Map();
+// Each new trade of a bonded coin's pool list (Jupiter's or GeckoTerminal's, read for the trade list) goes to these
+// once (server.js: they fill the chart when the chain stream has nothing for the pool, as for 32AKdm and SAUL,
+// 2026-10-10: their charts sat at the migration candle while the trade list moved).
+const poolFns = [];
+export const onPoolList = (fn) => poolFns.push(fn);
+const poolFed = new Map();   // mint -> the newest trade time already passed on
+function feedPool(mint, trades) {
+  if (!poolFns.length || !trades?.length) return;
+  const since = poolFed.get(mint) ?? now() - 120_000;
+  const fresh = trades.filter((x) => x.t > since && x.mcUsd > 0).sort((a, b) => a.t - b.t);
+  if (!fresh.length) return;
+  poolFed.set(mint, fresh[fresh.length - 1].t);
+  if (poolFed.size > 500) poolFed.delete(poolFed.keys().next().value);
+  for (const fn of poolFns) for (const x of fresh) { try { fn(mint, x); } catch {} }
+}
 // GET /api/coin/<mint>/big: trades of $1,000 or more over the coin's history (Jupiter), for the chart's bubbles.
 export async function coinBigTrades(mint) {
   const t = tokenRow(mint) || {};

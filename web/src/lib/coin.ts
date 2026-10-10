@@ -147,9 +147,16 @@ export function prefetchCoin(mint: string, bornKnown?: number | null) {
   warmed.set(mint, t);
   if (warmed.size > 100) warmed.delete(warmed.keys().next().value!);
   prefetchPage("coin", mint);
-  // The coin's GeckoTerminal chart frame starts loading now (lib/gecko.ts), so the page opens with it drawn.
-  // Only a coin that will open on the Gecko chart (a day old or more; pages/coin/Chart.tsx autoSrc) is worth a frame.
-  import("./pulse").then((p) => { const born = bornKnown || p.usePulse.getState().coins[mint]?.born || null; if (!(born && Date.now() - born < 24 * 3600e3)) return import("./gecko").then((g) => g.warmGecko(mint, born)); }).catch(() => {});
+  // A coin a day old or more opens on the TradingView chart (pages/coin/Chart.tsx): its GeckoTerminal candles start
+  // loading now, at the size it will open on, so the page opens with them drawn.
+  import("./pulse").then((p) => {
+    const born = bornKnown || p.usePulse.getState().coins[mint]?.born || null;
+    if (born && Date.now() - born < 24 * 3600e3) return;
+    return Promise.all([import("./geckoBars"), import("./gecko")]).then(([b, g]) => {
+      const v = store.get("coin:tvtf", 0);
+      b.warmGeckoBars(mint, b.GT_TFS.some(([x]) => x === v) ? v : ({ "1m": 60, "5m": 300, "15m": 900 } as Record<string, number>)[g.geckoRes(born)] ?? 60);
+    });
+  }).catch(() => {});
   prefetch(`token/${mint}`); prefetch(`coin/${mint}`); prefetch(`coin/${mint}/trades?limit=150`); prefetch(`coin/${mint}/people`);
   // The chart's candles: the size last chosen, or 1s and 15s (they make up every coarser size until its own
   // answer comes), straight into the chart's own cache.

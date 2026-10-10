@@ -45,7 +45,7 @@ import { snipeFor, snipeStats, snipeDebug } from "./snipe.js";
 import * as paper from "./paper.js";
 import { membersReport } from "./adminmembers.js";
 import { quote } from "./quote.js";
-import { candles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade } from "./candles.js";
+import { candles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade, bookAt } from "./candles.js";
 import { startTunnel, tunnelStats } from "./tunnel.js";
 import { startTriage, triageRecord, triageFor } from "./triage.js";
 import { testFast } from "./fast.js";
@@ -1528,6 +1528,18 @@ onFastPx((mint, x) => {
   const mc = x.mcSol * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9);
   fastLast.set(mint, { mc, t: Date.now() }); if (fastLast.size > 100) fastLast.delete(fastLast.keys().next().value);
   addCandleTrade(mint, mc, x.sol * liveFeed.solUsd, x.buy); pxMove(mint, mc); chartTrade(mint, mc, x.sol * liveFeed.solUsd, x.buy, x.slot);
+});
+// A bonded coin whose pool the chain stream is not delivering (no trade in its candles for 15 s): the pool's trade
+// list (coin.js, Jupiter's / GeckoTerminal's, read for the trade list) fills the candles and the live figure, so the
+// chart never sits frozen at the migration candle. Only trades at or after the newest candle (the book is in order).
+const poolFilled = new Map();   // mint -> when this last wrote its candles (its own writes do not count as the stream)
+coin.onPoolList((mint, x) => {
+  const b = bookAt(mint);
+  if (b && Date.now() - b.at < 15_000 && b.at > (poolFilled.get(mint) || 0) + 50) return;
+  if (b && x.t / 1000 < b.t) return;
+  addCandleTrade(mint, x.mcUsd, x.usd || 0, x.side === "buy", x.t);
+  poolFilled.set(mint, Date.now()); if (poolFilled.size > 500) poolFilled.delete(poolFilled.keys().next().value);
+  if (Date.now() - x.t < 60_000) pxMove(mint, x.mcUsd);
 });
 coin.setFastMc((mint) => { const f = fastLast.get(mint); return f && isFast(mint) && Date.now() - f.t < 10_000 ? f.mc * levelNow(mint) : null; });
 setFastCheck(isFast); setPulseFastCheck(isFast);

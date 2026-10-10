@@ -40,8 +40,22 @@ export function geckoPool(mint: string): Promise<Pool | null> {
   return p;
 }
 
+// The newest 1,000 of a size, kept 30 s: a link's hover (lib/coin.ts prefetchCoin) reads them, the chart draws them.
+const firstRead = new Map<string, { at: number; p: Promise<GBar[]> }>();
+export function geckoBars(mint: string, tf: number, opts: { before?: number; limit?: number } = {}): Promise<GBar[]> {
+  if (opts.before || (opts.limit ?? 1000) !== 1000) return read(mint, tf, opts);
+  const k = `${mint}:${tf}`, c = firstRead.get(k);
+  if (c && Date.now() - c.at < 30_000) return c.p;
+  const p = read(mint, tf, opts);
+  p.catch(() => firstRead.delete(k));
+  firstRead.set(k, { at: Date.now(), p });
+  if (firstRead.size > 40) firstRead.delete(firstRead.keys().next().value!);
+  return p;
+}
+export const warmGeckoBars = (mint: string, tf: number) => { geckoBars(mint, tf).catch(() => {}); };
+
 // One read of candles, oldest first, as market caps in USD. `before`: candles before this time (seconds).
-export async function geckoBars(mint: string, tf: number, { before, limit = 1000 }: { before?: number; limit?: number } = {}): Promise<GBar[]> {
+async function read(mint: string, tf: number, { before, limit = 1000 }: { before?: number; limit?: number } = {}): Promise<GBar[]> {
   const size = GT_TFS.find(([s]) => s === tf);
   if (!size) return [];
   const pool = await geckoPool(mint);
