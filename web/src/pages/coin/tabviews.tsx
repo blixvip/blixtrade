@@ -9,7 +9,9 @@ import { Flash } from "@/components/Live";
 import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post } from "@/lib/api";
-import { pctN, solNum, usdK, usdSigned, type CoinData, type Holder, type TokenDetail } from "@/lib/coin";
+import { pctN, solNum, usdK, usdSigned, type CoinData, type Holder, type HolderFace, type TokenDetail } from "@/lib/coin";
+import { SiteLogo } from "@/components/logos";
+import { thumb } from "@/lib/thumb";
 import { ageStr, providerOf, shortAddr } from "@/lib/format";
 import { useLiveMc } from "@/lib/livepx";
 import { rowLink, useNow } from "@/lib/route";
@@ -30,13 +32,32 @@ export function Identicon({ addr, size = 22 }: { addr: string; size?: number }) 
 const copy = (text: string, what = "Address") => { navigator.clipboard?.writeText(text); toast(`${what} copied`); };
 
 // A wallet: its colours, short address (Solscan), a copy button, and what it is on this coin.
-export function WalletCell({ x, pool }: { x: Holder; pool?: string | null }) {
+export function WalletCell({ x, pool, face }: { x: Holder; pool?: string | null; face?: HolderFace | null }) {
   if (pool) {
     return (
       <span className="flex min-w-0 items-center gap-2">
         <span className="grid size-[22px] shrink-0 place-items-center rounded-full bg-info/15 text-info"><Icon.curve className="size-3.5" /></span>
         <b className="text-md font-semibold text-ink-2">{pool}</b>
         <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
+      </span>
+    );
+  }
+  if (face) {
+    const who = `@${face.name.replace(/^@/, "")}`;
+    const tip = `${face.src === "fomo" ? "Fomo trader" : "pump.fun account"} ${who}${face.followers ? ` · ${face.followers.toLocaleString()} followers` : ""}${face.how === "amount" ? " · matched by the exact amount they hold" : ""}`;
+    const name = <b className="max-w-40 truncate text-md font-semibold text-ink">{who}</b>;
+    return (
+      <span className="group/w flex min-w-0 items-center gap-2">
+        <Tip tip={tip}>
+          <span className="relative grid size-[22px] shrink-0 place-items-center">
+            <span className="absolute inset-0 overflow-hidden rounded-full ring-1 ring-edge"><Identicon addr={x.wallet} />{face.pic && <img src={thumb(face.pic, 44)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />}</span>
+            <SiteLogo site={face.src === "fomo" ? "fomo" : "pumpfun"} className="absolute -right-1 -bottom-1 size-2.5 rounded-full ring-1 ring-paper-2" />
+          </span>
+        </Tip>
+        {face.src === "fomo" ? <a href={`#/trader/${encodeURIComponent(face.name.replace(/^@/, ""))}`} className="min-w-0 hover:[&_b]:text-accent">{name}</a> : name}
+        <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={x.wallet} className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
+        <button onClick={() => copy(x.wallet)} aria-label="Copy address" className="text-muted opacity-0 transition-opacity group-hover/w:opacity-100 hover:text-ink focus-visible:opacity-100"><Icon.copy className="size-3.5" /></button>
+        <Tags x={{ ...x, top10: false }} />
       </span>
     );
   }
@@ -192,7 +213,7 @@ export function HoldersView({ c, bonding }: { c: CoinData; bonding: boolean }) {
                 return (
                   <tr key={x.wallet} className={cn("transition-colors hover:bg-paper-3", pool && "bg-info/[0.04]", x.tag === "dev" && "bg-warn/[0.05]")}>
                     <td className={td}>{pool ? "" : <Rank n={rank} />}</td>
-                    <td className={td}><WalletCell x={x} pool={pool} /></td>
+                    <td className={td}><WalletCell x={x} pool={pool} face={c.faces?.[x.wallet]} /></td>
                     <td className={cn(td, "text-right")}>{pool ? <span className="num text-md font-semibold text-ink-2">{pctN(x.pct, 1)}</span> : <Holding x={x} scale={scale} wide />}</td>
                     <td className={cn(td, "text-right text-ink-2")}>{x.valueUsd != null ? usdK(x.valueUsd) : <Dash />}</td>
                     {flows && <>
@@ -254,7 +275,7 @@ export function TradersView({ c }: { c: CoinData }) {
             {list.map((x, i) => (
               <tr key={x.wallet} className="transition-colors hover:bg-paper-3">
                 <td className={td}><Rank n={i + 1} /></td>
-                <td className={td}><WalletCell x={x} /></td>
+                <td className={td}><WalletCell x={x} face={c.faces?.[x.wallet]} /></td>
                 <td className={cn(td, "text-right")}><Flow sol={x.boughtSol} usd={x.boughtUsd} mc={x.avgBuyMc} side="buy" /></td>
                 <td className={cn(td, "text-right")}><Flow sol={x.soldSol} usd={x.soldUsd} mc={x.avgSellMc} side="sell" /></td>
                 <td className={cn(td, "text-right")}><Holding x={x} scale={scale} /></td>

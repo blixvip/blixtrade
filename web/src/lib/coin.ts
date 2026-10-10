@@ -19,6 +19,8 @@ export interface Holder extends WalletTags {
 }
 export interface Group { n: number; pct: number; maxPct: number; sold: number }
 export interface DevCoin { mint: string; name?: string | null; symbol?: string | null; t?: number | null; mcap?: number | null; peak?: number | null; status?: string | null; graduated?: boolean; progress?: number }
+export type HolderFace = { src: "fomo" | "pump"; name: string; pic: string | null; followers: number; how?: "wallet" | "amount"; x?: string | null };
+
 export interface CoinData {
   mint: string; symbol: string | null; name: string | null; solUsd: number | null; live: boolean; onCurve: boolean;
   mcUsd: number | null; priceUsd: number | null; athUsd: number | null; progress: number | null; supply: number;
@@ -31,6 +33,8 @@ export interface CoinData {
   audit?: { mintAuthorityDisabled?: boolean; freezeAuthorityDisabled?: boolean; topHoldersPercentage?: number; botHoldersPercentage?: number; botHoldersCount?: number; devMints?: number; devMigrations?: number;
     bundlerStats?: { totalBundles?: number; holdingPct?: number; holdingPctATH?: number }; holders?: number | null; launchpad?: string | null; organic?: string | null } | null;
   traders: Holder[]; early: Holder[];
+  // Who holders are, by wallet: a Fomo trader placed on it, else its pump.fun profile (server bubblemap.js holderFaces).
+  faces?: Record<string, HolderFace>;
   dev: { wallet: string; pct: number | null; maxPct?: number; boughtSol?: number; soldSol?: number; sold?: "all" | "part" | null; coins: { count: number; others: number; list: DevCoin[]; window: string } } | null;
   // Current figures only: the live ledger on the curve, RugCheck after bonding (checked = when it read it); null = unknown now.
   info: { holders: number | null; top10: number | null; devPct: number | null; snipers: Group | null; bundle: Group | null; insiders: number | null; lpLocked: number | null; safety: number | null; traders: number | null; source: string | null; checked: number | null };

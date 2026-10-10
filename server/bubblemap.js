@@ -387,3 +387,27 @@ async function small(method, params) {
   }
   return rpc(method, params);
 }
+
+// Faces for the coin page's Holders table (web/src/pages/coin/tabviews.tsx): who each holder is, by the bubble
+// map's own rules (a Fomo trader placed on a wallet, else the wallet's pump.fun profile). { wallet: person }.
+// Worked out at most every 10 s a coin: the page polls every 2 s and the Fomo placing walks the coin's balances.
+const faces = new Map();   // mint -> { t, key, v }
+export function holderFaces(mint, list) {
+  const key = list.length ? `${list.length}:${list[0].wallet}` : "";
+  const memo = faces.get(mint);
+  if (memo && now() - memo.t < 10_000 && memo.key === key) return memo.v;
+  const read = list.filter((h) => h.pct > 0 && h.label !== "Pool" && validAddress(h.wallet));
+  const v = {};
+  try {
+    const fomo = fomoPeople(mint, read);
+    const pump = pumpPeople(read.map((h) => h.wallet).filter((w) => !fomo.byWallet.has(w) && !EXCHANGES.has(w)));
+    for (const h of read) {
+      const f = fomo.byWallet.get(h.wallet), p = pump.get(h.wallet);
+      if (f) v[h.wallet] = { src: "fomo", name: f.handle, pic: f.pic, link: f.link, followers: f.followers || 0, how: f.how };
+      else if (p) v[h.wallet] = { src: "pump", name: p.name, pic: p.pic || null, link: `https://pump.fun/profile/${encodeURIComponent(p.name)}`, followers: p.followers || 0, x: p.x || null };
+    }
+  } catch {}
+  faces.set(mint, { t: now(), key, v });
+  if (faces.size > 300) faces.delete(faces.keys().next().value);
+  return v;
+}

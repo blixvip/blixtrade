@@ -64,7 +64,7 @@ import { onTxTrade } from "./cointape.js";
 import { onHolders, holdersLive, onCurve as isWallet, onBalance } from "./holderslive.js";
 import { fomoList, fomoMints } from "./fomolists.js";
 import { fomoFeed, relayIn, relayedStats } from "./fomofeed.js";
-import { bubbleMap, makeBubbleMap } from "./bubblemap.js";
+import { bubbleMap, makeBubbleMap, holderFaces } from "./bubblemap.js";
 import { banner } from "./banner.js";
 import { feedViews, feedLike, viewerOf } from "./feedviews.js";
 import { fomoBars, onFomoBar, fomoChartStatus, setFomoToken } from "./fomochart.js";
@@ -353,6 +353,16 @@ function liveBase(t, win, j) {
     holders: full ? h.h : o.holders, top10: full ? h.t10 : o.top10, dev: full ? h.dev : o.dev, devSold: full ? h.ds : null,
     // Snipers and bundlers: the ledger's when it saw the launch, else read from the coin's first blocks (snipe.js).
     ...launchFigures(t.mint, h) };
+}
+
+// The coin page with who its holders are (holderFaces: Fomo traders, pump.fun profiles) as `faces`, beside the
+// cached page rather than in it.
+function withFaces(mint, page) {
+  const list = page?.holders?.list;
+  if (!list?.length) return page;
+  let faces = null;
+  try { faces = holderFaces(mint, list); } catch {}
+  return faces && Object.keys(faces).length ? { ...page, faces } : page;
 }
 
 function withSpark(list, win = "1h") {
@@ -1349,7 +1359,7 @@ async function handleRequest(req, res) {
     const cpp = p.match(new RegExp(`^/api/coin/(${MINT})/people$`));
     if (cpp) return send(res, 200, coinPeople(cpp[1]));
     const cpm = p.match(new RegExp(`^/api/coin/(${MINT})(/trades|/big)?$`));
-    if (cpm) return send(res, 200, cpm[2] === "/big" ? await coin.coinBigTrades(cpm[1]) : cpm[2] ? await coin.coinTrades(cpm[1], params) : coin.coinPage(cpm[1], params));
+    if (cpm) return send(res, 200, cpm[2] === "/big" ? await coin.coinBigTrades(cpm[1]) : cpm[2] ? await coin.coinTrades(cpm[1], params) : withFaces(cpm[1], coin.coinPage(cpm[1], params)));
     // The paper wallet: how much fake SOL is left, and starting over.
     if (p === "/api/paper/wallet") return send(res, 200, cached(`paper-wallet:${res.blixAs || ""}`, 1000, paper.wallet));
     if (p === "/api/paper/reset" && POST) { const b = await readBody(req); forget("paper-wallet"); return send(res, 200, { wallet: paper.resetWallet(b.sol), desk: paper.desk() }); }
