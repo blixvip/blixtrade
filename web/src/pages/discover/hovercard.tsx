@@ -1,11 +1,14 @@
 // The card that opens when the pointer rests on a Discover coin's pair cell, like Axiom's: the coin's
 // DexScreener banner (its own picture, blurred, when it has none), picture, ticker, market cap and change, then
 // volume, liquidity, holders, top 10, dev, age and the contract with a copy button, and a watchlist star.
-// It opens 220 ms after the pointer rests on the pair cell (not on its picture, links, buttons or faces), at the pointer and following it, stays while
-// the pointer is on the cell or the card, and closes
-// 150 ms after it has left both. One card at a time on the page; scrolling closes it.
-import { cloneElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+// One card for the whole page (its own layer, like lib/update.tsx): it opens 120 ms after the pointer rests on a
+// pair cell (not on the cell's picture, which shows itself big, nor its links, buttons or faces), with its top-left
+// corner at the pointer, and follows the pointer frame by frame (moved directly, not through React). Moving to
+// another row swaps what it shows in place; it fades and slides in, fades out 150 ms after the pointer has left
+// both the cell and the card, and scrolling puts it away.
+import { cloneElement, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import { create } from "zustand";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
 import { CoinImg } from "@/components/page";
 import { toast } from "@/components/ui/toast";
@@ -15,60 +18,97 @@ import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { pick, type Row, type Tf } from "./parts";
 
-const W = 300, H = 400;   // the card's width and (about) its height
-let closeOthers: (() => void) | null = null;
-
-type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; ref?: unknown }>;
-// Inside the trigger, these keep their own hover (links, the X card, buttons, the known-holder faces, and the coin's
+const W = 300, GAP = 14;   // the card's width; how far its corner sits from the pointer
+// Inside a cell, these keep their own hover (links, the X card, buttons, the known-holder faces, and the coin's
 // picture, which shows itself big: PicPreview): no coin card there.
 const OWN = "a, button, [data-known-holders], [data-coin-pic]";
+
+const useCard = create<{ r: Row | null; tf: Tf; open: boolean }>(() => ({ r: null, tf: "1h", open: false }));
+let box: HTMLDivElement | null = null;            // the card's outer layer, moved directly
+let at = { x: 0, y: 0 }, frame = 0, openTimer = 0, closeTimer = 0;
+
+// The card's top-left corner just below-right of the pointer; flipped to the other side near the window's edges.
+function place() {
+  frame = 0;
+  if (!box) return;
+  const w = box.offsetWidth || W, h = box.offsetHeight || 380;
+  let x = at.x + GAP, y = at.y + GAP;
+  if (x + w > innerWidth - 8) x = Math.max(8, at.x - GAP - w);
+  if (y + h > innerHeight - 8) y = Math.max(8, Math.min(at.y - GAP - h, innerHeight - 8 - h));
+  box.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
+}
+const follow = (x: number, y: number) => { at = { x, y }; if (!frame) frame = requestAnimationFrame(place); };
+const cancelClose = () => clearTimeout(closeTimer);
+const closeSoon = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); closeTimer = window.setTimeout(() => useCard.setState({ open: false }), 150); };
+const closeNow = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); if (useCard.getState().open) useCard.setState({ open: false }); };
+
+type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void }>;
 export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigger }) {
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
-  const anchor = useRef<HTMLElement | null>(null), timer = useRef(0), waiting = useRef(false), open = useRef(false), at = useRef({ x: 0, y: 0 });
-  open.current = pos != null;
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const close = () => { clearTimeout(timer.current); waiting.current = false; setPos(null); };
-  // Every move over the trigger: on one of its own controls the card goes away; anywhere else it opens after a pause.
+  // The open card follows this row's live figures while it shows this coin.
+  useEffect(() => { const s = useCard.getState(); if (s.open && s.r?.mint === r.mint && (s.r !== r || s.tf !== tf)) useCard.setState({ r, tf }); }, [r, tf]);
   const move = (e: unknown) => {
     const ev = e as PointerEvent;
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
-    if ((ev?.target as Element | null)?.closest?.(OWN)) { if (open.current || waiting.current) close(); return; }
-    at.current = { x: ev.clientX, y: ev.clientY };
-    if (open.current) { clearTimeout(timer.current); setPos(near(at.current)); return; }
-    if (waiting.current) return;
-    waiting.current = true;
-    timer.current = window.setTimeout(() => {
-      waiting.current = false;
-      if (!anchor.current) return;
-      if (closeOthers && closeOthers !== close) closeOthers();
-      closeOthers = close;
-      setPos(near(at.current));
-    }, 220);
+    if ((ev?.target as Element | null)?.closest?.(OWN)) return closeNow();
+    cancelClose();
+    follow(ev.clientX, ev.clientY);
+    const s = useCard.getState();
+    if (s.open) { if (s.r?.mint !== r.mint) useCard.setState({ r, tf }); return; }
+    clearTimeout(openTimer);
+    openTimer = window.setTimeout(() => { openTimer = 0; useCard.setState({ r, tf, open: true }); }, 120);
   };
-  // At the pointer (just right of it, or left near the window's edge), following it while it moves over the cell.
-  const near = (c: { x: number; y: number }) => ({
-    left: c.x + 18 + W <= innerWidth - 10 ? c.x + 18 : Math.max(10, c.x - W - 18),
-    top: Math.max(10, Math.min(c.y - 60, innerHeight - H - 10)),
-  });
-  const leave = () => { clearTimeout(timer.current); waiting.current = false; timer.current = window.setTimeout(close, 150); };
-  useEffect(() => { if (!pos) return; const s = () => close(); addEventListener("scroll", s, true); return () => removeEventListener("scroll", s, true); }, [pos]);
   const p = children.props;
-  const trigger = cloneElement(children, {
-    ref: (el: HTMLElement | null) => { anchor.current = el; },
+  return cloneElement(children, {
     onPointerMove: (e: unknown) => { p.onPointerMove?.(e); move(e); },
-    onPointerLeave: (e: unknown) => { p.onPointerLeave?.(e); leave(); },
+    onPointerLeave: (e: unknown) => { p.onPointerLeave?.(e); closeSoon(); },
   });
+}
+
+// The one card on the page.
+function Layer() {
+  const { r, tf, open } = useCard();
+  const [shown, setShown] = useState<Row | null>(null);   // kept while the card fades out
+  const outer = useRef<HTMLDivElement>(null), inner = useRef<HTMLDivElement>(null), last = useRef<string | null>(null);
+  useLayoutEffect(() => { box = outer.current; });
+  useLayoutEffect(() => {
+    if (open && r) {
+      const was = shown;
+      setShown(r);
+      place();
+      // In: a short fade and slide down from the pointer. Another coin while open: a quick fade of the contents.
+      if (!was) inner.current?.animate([{ opacity: 0, transform: "translateY(-6px) scale(0.98)" }, { opacity: 1, transform: "none" }], { duration: 170, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
+      else if (last.current !== r.mint) inner.current?.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 140, easing: "ease-out" });
+      last.current = r.mint;
+    } else if (!open && shown) {
+      const a = inner.current?.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-4px) scale(0.985)" }], { duration: 120, easing: "ease-in", fill: "forwards" });
+      const done = () => { setShown(null); last.current = null; };
+      if (a) a.onfinish = done; else done();
+    }
+  }, [open, r]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!shown) return;
+    const away = () => closeNow();
+    addEventListener("scroll", away, true); addEventListener("blur", away); addEventListener("hashchange", away);
+    return () => { removeEventListener("scroll", away, true); removeEventListener("blur", away); removeEventListener("hashchange", away); };
+  }, [shown]);
+  const row = open && r ? r : shown;
   return (
-    <>
-      {trigger}
-      {pos && createPortal(
-        // Clicks inside the card stay in it (the row under the trigger opens the coin on click).
-        <div role="dialog" aria-label={`${r.symbol || "Coin"} details`} onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave} onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 animate-row-in overflow-hidden rounded-card border border-rule-2 bg-paper-2 text-left shadow-sheet" style={{ ...pos, width: W }}>
-          <Card r={r} tf={tf} />
-        </div>, document.body)}
-    </>
+    <div ref={outer} className="pointer-events-none fixed top-0 left-0 z-50 will-change-transform" style={{ width: W, visibility: row ? "visible" : "hidden" }}>
+      {row && (
+        // Clicks inside the card stay in it (the row under it would open the coin).
+        <div ref={inner} role="dialog" aria-label={`${row.symbol || "Coin"} details`} onPointerEnter={cancelClose} onPointerLeave={closeSoon} onClick={(e) => e.stopPropagation()}
+          className={cn("overflow-hidden rounded-card border border-rule-2 bg-paper-2 text-left shadow-sheet", open && "pointer-events-auto")}>
+          <Card key={row.mint} r={row} tf={tf} />
+        </div>
+      )}
+    </div>
   );
+}
+
+if (typeof window !== "undefined") {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  createRoot(host).render(<Layer />);
 }
 
 // The watchlist the status bar shows (shell/StatusBar.tsx): [{ mint, symbol }] in this browser.
