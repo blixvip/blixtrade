@@ -33,6 +33,7 @@ const MEMBER_READS = [
   // fomo/known: the Pulse rows' faces; feed/hot: the Feed page's most-bought coins (both refused before: blank faces, empty list).
   /^\/api\/(fomo|fomo\/board|fomo\/feed|fomo\/list|fomo\/known|feed\/stream|feed\/hot|pump\/feed|pump\/board|x|narrative-feed|ext-sparks|picks\/all)$/,
   /^\/api\/fomo\/trader\/[A-Za-z0-9_.-]{1,64}$/,
+  /^\/api\/banner$/,               // a coin's DexScreener banner for Discover's coin card (banner.js)
   new RegExp(`^/api/coin/${MINT}/(people|callouts|fomo)$`),
 ];
 export function memberMay(method, pathname) {

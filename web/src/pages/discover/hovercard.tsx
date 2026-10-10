@@ -16,7 +16,25 @@ import { ageStr, compact, pct, shortAddr, tone } from "@/lib/format";
 import { useLiveMc } from "@/lib/livepx";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
+import { api } from "@/lib/api";
 import { pick, type Row, type Tf } from "./parts";
+
+// Banners for coins whose row came without one (Fomo's lists, the stream's new pairs): asked of the server once
+// per coin (server/banner.js), kept for the visit. undefined = not asked yet, null = it has none.
+const banners = new Map<string, string | null | Promise<string | null>>();
+function useBanner(r: Row) {
+  const have = r.header || null;
+  const [got, setGot] = useState<string | null | undefined>(() => { const b = banners.get(r.mint); return have ?? (typeof b === "string" || b === null ? b : undefined); });
+  useEffect(() => {
+    if (have) return;
+    let alive = true;
+    let b = banners.get(r.mint);
+    if (b === undefined) { b = api<{ header: string | null }>(`banner?m=${r.mint}`).then((x) => x?.header ?? null, () => null); banners.set(r.mint, b); b.then((h) => banners.set(r.mint, h)); }
+    Promise.resolve(b).then((h) => { if (alive) setGot(h); });
+    return () => { alive = false; };
+  }, [r.mint, have]);
+  return have ?? got ?? null;
+}
 
 const W = 300, GAP = 14;   // the card's width; how far its corner sits from the pointer
 // Inside a cell, these keep their own hover (links, the X card, buttons, the known-holder faces, and the coin's
@@ -136,13 +154,14 @@ function Card({ r, tf }: { r: Row; tf: Tf }) {
   // pump.fun coins all have a billion tokens, so their price is the market cap over a billion; others are not shown.
   const price = pump && mc ? mc / 1e9 : null;
   const [starred, toggleStar] = useStar(r.mint, r.symbol || "");
+  const header = useBanner(r);
   const copy = () => navigator.clipboard?.writeText(r.mint).then(() => toast("Contract copied"), () => toast("Couldn't copy the contract"));
   return (
     <div className="flex flex-col">
       {/* banner: DexScreener's header when the coin paid for one, else its own picture blurred */}
       <div className="relative h-[88px] overflow-hidden bg-paper-4">
-        {r.header
-          ? <img src={r.header} alt="" className="absolute inset-0 size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+        {header
+          ? <img key={header} src={header} alt="" className="absolute inset-0 size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
           : <span className="absolute inset-0 scale-125 opacity-60 blur-xl"><CoinImg mint={r.mint} fallback={r.image} preview={false} /></span>}
         <span className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-paper-2" />
         <button onClick={toggleStar} aria-label={starred ? "Remove from watchlist" : "Add to watchlist"} aria-pressed={starred}

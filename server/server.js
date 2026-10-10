@@ -65,6 +65,7 @@ import { onHolders, holdersLive, onCurve as isWallet, onBalance } from "./holder
 import { fomoList, fomoMints } from "./fomolists.js";
 import { fomoFeed, relayIn, relayedStats } from "./fomofeed.js";
 import { bubbleMap, makeBubbleMap } from "./bubblemap.js";
+import { banner } from "./banner.js";
 import { feedViews, feedLike, viewerOf } from "./feedviews.js";
 import { fomoBars, onFomoBar, fomoChartStatus, setFomoToken } from "./fomochart.js";
 import { relayStats } from "./fomorelay.js";
@@ -1264,6 +1265,8 @@ async function handleRequest(req, res) {
     // Fomo's Feed tab (the Feed page), read through Aside while someone is looking (fomofeed.js).
     if (p === "/api/fomo/feed") return send(res, 200, fomoFeed(params.groups));
     // A coin's bubble map: made once by whoever asks first, then the same map for everyone (bubblemap.js).
+    // A coin's DexScreener banner, for Discover's coin card when its row has none (banner.js).
+    if (p === "/api/banner") { const r = await banner(String(params.m || "")); return send(res, r.error ? 400 : 200, r); }
     if (p === "/api/bubblemap") { const m = String(params.mint || ""); const r = POST ? makeBubbleMap(m) : bubbleMap(m); return send(res, r.error && !r.map && !r.building ? 400 : 200, r); }
     // Views and likes on the Feed page's posts, counted by Blix (feedviews.js).
     if (p === "/api/feed/views" && POST) return send(res, 200, feedViews(viewerOf(req, res), await readBody(req)));
