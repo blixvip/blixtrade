@@ -83,6 +83,7 @@ import { pumpBoard } from "./pumpboard.js";
 import { warmBoard } from "./feedwarm.js";
 import { coinPeople } from "./chartpeople.js";
 import { extSparks } from "./extsparks.js";
+import { feesOf } from "./coinfees.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 
@@ -305,6 +306,8 @@ function fillRow(t, j, r) {
     if (rep0.totalHolders == null || rep0.top10 == null) { const qx = quickHolders(t.mint); if (qx) { r.holders ??= qx.h; r.top10 ??= qx.t10; } }
   }
   if (r.dev == null) r.dev = snipeFor(t.mint)?.dev ?? null;
+  const fees = feesOf(t.mint);   // what traders paid to trade it (coinfees.js)
+  if (fees) { r.fees = fees.sol; r.feesSince = fees.since; }
   const rep = json(row.safety, {}) || {};
   if (rep.insiderPct == null) { r.insiders = r.bundlers ?? null; r.insidersProv = r.insiders != null; }
   if (row.safety_score == null) {

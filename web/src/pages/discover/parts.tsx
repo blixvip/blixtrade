@@ -18,6 +18,7 @@ import { LiveMc } from "@/components/Live";
 import { useLiveMc } from "@/lib/livepx";
 import { prefetchCoin } from "@/lib/coin";
 import { KnownHolders } from "@/components/KnownHolders";
+import { FeesPaid } from "@/components/FeesPaid";
 import { CoinHover } from "./hovercard";
 
 export type Tf = "5m" | "1h" | "24h";
@@ -31,19 +32,20 @@ export type Row = {
   peak_mcap?: number | null; quarantine?: string | null; status?: string | null;
   spark?: (number | [number, number])[]; spark_chg?: number | null; mc_live?: number | null;
   snipers?: number | null; bundlers?: number | null; liveSrc?: boolean; safetyProv?: boolean; insidersProv?: boolean;
+  fees?: number | null; feesSince?: number | null;   // fees paid to trade it, SOL (server/coinfees.js)
 };
 
 // Figures from Blix's own pump.fun trade feed and holder ledger (server.js liveRow), null where it cannot say.
 export type LiveFigures = { mc: number | null; liq: number | null; progress: number | null; vol: number | null; buys: number | null; sells: number | null;
   holders: number | null; top10: number | null; dev: number | null; devSold: string | null; snipers: number | null; bundlers: number | null;
   // Until RugCheck has indexed a coin: a provisional score on its formula, and the launch-block wallets' share for insiders.
-  safety?: number | null; safetyProv?: boolean; insiders?: number | null; insidersProv?: boolean };
+  safety?: number | null; safetyProv?: boolean; insiders?: number | null; insidersProv?: boolean; fees?: number | null; feesSince?: number | null };
 // A row with the live figures laid over the DexScreener / RugCheck reading, field by field.
 export function withLive(r: Row, l: LiveFigures | null, tf: Tf): Row {
   if (!l) return r;
   const k = tf === "5m" ? "m5" : tf === "1h" ? "h1" : "h24";
   const provSafety = r.safety_score == null && l.safety != null, provIns = r.safety?.insiderPct == null && l.insiders != null;
-  const out: Row = { ...r, mc_live: l.mc ?? r.mc_live, liquidity: l.liq ?? r.liquidity, liveSrc: true, snipers: l.snipers ?? r.snipers, bundlers: l.bundlers ?? r.bundlers,
+  const out: Row = { ...r, mc_live: l.mc ?? r.mc_live, liquidity: l.liq ?? r.liquidity, liveSrc: true, snipers: l.snipers ?? r.snipers, bundlers: l.bundlers ?? r.bundlers, fees: l.fees ?? r.fees, feesSince: l.feesSince ?? r.feesSince,
     safety_score: r.safety_score ?? l.safety ?? null, safetyProv: provSafety, insidersProv: provIns,
     safety: { ...(r.safety || {}), top10: l.top10 ?? r.safety?.top10, devPct: l.dev ?? r.safety?.devPct, totalHolders: l.holders ?? r.safety?.totalHolders,
       insiderPct: r.safety?.insiderPct ?? l.insiders ?? undefined } };
@@ -157,7 +159,8 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
       {/* market cap */}
       <div className="flex flex-col items-end"><LiveMc mint={r.mint} value={r.mc_live ?? r.mcap} className="text-md font-semibold text-ink" /><span className={cn("num text-sm", tone(chg))}>{pct(chg)}</span></div>
       <div className="num text-right text-md text-ink-2">{compact(r.liquidity)}</div>
-      <div className="num text-right text-md font-semibold text-ink">{compact(vol)}</div>
+      {/* volume, and under it what traders paid in fees to trade it (Axiom's "F") */}
+      <div className="flex flex-col items-end gap-1"><span className="num text-md font-semibold text-ink">{compact(vol)}</span><FeesPaid sol={r.fees} since={r.feesSince} born={born} /></div>
       {/* transactions: total, then buys over sells (not known for coins on other chains) */}
       {ext ? <div className="num text-right text-md text-muted">—</div> : <div className="flex flex-col items-end gap-1">
         <b className="num text-md font-semibold text-ink">{buys == null && sells == null ? "—" : tx.toLocaleString()}</b>

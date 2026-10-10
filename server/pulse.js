@@ -24,6 +24,7 @@ import { onPoolPrice, watchSol } from "./poolwatch.js";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 import { gtGet, gtReady } from "./gtgate.js";
 import * as coinIndex from "./coinindex.js";
+import { feesOf } from "./coinfees.js";
 
 // Every row carries a live rank: the traction score (0-100) measured on this radar's own past reads as the
 // one ranking that predicted winners, computed this second from the trade feed (5-minute volume, traders,
@@ -94,6 +95,9 @@ function ledgerFor(r) {
 function withLive(r) {
   // pump.fun Mayhem Mode (its AI agent trades the coin for the first 24 h), from the launch feed.
   if (launchIndex.get(r.mint)?.mayhem) r = { ...r, mayhem: true };
+  // What traders paid to trade it (network, priority, tips), the row's "F" (coinfees.js).
+  const fees = feesOf(r.mint);
+  if (fees) r = { ...r, fees: fees.sol, feesSince: fees.since };
   const x = liveStats(r.mint);
   const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
   // The ledger follows a coin into its PumpSwap pool (x.pool); one that bonded elsewhere keeps it LEDGER_AFTER_BOND.

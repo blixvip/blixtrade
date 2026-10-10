@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { Flash } from "@/components/Live";
 import { KnownHolders } from "@/components/KnownHolders";
+import { FeesPaid } from "@/components/FeesPaid";
 
 // One Pulse row, laid out like the terminal in the owner's mockup (design.md "Pulse rows"): a large
 // picture framed by bonding progress with the contract under it; ticker, name and copy; age, links and
@@ -202,6 +203,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {prefs.compact && <span className="text-sm"><AiCall coin={t} /></span>}
           </div>
           {chg != null && <span className={cn("num shrink-0 font-medium", tone(chg))}>{pct(chg)}</span>}
+          <FeesPaid sol={t.fees} since={t.feesSince} born={t.born} />
           {tx > 0 && (
             <Tip tip={`${t.buys || 0} buys / ${t.sells || 0} sells`}>
               <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted">TX<Flash value={tx} className="text-md font-semibold text-ink">{tx}</Flash>

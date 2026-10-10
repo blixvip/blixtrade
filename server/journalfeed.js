@@ -16,6 +16,7 @@ import { slotTime } from "./feedlag.js";
 import { db, DATA } from "./db.js";
 import * as J from "./journal.js";
 import { quoteStats } from "./pumpquote.js";
+import { addFee, feeStats } from "./coinfees.js";
 
 const now = () => Date.now();
 const DOWN_MS = 15_000;   // a whole program's log stream (tens of trades a second) silent this long is down
@@ -190,6 +191,7 @@ const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", AMM = "pAMMBay6oceH9
 const TRADE = "bddb7fd34ee661ee", BUY = "67f4521f2cf57777", SELL = "3e2f370aa503dc2a";
 J.stats.twin = twin;
 J.stats.quoted = quoteStats;   // curves quoted in another token (pumpquote.js)
+J.stats.fees = feeStats;       // fees paid per coin (coinfees.js)
 export const blockStats = J.stats.blocks = { on: false, added: 0, coins: 0, late: 0, jumps: 0, lost: 0, worker: null };
 const lateCoins = new Map();   // mint -> timer (a late coin's candles remade once per 15 s at most)
 // coin.js and holders.js, loaded once the radar is up (coin.js reads the live feed at load time, and loading it
@@ -200,7 +202,7 @@ function onBlock({ slot, time, txs }) {
   const st = slotTime(slot), t0 = st && now() - st < 60_000 ? st : time ? time * 1000 + 500 : now();
   const sol = J.solUsdAt(t0) ?? feed.solUsd;
   const coins = new Set();
-  for (const [sig, data] of txs) {
+  for (const [sig, data, fee] of txs) {
     const per = new Map();   // mint -> its trades in this transaction, in log order
     for (const l of data) {
       const buf = Buffer.from(l.slice(14), "base64");
@@ -218,6 +220,8 @@ function onBlock({ slot, time, txs }) {
       if (!per.has(x.mint)) per.set(x.mint, []);
       per.get(x.mint).push(x);
     }
+    // What it paid (blocks only: the sweep's transactions are also in blocks, and would count twice).
+    if (fee > 0 && per.size) for (const mint of per.keys()) addFee(mint, fee / 1e9 / per.size / feeStats.cover, t0);
     for (const [mint, list] of per) {
       if (J.heardTx(sig, mint)) continue;
       list.forEach((x, n) => J.record({ ...x, sig, n, slot, t: t0 + n, usd: x.sol * sol, block: true }));
@@ -300,6 +304,15 @@ async function sweep() {
 }
 
 let blockWorker = null;
+// The share of blocks the follower read over the last ~10 minutes (not the skipped slots, which have none), for
+// scaling each coin's fees (coinfees.js). Moves only on 50+ blocks.
+const coverSnaps = [];   // [at, blocks read, blocks lost], one a minute
+function coverage(w) {
+  const t = now(), last = coverSnaps.at(-1);
+  if (!last || t - last[0] >= 60_000) { coverSnaps.push([t, w.blocks || 0, w.lost || 0]); if (coverSnaps.length > 11) coverSnaps.shift(); }
+  const [, b0, l0] = coverSnaps[0], read = (w.blocks || 0) - b0, lost = (w.lost || 0) - l0;
+  if (read + lost >= 50 && read > 0) feeStats.cover = Math.max(0.3, Math.min(1, read / (read + lost)));
+}
 // The follower is on and within ~20 s of the chain tip.
 const followerOk = () => blockStats.on && blockStats.worker && blockStats.worker.behind < 100 && blockStats.worker.backlog < 300 && now() - blockStats.worker.lastBlockAt < 15_000;
 function startBlocks() {
@@ -309,7 +322,7 @@ function startBlocks() {
   blockWorker.on("message", (m) => {
     try {
       if (m.op === "block") onBlock(m);
-      else if (m.op === "stats") { const { op, ...w } = m; blockStats.worker = w; }
+      else if (m.op === "stats") { const { op, ...w } = m; blockStats.worker = w; coverage(w); }
       else if (m.op === "jump") blockStats.jumps++;
       // Blocks the follower could not read (refused, or left in its backlog past ~10 minutes). The free sources give
       // about 2.5-3 blocks a second against the chain's ~4.6 (2026-10-09), so this is routine: those blocks' trades

@@ -13,6 +13,7 @@ export interface Coin {
   mcap?: number | null; startMcapSol?: number | null; vol?: number | null; liveVol?: number | null; liq?: number | null;
   chg1m?: number | null; chg5?: number | null; buys?: number; sells?: number; traders?: number | null;
   holders?: number | null; top10?: number | null; dev?: number | null; devSol?: number | null; devCount?: number;
+  fees?: number | null; feesSince?: number | null;   // fees paid to trade it, SOL (server/coinfees.js)
   progress?: number | null; graduated?: boolean; dex?: string | null; pool?: string | null; mayhem?: boolean;
   x?: string | null; web?: string | null; tg?: string | null; tiktok?: string | null; desc?: string | null; paid?: boolean | null; peak?: number | null; chg1h?: number | null;
   state?: string; live?: boolean; lt?: number; side?: "b" | "s" | null; tr?: number | null;

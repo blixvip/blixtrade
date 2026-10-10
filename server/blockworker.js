@@ -37,6 +37,44 @@ function sigOf(t) {
   if (b[0] >= 0x80) { const n = b[1]; return n > 0 && b.length >= 64 * n + 2 ? b58(b.subarray(b.length - 64 * n, b.length - 64 * n + 64)) : null; }
   return b.length >= 65 && b[0] > 0 ? b58(b.subarray(1, 65)) : null;
 }
+// What a transaction paid on top of its trade, in lamports: the network fee (base + priority, meta.fee) and the
+// SOL its signers sent straight to an account that did not sign (top-level System transfers: Jito and the other
+// landing services' tips, trading bots' and terminals' fees). Not wrapped SOL (an account a SyncNative tops up
+// is the trader's own), and not a single transfer over 2 SOL (a payment, not a fee). For "fees paid" on a coin
+// (coinfees.js). Checked against the jsonParsed encoding on live pump.fun transactions, both layouts (2026-10-10).
+function feeOf(t, meta) {
+  let fee = Number(meta.fee) || 0;
+  if (!Array.isArray(t)) return fee;
+  try {
+    const b = Buffer.from(t[0], "base64"), ixs = [];   // [program index, accounts at, count, data at, length]
+    let o = 0, signers, nk, keys;
+    const cu = () => { let v = 0, s = 0, x; do { x = b[o++]; v |= (x & 0x7f) << s; s += 7; } while (x & 0x80); return v; };
+    if (b[0] === 0x81) {
+      // v1: version, the 3 header counts, a u32 mask of compute settings (4 bytes each), blockhash, instruction
+      // and key counts, the keys, the settings, 4-byte instruction heads (program, accounts, u16 data length),
+      // then each instruction's accounts and data; the signatures at the end.
+      signers = b[1]; const mask = b.readUInt32LE(4), ni = b[40]; nk = b[41]; keys = 42;
+      let bits = 0; for (let m = mask; m; m &= m - 1) bits++;
+      let h = keys + nk * 32 + bits * 4; o = h + ni * 4;
+      for (let n = 0; n < ni; n++, h += 4) { const na = b[h + 1], dl = b.readUInt16LE(h + 2); ixs.push([b[h], o, na, o + na, dl]); o += na + dl; }
+    } else if (b[0] < 0x80) {
+      const ns = cu(); o += ns * 64;
+      if (b[o] & 0x80) o++;
+      signers = b[o]; o += 3;
+      nk = cu(); keys = o; o += nk * 32 + 32;
+      for (let n = cu(); n > 0; n--) { const prog = b[o++], na = cu(), at = o; o += na; const dl = cu(); ixs.push([prog, at, na, o, dl]); o += dl; }
+    } else return fee;
+    const sys = (i) => { if (i >= nk) return false; for (let k = 0; k < 32; k++) if (b[keys + i * 32 + k]) return false; return true; };
+    const wrapped = new Set();
+    for (const [, acc, na, d, dl] of ixs) if (dl === 1 && b[d] === 17 && na) wrapped.add(b[acc]);
+    for (const [prog, acc, na, d, dl] of ixs) {
+      if (dl !== 12 || na < 2 || b.readUInt32LE(d) !== 2 || !sys(prog)) continue;
+      const from = b[acc], to = b[acc + 1], lam = Number(b.readBigUInt64LE(d + 4));
+      if (from < signers && to >= signers && !wrapped.has(to) && lam <= 2e9) fee += lam;
+    }
+  } catch { /* a layout this does not know: the network fee alone */ }
+  return fee;
+}
 
 // Each source is paced (calls a second) rather than run into its limits: slots are ~215 ms now (4.6 blocks a
 // second, 2026-10-09), and publicnode alone refuses that many getBlock calls. A rate limit rests the source
@@ -127,7 +165,7 @@ async function block(slot) {
     if (!logs.some((l) => invokes.some((p) => l.startsWith(p)))) continue;
     const data = logs.filter((l) => l.startsWith("Program data: "));
     const sig = sigOf(tx.transaction);
-    if (data.length && sig) txs.push([sig, data]);
+    if (data.length && sig) txs.push([sig, data, feeOf(tx.transaction, tx.meta)]);
   }
   stats.blocks++; stats.txs += txs.length; stats.lastBlockAt = now();
   if (txs.length) post({ op: "block", slot, time: b.blockTime ?? null, txs });
