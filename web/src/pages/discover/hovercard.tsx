@@ -5,7 +5,7 @@
 // pair cell (not on the cell's picture, which shows itself big, nor its links, buttons or faces), with its top-left
 // corner at the pointer, and follows the pointer frame by frame (moved directly, not through React). Moving to
 // another row swaps what it shows in place; it fades and slides in, fades out 150 ms after the pointer has left
-// both the cell and the card, and scrolling puts it away.
+// both the cell and the card. Scrolling keeps it, showing the coin now under the pointer; the wheel over the card scrolls the list.
 import { cloneElement, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
@@ -58,12 +58,38 @@ function place() {
 const follow = (x: number, y: number) => { at = { x, y }; if (!frame) frame = requestAnimationFrame(place); };
 const cancelClose = () => clearTimeout(closeTimer);
 const closeSoon = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); closeTimer = window.setTimeout(() => useCard.setState({ open: false }), 150); };
+// The cells on the page, by coin, so after a scroll the card can show whichever cell is now under the pointer.
+const cells = new Map<string, { r: Row; tf: Tf }>();
+let scrollFrame = 0;
+function underPointer() {
+  scrollFrame = 0;
+  if (!useCard.getState().open) return;
+  const el = document.elementFromPoint(at.x, at.y);
+  if (!el || box?.contains(el)) return;
+  if (el.closest(OWN)) return closeNow();
+  const mint = el.closest<HTMLElement>("[data-coin-cell]")?.dataset.coinCell;
+  const c = mint ? cells.get(mint) : undefined;
+  if (!c) return closeSoon();
+  cancelClose();
+  if (useCard.getState().r?.mint !== mint) useCard.setState({ r: c.r, tf: c.tf });
+}
+const onScroll = () => { if (!scrollFrame) scrollFrame = requestAnimationFrame(underPointer); };
+// The wheel over the card scrolls what is under it (the card is outside the list's scroll box, so it would not).
+function forwardWheel(e: WheelEvent) {
+  const under = document.elementsFromPoint(e.clientX, e.clientY).find((el) => !box?.contains(el));
+  for (let el: Element | null = under ?? null; el; el = el.parentElement) {
+    const st = getComputedStyle(el);
+    if (/(auto|scroll)/.test(st.overflowY) && el.scrollHeight > el.clientHeight) { el.scrollBy({ top: e.deltaY, left: e.deltaX }); return; }
+  }
+  scrollBy({ top: e.deltaY, left: e.deltaX });
+}
 const closeNow = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); if (useCard.getState().open) useCard.setState({ open: false }); };
 
-type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void }>;
+type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; "data-coin-cell"?: string }>;
 export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigger }) {
   // The open card follows this row's live figures while it shows this coin.
   useEffect(() => { const s = useCard.getState(); if (s.open && s.r?.mint === r.mint && (s.r !== r || s.tf !== tf)) useCard.setState({ r, tf }); }, [r, tf]);
+  useEffect(() => { cells.set(r.mint, { r, tf }); return () => { if (cells.get(r.mint)?.r === r) cells.delete(r.mint); }; }, [r, tf]);
   const move = (e: unknown) => {
     const ev = e as PointerEvent;
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
@@ -77,6 +103,7 @@ export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigg
   };
   const p = children.props;
   return cloneElement(children, {
+    "data-coin-cell": r.mint,
     onPointerMove: (e: unknown) => { p.onPointerMove?.(e); move(e); },
     onPointerLeave: (e: unknown) => { p.onPointerLeave?.(e); closeSoon(); },
   });
@@ -105,9 +132,13 @@ function Layer() {
   }, [open, r]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!shown) return;
+    // Scrolling keeps the card: it shows whichever coin's cell is now under the pointer (or goes when none is).
     const away = () => closeNow();
-    addEventListener("scroll", away, true); addEventListener("blur", away); addEventListener("hashchange", away);
-    return () => { removeEventListener("scroll", away, true); removeEventListener("blur", away); removeEventListener("hashchange", away); };
+    const wheel = (e: WheelEvent) => forwardWheel(e);
+    const el = inner.current;
+    addEventListener("scroll", onScroll, true); addEventListener("blur", away); addEventListener("hashchange", away);
+    el?.addEventListener("wheel", wheel, { passive: true });
+    return () => { removeEventListener("scroll", onScroll, true); removeEventListener("blur", away); removeEventListener("hashchange", away); el?.removeEventListener("wheel", wheel); };
   }, [shown]);
   const row = open && r ? r : shown;
   return (
