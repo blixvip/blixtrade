@@ -176,13 +176,14 @@ if (typeof window !== "undefined") addEventListener("hashchange", () => { eagerL
 export const eagerAgain = () => { eagerLeft = EAGER; };
 // `fallback`: the picture link a list carried for the coin (Fomo's, pump.fun's), drawn underneath while Blix's own
 // copy has not loaded after a first try, so a coin is never shown without its logo for long.
-export function CoinImg({ mint, className, fallback }: { mint: string; className?: string; fallback?: string | null }) {
+// `preview`: false where a hover already shows something else (Discover rows open their coin card instead).
+export function CoinImg({ mint, className, fallback, preview = true }: { mint: string; className?: string; fallback?: string | null; preview?: boolean }) {
   const pic = usePic(mint);
   const [eager] = useState(() => eagerLeft > 0 && (eagerLeft--, true));
   const [fbBad, setFbBad] = useState(false);
   const fb = fallback && !fbBad && pic.missed ? thumb(fallback, 48) : null;
   // Resting the pointer on it shows it big (PicPreview).
-  const big = previewHandlers(mint, { fallback });
+  const big = preview ? previewHandlers(mint, { fallback }) : {};
   return (
     <>
       {fb && <img src={fb} alt="" decoding="async" draggable={false} onError={() => setFbBad(true)} {...big} className={cn("absolute inset-0 size-full object-cover", className)} />}

@@ -961,7 +961,7 @@ const DISCOVER_SORT = { trending: { "5m": "vol5", "1h": "volume", "24h": "vol24"
 const SURGE_FLOOR = { "5m": ["minVol5", "500"], "1h": ["minVol", "5000"], "24h": ["minVol24", "20000"] };
 // A row as Discover draws it (web/src/pages/discover/parts.tsx Row): about half the bytes of the full row.
 const DISCOVER_KEYS = ["mint", "symbol", "name", "image", "dex", "pair_created", "first_seen", "mcap", "liquidity", "vol_m5", "vol_h1", "vol_h24",
-  "buys_m5", "sells_m5", "buys_h1", "sells_h1", "chg_m5", "chg_h1", "chg_h24", "links", "boosts", "graduated", "safety_score", "score", "paid",
+  "buys_m5", "sells_m5", "buys_h1", "sells_h1", "chg_m5", "chg_h1", "chg_h24", "links", "boosts", "header", "graduated", "safety_score", "score", "paid",
   "figSrc", "dupes", "dupTop", "peak_mcap", "quarantine", "status", "spark", "spark_chg", "mc_live", "snipers", "bundlers"];
 const discoverRows = new WeakMap();
 function discoverRow(r) {

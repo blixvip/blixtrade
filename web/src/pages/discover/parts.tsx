@@ -18,6 +18,7 @@ import { LiveMc } from "@/components/Live";
 import { useLiveMc } from "@/lib/livepx";
 import { prefetchCoin } from "@/lib/coin";
 import { KnownHolders } from "@/components/KnownHolders";
+import { CoinHover } from "./hovercard";
 
 export type Tf = "5m" | "1h" | "24h";
 export type Row = {
@@ -120,17 +121,23 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
               </button>
             </Tip>
           )}
-          <span className="relative grid size-12 place-items-center overflow-hidden rounded-[10px] border border-rule-2 bg-paper-4 text-xs font-semibold text-muted uppercase">
-            {(r.symbol || "?").slice(0, 3)}
-            {ext ? ext.img && <img src={ext.img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <CoinImg mint={r.mint} fallback={r.image} />}
-          </span>
+          {(() => {
+            const pic = (
+              <span className="relative grid size-12 place-items-center overflow-hidden rounded-[10px] border border-rule-2 bg-paper-4 text-xs font-semibold text-muted uppercase">
+                {(r.symbol || "?").slice(0, 3)}
+                {ext ? ext.img && <img src={ext.img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <CoinImg mint={r.mint} fallback={r.image} preview={false} />}
+              </span>
+            );
+            return ext ? pic : <CoinHover r={r} tf={tf}>{pic}</CoinHover>;
+          })()}
           <span className="absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border border-paper-2 bg-paper-2">
             {ext ? <Tip tip={ext.chain}><span className="text-[7px] leading-none font-bold text-ink-2">{ext.tag}</span></Tip> : r.dex === "pumpswap" || r.dex === "pumpfun" ? <PumpLogo className="size-3" /> : <SolanaLogo className="w-2.5" />}
           </span>
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-baseline gap-1.5">
-            <b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b>
+            {ext ? <b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b>
+              : <CoinHover r={r} tf={tf}><b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b></CoinHover>}
             <span className="truncate text-md text-muted">{r.name}</span>
             {(r.dupes || 1) > 1 && <Tip tip={`${r.dupes} tracked coins use this ticker${r.dupTop ? "; this is the biggest" : ""}`}><span className={cn("shrink-0 rounded-sm px-1 text-2xs font-semibold", r.dupTop ? "bg-up/15 text-up" : "bg-ink/10 text-muted")}>×{r.dupes}</span></Tip>}
           </span>

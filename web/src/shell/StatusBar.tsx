@@ -95,6 +95,8 @@ function Watchlist() {
   const here = route === "coin" && arg ? arg : null;
   const coin = usePulse((s) => (here ? s.coins[here] : undefined));
   const save = (v: Star[]) => { setStars(v); store.set("watchlist", v); };
+  // A star pressed elsewhere (Discover's coin card) shows here at once.
+  useEffect(() => { const on = () => setStars(loadStars()); addEventListener("blix:watchlist", on); return () => removeEventListener("blix:watchlist", on); }, []);
   return (
     <Pop label="Watchlist" icon={<Icon.star className="size-3.5" />} badge={stars.length ? <em className="num text-2xs not-italic text-muted">{stars.length}</em> : null}>
       {(open) => <WatchRows open={open} stars={stars} here={here} hereSymbol={coin?.symbol || null} onSave={save} />}

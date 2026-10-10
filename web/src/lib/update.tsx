@@ -2,7 +2,7 @@
 // copy of the page at the edge that is only refreshed behind a view (worker/index.js), so a plain reload can show the
 // old build again. Every minute (and when the tab comes back) the page asks which build is on the server
 // (GET /api/build, answered by the page server, webapp.js); when it differs from its own, a small bar offers the
-// update. Updating asks for the page once first (that refreshes the edge copy), waits a moment, then reloads.
+// update. Updating asks for the page until it is the new one, clears the service worker's kept copy, then reloads.
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Icon } from "@/shell/icons";
@@ -20,11 +20,19 @@ async function check() {
     if (b?.main && b.main !== mine && b.main !== fresh) { fresh = b.main; subs.forEach((fn) => fn()); }
   } catch { /* the next look */ }
 }
+// The service worker (public/sw.js) also draws the page it kept from the last visit, and that plain fetch never
+// reaches it: the reload then showed the old build again and the bar came back. So: ask until the page names the
+// new build (the edge copy refreshes behind the first ask), drop the worker's kept page, then reload from the network.
 async function update() {
-  try {
-    await fetch(location.pathname, { cache: "no-store", credentials: "same-origin" });
+  for (let i = 0; i < 4; i++) {
+    try {
+      // no-cache: the Worker skips its edge copy and keeps this fresh one (worker/index.js hardReload).
+      const html = await (await fetch(location.pathname, { cache: "no-store", credentials: "same-origin", headers: { "cache-control": "no-cache", pragma: "no-cache" } })).text();
+      if (!fresh || html.includes(fresh)) break;
+    } catch { /* reload anyway */ }
     await new Promise((ok) => setTimeout(ok, 1500));
-  } catch { /* reload anyway */ }
+  }
+  try { await caches.delete("blix-page-v1"); } catch { /* no service worker here */ }
   location.reload();
 }
 
