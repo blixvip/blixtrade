@@ -21,20 +21,33 @@
 <link rel="icon" href="favicon.ico?v=eye2" sizes="any">
 <link rel="apple-touch-icon" href="brand/apple-touch-icon.png?v=eye2">
 <style>
-/* The shell drawn before any script (the #root skeleton below), in the page's own colours (src/styles/app.css):
-   the rail, top bar and bottom bars are on screen with the HTML; React replaces them with the real ones. */
+/* The loading screen (#boot below), drawn with the HTML before any script: Blix's chrome wordmark arrives out of a
+   soft blur, a light crosses the chrome every couple of seconds, a slow glow breathes behind it and a thin bar runs
+   under it. The wordmark is shown through a luminance mask of itself (its black backdrop vanishes on any colour) and
+   the light goes through the same mask, so only the chrome is lit. When the app has drawn its first frame the
+   screen fades and lifts away (the script after it); colours are the page's own (src/styles/app.css). */
 html,body{height:100%;margin:0;background:oklch(18% 0 0)}
-.sk{display:flex;height:100dvh}
-.sk-rail{width:13rem;flex-shrink:0;box-sizing:border-box;padding:1rem .625rem;border-right:1px solid oklch(26% 0 0);background:oklch(18% 0 0)}
-.sk-mark{display:flex;align-items:center;gap:.5rem;margin:.125rem .375rem}.sk-mark img{display:block;width:2.25rem;height:2.25rem;border-radius:11px;background:#000}.sk-mark i{display:block;height:2.5rem;aspect-ratio:300/130;-webkit-mask:url(brand/blix-chrome-sm.webp) 0 0/100% 100%;mask:url(brand/blix-chrome-sm.webp) luminance 0 0/100% 100%;background:url(brand/blix-chrome-sm.webp) 0 0/100% 100%}
-.sk-main{display:flex;min-width:0;flex:1;flex-direction:column}
-.sk-top{height:3.25rem;flex-shrink:0;box-sizing:border-box;display:flex;align-items:center;padding:0 .75rem;border-bottom:1px solid oklch(26% 0 0)}
-.sk-top img{display:none;height:1.5rem;width:auto;mix-blend-mode:screen}
-.sk-body{flex:1}
-.sk-foot{height:2rem;flex-shrink:0;box-sizing:border-box;border-top:1px solid oklch(26% 0 0);background:oklch(20% 0 0)}
-.sk-bot{display:none;height:3.25rem;flex-shrink:0;box-sizing:border-box;border-top:1px solid oklch(26% 0 0);background:oklch(20% 0 0)}
-@media (max-width:767.98px){.sk-rail,.sk-foot{display:none}.sk-top img,.sk-bot{display:block}}
-@media (max-width:378.98px){.sk-top img{display:none}}
+#boot{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;overflow:hidden;
+  background:radial-gradient(120% 90% at 50% 46%,oklch(21% 0 0) 0%,oklch(16.5% 0 0) 55%,oklch(13% 0 0) 100%);
+  transition:opacity .5s cubic-bezier(.16,1,.3,1),visibility .5s}
+#boot .b-glow{position:absolute;left:50%;top:46%;width:min(560px,120vw);aspect-ratio:1;translate:-50% -50%;border-radius:50%;
+  background:radial-gradient(closest-side,oklch(100% 0 0/.075),oklch(100% 0 0/.02) 55%,transparent);filter:blur(18px);animation:b-glow 3.6s ease-in-out infinite}
+#boot .b-mark{position:relative;width:min(232px,56vw);aspect-ratio:600/260;
+  -webkit-mask:url(brand/blix-chrome.webp) center/100% 100% no-repeat;mask:url(brand/blix-chrome.webp) luminance center/100% 100% no-repeat;
+  animation:b-in 1s cubic-bezier(.16,1,.3,1) both;transition:transform .5s cubic-bezier(.16,1,.3,1),filter .5s}
+#boot .b-mark::before{content:"";position:absolute;inset:0;background:url(brand/blix-chrome.webp) center/100% 100% no-repeat}
+#boot .b-mark::after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 38%,oklch(100% 0 0/.18) 45%,oklch(100% 0 0/.95) 50%,oklch(100% 0 0/.18) 55%,transparent 62%) no-repeat;
+  background-size:260% 100%;animation:b-sheen 2.6s cubic-bezier(.45,0,.25,1) .55s infinite}
+#boot .b-bar{position:relative;width:104px;height:2px;border-radius:2px;overflow:hidden;background:oklch(100% 0 0/.08);animation:b-fade .7s .45s cubic-bezier(.16,1,.3,1) both}
+#boot .b-bar i{position:absolute;inset:0 auto 0 0;width:42%;border-radius:2px;background:linear-gradient(90deg,transparent,oklch(100% 0 0/.9),transparent);animation:b-run 1.3s cubic-bezier(.65,0,.35,1) infinite}
+#boot.out{opacity:0;visibility:hidden}
+#boot.out .b-mark{transform:scale(1.06);filter:blur(6px)}
+@keyframes b-in{from{opacity:0;transform:translateY(8px) scale(.94);filter:blur(12px)}}
+@keyframes b-sheen{from{background-position:135% 0}to{background-position:-35% 0}}
+@keyframes b-glow{0%,100%{opacity:.55;scale:.92}50%{opacity:1;scale:1.05}}
+@keyframes b-run{from{translate:-110% 0}to{translate:250% 0}}
+@keyframes b-fade{from{opacity:0;transform:scaleX(.4)}}
+@media (prefers-reduced-motion:reduce){#boot *,#boot *::before,#boot *::after{animation:none!important}#boot .b-bar i{translate:70% 0}}
 </style>
 <script>
 // The reads the page on screen makes, started now, before its scripts have loaded. src/lib/api.ts remembers them
@@ -73,7 +86,29 @@ html,body{height:100%;margin:0;background:oklch(18% 0 0)}
 </script>
 </head>
 <body>
-<div id="root"><div class="sk" aria-hidden="true"><div class="sk-rail"><div class="sk-mark"><img src="brand/blix-eye.webp" alt="" width="96" height="96" fetchpriority="high"><i></i></div></div><div class="sk-main"><div class="sk-top"><img src="brand/blix-chrome-sm.webp" alt="" width="300" height="130"></div><div class="sk-body"></div><div class="sk-bot"></div><div class="sk-foot"></div></div></div></div>
+<div id="root"></div>
+<div id="boot" role="status" aria-label="Loading Blix"><span class="b-glow"></span><span class="b-mark"></span><span class="b-bar"><i></i></span></div>
+<script>
+// Lift the loading screen once the app has drawn: when React first puts something in #root, two frames later (it is
+// painted by then), after at least a short beat so the wordmark is not a flash. Fifteen seconds at most whatever happens.
+(function () {
+  var boot = document.getElementById("boot"), root = document.getElementById("root"), t0 = Date.now(), gone = false;
+  if (!boot || !root) return;
+  function lift() {
+    if (gone) return; gone = true;
+    setTimeout(function () {
+      requestAnimationFrame(function () { requestAnimationFrame(function () {
+        boot.className = "out";
+        setTimeout(function () { boot.remove(); }, 600);
+      }); });
+    }, Math.max(0, 420 - (Date.now() - t0)));
+  }
+  if (root.firstElementChild) return lift();
+  var watch = new MutationObserver(function () { if (root.firstElementChild) { watch.disconnect(); lift(); } });
+  watch.observe(root, { childList: true });
+  setTimeout(lift, 15000);
+})();
+</script>
 <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
