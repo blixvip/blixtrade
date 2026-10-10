@@ -2,12 +2,18 @@
 // first, with their position, PnL, average entry and pinned thesis) and the theses (why traders bought,
 // with likes, the market cap when written and the author's position now). Data: /api/coin/<mint>/fomo
 // (server/fomoboard.js reads Fomo through Aside, kept three minutes).
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { usdK, usdSigned } from "@/lib/coin";
+import { toast } from "@/components/ui/toast";
+import { Icon } from "@/shell/icons";
 import { ageStr } from "@/lib/format";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Empty } from "./parts";
+import { thumb, original } from "@/lib/thumb";
+import { useLiveMc } from "@/lib/livepx";
+import { Flash } from "@/components/Live";
+import { FomoEyes } from "../traders/parts";
 
 export interface FomoThesis { id: string; text: string; likes: number; mcap: number | null; price: number | null; t: string }
 export interface FomoHolder {
@@ -33,9 +39,16 @@ function entryMc(x: FomoHolder, mc: number | null) {
   return x.entry != null && price && mc ? usdK((x.entry / price) * mc) : "—";
 }
 
-function Avatar({ src, size = 32 }: { src: string | null; size?: number }) {
-  return src ? <img src={src} alt="" loading="lazy" className="shrink-0 rounded-full bg-paper-4 object-cover ring-1 ring-edge" style={{ width: size, height: size }} />
-    : <span className="shrink-0 rounded-full bg-paper-4" style={{ width: size, height: size }} />;
+// A trader's face: the resized copy, then the original if that fails, then Fomo's own default picture (its eyes on a
+// Fomo blue), as fomo.family shows an account with no picture.
+function Avatar({ src, name, size = 32 }: { src: string | null; name?: string | null; size?: number }) {
+  const [step, setStep] = useState(0);
+  const [seen, setSeen] = useState(src);
+  if (seen !== src) { setSeen(src); setStep(0); }
+  const url = !src ? null : step === 0 ? thumb(src, size) : step === 1 ? src : null;
+  if (url) return <img key={url} src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setStep(step === 0 && original(url) !== null ? 1 : 2)}
+    className="shrink-0 rounded-full bg-paper-4 object-cover ring-1 ring-edge" style={{ width: size, height: size }} />;
+  return <span aria-hidden className="relative block shrink-0 overflow-hidden rounded-full ring-1 ring-edge" style={{ width: size, height: size }}><FomoEyes id={name} /></span>;
 }
 
 // Fomo's data loads by itself (the radar reads it through Aside in a second or two). While it does, a few
@@ -66,8 +79,9 @@ function ConnectFomo({ text }: { text: string }) {
 function Status({ f, what }: { f: CoinFomo | null; what: string }) {
   if (f?.signedOut) return <ConnectFomo text={`Sign in to Fomo to see this coin's ${what}`} />;
   if (f && !f.read && f.queue?.hasTab === false) return <ConnectFomo text={`Connect Fomo to see this coin's ${what}`} />;
-  if (!f || f.loading || (!f.read && !f.error)) return <Skeleton />;
-  if (f.error && !f.read) return <Empty title="Couldn't read Fomo just now" text={`${f.error.replace(/\.$/, "")}. Blix tries again by itself.`} />;
+  // A failed read says so, even while the next try is queued: a skeleton that never fills reads as broken.
+  if (f?.error && !f.read) return <div title={f.error}><Empty title="Fomo isn't answering right now" text="Blix keeps trying by itself and fills this in the moment Fomo answers." /></div>;
+  if (!f || f.loading || !f.read) return <Skeleton />;
   return null;
 }
 
@@ -76,45 +90,76 @@ function Source({ f }: { f: CoinFomo }) {
   return <span className="text-sm text-muted">From Fomo{f.read ? ` · updated ${ageStr(now - f.read)} ago` : ""}</span>;
 }
 
-export function KnownHolders({ f, mc }: { f: CoinFomo | null; mc: number | null }) {
+// Fomo's figures are as of its last read (every few minutes); between reads each holder's value and PnL move with
+// the coin's live market cap, the same as the chart: value x (MC now / MC at the read), the difference added to PnL.
+export function KnownHolders({ f, mc, mint, supply }: { f: CoinFomo | null; mc: number | null; mint?: string; supply?: number | null }) {
+  const live = useLiveMc(mint) ?? mc;
+  const base = useRef<{ read: number | null; mc: number | null } | null>(null);
+  if (f?.read && (!base.current || base.current.read !== f.read)) base.current = { read: f.read, mc: live };
+  if (base.current && !base.current.mc && live) base.current.mc = live;
+  const scale = base.current?.mc && live ? live / base.current.mc : 1;
   const s = Status({ f, what: "known holders" });
   if (s || !f) return s;
   if (!f.holders.length) return <Empty title="No Fomo traders hold this coin" text="Known holders are traders on Fomo who hold it now." />;
-  const total = f.holders.reduce((a, x) => a + (x.value || 0), 0);
+  const rows = f.holders.map((x) => {
+    const move = x.value != null ? x.value * (scale - 1) : 0;
+    const value = x.value != null ? x.value * scale : null, pnl = x.pnl != null || x.value != null ? (x.pnl ?? 0) + move : null;
+    return { x, value, pnl, ret: x.cost && pnl != null ? (pnl / x.cost) * 100 : null };
+  });
+  const top = Math.max(1, ...rows.map((r) => r.value || 0));
+  const cell = "border-b border-rule px-4 py-3";
+  // Share of the supply each holds: their tokens over the coin's supply (or, without it, value over market cap).
+  const share = (x: FomoHolder, v: number | null) => (x.amount != null && supply ? (x.amount / supply) * 100 : v != null && live ? (v / live) * 100 : null);
+  const copy = (w: string) => { navigator.clipboard?.writeText(w); toast("Wallet copied"); };
+  // Straight into the list: rank 1 first, nothing above it (the user, 2026-10-10).
   return (
-    <div className="flex flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-        <span className="text-sm text-ink-2"><b className="num font-semibold text-ink">{(f.totalHolders ?? f.holders.length).toLocaleString()}</b> Fomo traders hold it · the top {f.holders.length} hold <b className="num font-semibold text-ink">{usdK(total)}</b></span>
-        <Source f={f} />
-      </div>
+    <div className="m-2 overflow-hidden rounded-xl border border-rule bg-paper-2 font-tight">
       <div className="overflow-x-auto">
-        <table className="w-full text-md">
-          <thead><tr className="label">
-            <th className="sticky top-0 border-b border-rule bg-paper-2 px-3 py-1.5 text-left">Trader</th>
-            <th className="sticky top-0 border-b border-rule bg-paper-2 px-3 py-1.5 text-right">Value</th>
-            <th className="sticky top-0 border-b border-rule bg-paper-2 px-3 py-1.5 text-right">PnL</th>
-            <th className="sticky top-0 border-b border-rule bg-paper-2 px-3 py-1.5 text-right">Entry MC</th>
-            <th className="sticky top-0 border-b border-rule bg-paper-2 px-3 py-1.5 text-left">Thesis</th>
-          </tr></thead>
+        <table className="w-full min-w-[760px] border-collapse text-md">
           <tbody>
-            {f.holders.map((x, i) => {
-              const ret = x.cost ? ((x.pnl ?? 0) / x.cost) * 100 : null;
+            {rows.map(({ x, value, pnl, ret }, i) => {
+              const up = (pnl ?? 0) >= 0, sh = share(x, value);
               return (
-                <tr key={`${x.handle}-${i}`} className="align-top hover:bg-paper-3/50">
-                  <td className="border-b border-rule/70 px-3 py-2">
-                    <a href={traderHref(x.handle)} className="flex min-w-0 items-center gap-2.5 hover:text-focus">
-                      <span className="num w-5 shrink-0 text-right text-sm text-muted">{i + 1}</span>
-                      <Avatar src={x.pic} />
+                <tr key={`${x.handle}-${i}`} className="group align-middle transition-colors duration-150 last:[&>td]:border-b-0 hover:bg-paper-3/60">
+                  <td className={cell}>
+                    <a href={traderHref(x.handle)} className="flex min-w-0 items-center gap-3">
+                      <span className={cn("num w-5 shrink-0 text-right text-sm font-semibold", i < 3 ? "text-ink" : "text-ink-2")}>{i + 1}</span>
+                      <span className="rounded-full ring-1 ring-rule-2 transition-transform duration-200 group-hover:scale-105"><Avatar src={x.pic} name={x.name || x.handle} size={36} /></span>
                       <span className="min-w-0">
-                        <b className="flex items-center gap-1.5 truncate font-semibold text-ink">{x.name || x.handle}{x.dev && <span className="rounded-chip bg-warn/15 px-1 text-[10px] font-bold text-warn">DEV</span>}{x.wallet && <span title={`Real wallet ${x.wallet}`} className="rounded-chip bg-up/10 px-1 text-[10px] font-bold text-up">TRACKED</span>}</b>
-                        <span className="block truncate text-sm text-muted">@{x.handle}{hold(x.avgHold) ? ` · ${hold(x.avgHold)} avg. hold` : ""}{x.external ? " · received from outside" : ""}</span>
+                        <b className="flex items-center gap-1.5 truncate text-[15px] leading-tight font-semibold tracking-[-0.01em] text-ink group-hover:text-focus">{x.name || x.handle}
+                          {x.dev && <span className="rounded-full bg-warn/15 px-1.5 py-px text-[9px] font-bold tracking-wide text-warn">DEV</span>}
+                          {x.wallet && <span title={`Real wallet ${x.wallet}`} className="rounded-full bg-up/10 px-1.5 py-px text-[9px] font-bold tracking-wide text-up">TRACKED</span>}</b>
+                        <span className="mt-0.5 block truncate text-sm text-ink-2">@{x.handle}{hold(x.avgHold) ? <span className="text-muted"> · holds {hold(x.avgHold)}</span> : ""}{x.external ? " · received from outside" : ""}</span>
                       </span>
                     </a>
+                    {x.wallet && (
+                      <span className="mt-1.5 ml-[68px] flex items-center gap-1">
+                        <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={`Their wallet ${x.wallet} on Solscan`}
+                          className="font-outlier inline-flex h-6 items-center gap-1.5 rounded-full bg-paper-4/70 px-2 text-xs text-ink-2 ring-1 ring-rule-2 transition-colors hover:text-ink hover:ring-muted">
+                          <i className="size-1.5 rounded-full bg-up" />{x.wallet.slice(0, 4)}…{x.wallet.slice(-4)}</a>
+                        <button onClick={() => copy(x.wallet!)} aria-label="Copy their wallet" title="Copy wallet" className="grid size-6 place-items-center rounded-full text-muted transition-colors hover:bg-paper-4 hover:text-ink"><Icon.copy className="size-3.5" /></button>
+                      </span>
+                    )}
                   </td>
-                  <td className="num border-b border-rule/70 px-3 py-2 text-right"><b className="font-semibold text-ink">{usdK(x.value)}</b><span className="block text-sm text-muted">{amt(x.amount)}</span></td>
-                  <td className={cn("num border-b border-rule/70 px-3 py-2 text-right", (x.pnl ?? 0) >= 0 ? "text-up" : "text-down")}>{usdSigned(x.pnl)}<span className="block text-sm">{pct(ret)}</span></td>
-                  <td className="num border-b border-rule/70 px-3 py-2 text-right text-ink-2">{entryMc(x, mc)}<span className="block text-sm text-muted">{x.entry != null ? `$${x.entry.toPrecision(3)}` : ""}</span></td>
-                  <td className="max-w-[420px] border-b border-rule/70 px-3 py-2 text-sm text-ink-2">{x.thesis ? <span className="line-clamp-2 whitespace-pre-line">{x.thesis.text}</span> : <span className="text-muted">—</span>}</td>
+                  <td className={cn(cell, "text-right")}>
+                    <Flash value={value == null ? null : Math.round(value)} className="num text-[15px] font-semibold tracking-[-0.01em] text-ink">{usdK(value)}</Flash>
+                    <span className="mt-1 flex items-center justify-end gap-2 text-sm text-ink-2">
+                      <span className="h-1 w-12 overflow-hidden rounded-full bg-paper-4"><span className="block h-full rounded-full bg-accent" style={{ width: `${((value || 0) / top) * 100}%` }} /></span>
+                      {sh != null && <b className="num font-semibold text-ink">{sh >= 1 ? sh.toFixed(2) : sh.toFixed(3)}%</b>}
+                      <span className="num text-muted">{amt(x.amount)}</span>
+                    </span>
+                  </td>
+                  <td className={cn(cell, "text-right")}>
+                    <Flash value={pnl == null ? null : Math.round(pnl)} className={cn("num text-[15px] font-semibold tracking-[-0.01em]", up ? "text-up" : "text-down")}>{usdSigned(pnl)}</Flash>
+                    {ret != null && <span className={cn("num mt-1 ml-auto block w-fit rounded-full px-1.5 py-px text-xs font-semibold", up ? "bg-up/10 text-up" : "bg-down/10 text-down")}>{ret >= 0 ? "+" : "−"}{Math.abs(ret).toFixed(Math.abs(ret) >= 100 ? 0 : 1)}%</span>}
+                  </td>
+                  <td className={cn(cell, "num text-right")}>
+                    <span className="text-[15px] font-medium text-ink">{entryMc(x, mc)}</span>
+                    <span className="mt-1 block text-sm text-muted">{x.entry != null ? `$${x.entry.toPrecision(3)}` : ""}</span>
+                  </td>
+                  <td className={cn(cell, "max-w-[420px] text-sm")}>
+                    {x.thesis ? <span className="line-clamp-2 border-l-2 border-rule-2 pl-2.5 leading-snug whitespace-pre-line text-ink">{x.thesis.text}</span> : <span className="text-muted">—</span>}
+                  </td>
                 </tr>
               );
             })}
@@ -147,7 +192,7 @@ export function Theses({ f }: { f: CoinFomo | null }) {
           const p = x.position;
           return (
             <article key={x.id} className="flex gap-3 border-t border-rule px-3 py-3">
-              <a href={traderHref(x.handle)} className="shrink-0"><Avatar src={x.pic} size={36} /></a>
+              <a href={traderHref(x.handle)} className="shrink-0"><Avatar src={x.pic} name={x.name || x.handle} size={36} /></a>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
                   <a href={traderHref(x.handle)} className="font-semibold text-ink hover:text-focus">{x.name || x.handle}</a>

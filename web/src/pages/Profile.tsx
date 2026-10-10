@@ -1,6 +1,7 @@
 // People (#/u) and one person's page (#/u/<username>): banner, picture, bio, follow button, then what their
 // wallet holds, what it traded, who they follow (Blix accounts, Fomo traders, wallets) and who follows them.
 // Talks to /api/account/* (server/social.js).
+import { SiteLogo } from "@/components/logos";
 import { useCallback, useEffect, useState } from "react";
 import { ago, CoinImg, Empty, Page, Problem, td, tdR, th, thR } from "@/components/page";
 import { FollowButton } from "@/components/follow";
@@ -41,7 +42,7 @@ function People() {
 
 const SearchPeople = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
   <label className="flex h-9 w-64 items-center gap-2 rounded-full border border-rule bg-paper px-3 focus-within:border-accent-dim max-sm:w-full">
-    <Icon.search className="size-3.5 text-muted" />
+    <Icon.search className="size-4 text-muted" />
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Search people" className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
   </label>
 );
@@ -67,7 +68,7 @@ type Tab = "holdings" | "activity" | "following" | "followers";
 export function UserView({ username, onMine }: { username: string; onMine?: boolean }) {
   const [d, setD] = useState<UserPage | null>(null), [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("holdings"), [editing, setEditing] = useState(false);
-  const load = useCallback(() => social<UserPage>(`u/${encodeURIComponent(username)}`).then((r) => { setD(r); setError(""); }).catch((e) => setError(e.message)), [username]);
+  const load = useCallback(() => social<UserPage>(`u/${encodeURIComponent(username)}`).then((r) => { if (!r?.profile) throw new Error("This profile came back unreadable. Try again."); setD(r); setError(""); }).catch((e) => setError(e.message)), [username]);
   useEffect(() => { load(); }, [load]);
 
   if (error && !d) return <div className="mx-auto w-full max-w-[1700px] p-3"><Problem text={error} /></div>;
@@ -133,7 +134,7 @@ function Trades({ d }: { d: UserPage }) {
             <b className="font-semibold text-ink">{n.symbol || shortAddr(t.mint)}</b></a> : "—"}</td>
           <td className={tdR}><span className="inline-flex items-center gap-1.5"><Sol className="size-3.5" />{t.sol == null ? "—" : num(Math.abs(t.sol))}</span></td>
           <td className={cn(tdR, "text-muted")}>{ago(t.t)}</td>
-          <td className={tdR}>{t.sig && <a href={`https://solscan.io/tx/${t.sig}`} target="_blank" rel="noreferrer" className="text-muted hover:text-ink" aria-label="View on Solscan"><Icon.link className="inline size-3.5" /></a>}</td>
+          <td className={tdR}>{t.sig && <a href={`https://solscan.io/tx/${t.sig}`} target="_blank" rel="noreferrer" className="text-muted hover:text-ink" aria-label="View on Solscan" title="View on Solscan"><SiteLogo site="solscan" className="inline size-4" /></a>}</td>
         </tr>); })}</tbody>
     </table></div></section>
   );

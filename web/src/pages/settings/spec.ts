@@ -1,13 +1,13 @@
 // What every radar setting is called on the Settings page, what it does, its unit and its control. The
 // meanings come from server/settings.js. A setting missing here still shows, under "Other", with a label
 // made from its key.
-export type Unit = "$" | "%" | "SOL" | "min" | "h" | "x" | "/h" | "$/day" | "" ;
+export type Unit = "$" | "%" | "SOL" | "min" | "h" | "x" | "/h" | "$/day" | "MB" | "" ;
 export interface Spec {
   label: string; hint?: string; unit?: Unit;
   kind?: "select" | "time" | "chips" | "sizes" | "model";
   options?: [value: string, label: string][];
 }
-export interface Group { id: string; title: string; blurb?: string; parts: { title?: string; keys: string[] }[] }
+export interface Group { id: string; title: string; blurb?: string; icon?: string; parts: { title?: string; keys: string[] }[] }
 
 const GROK_MODELS = ["grok-4.7", "grok-4.7-build-fast", "grok-4-fast-non-reasoning", "grok-4-fast-reasoning"];
 export const MODEL_SUGGEST: Record<string, string[]> = {
@@ -114,31 +114,44 @@ export const SPEC: Record<string, Spec> = {
   rpcUrl: { label: "Solana RPC URL", hint: "Blank = free public RPC (slow). A free Helius URL is about 10× faster" },
   rpcWsUrl: { label: "Solana websocket URL", hint: "Blank = made from the RPC URL" },
   jupiterKey: { label: "Jupiter key", hint: "Optional: raises the quote and price allowance" },
+  chartWsUrl: { label: "Helius chart key (websocket URL)", hint: "wss://mainnet.helius-rpc.com/?api-key=… — open charts, holders and per-coin reads run on it" },
+  chartWsUrl2: { label: "Second Helius key", hint: "Another project's wss URL. Charts move to it when the first key has used its day or its month" },
+  heliusProjectId2: { label: "Second Helius project ID" },
+  // data and servers
+  marketFeeds: { label: "Stream market feeds", hint: "Off on a spare copy of Blix so it doesn't use the home connection while the real one runs on the server" },
+  chartDailyMB: { label: "Chart stream budget", hint: "Live chart data per day. The free Helius plan allows about 1,650 MB", unit: "MB" },
+  fomoRelayTo: { label: "Send Fomo sign-in to", hint: "The Blix server this copy hands its Fomo login to, e.g. https://origin.blixvip.com. Blank = none" },
+  grokOff: { label: "Never use Grok", hint: "Keeps the Grok subscription untouched, even when signed in here" },
+  geminiPerDay: { label: "Gemini calls per day", hint: "Free-tier cap; Gemini backs up fast reads when Groq is unavailable" },
+  runningAi: { label: "Group narratives with Claude", hint: "Off: Blix groups them by its own themes" },
+  heliusProjectId: { label: "Helius project ID", hint: "From dashboard.helius.dev (project settings, or the projectId in the address bar). Health then shows the month's credits used and when they reset" },
 };
 
 export const GROUPS: Group[] = [
-  { id: "trading", title: "Quick buy and exits", blurb: "The buy buttons, and the exit rule each new paper position starts with", parts: [{ keys: ["quickSizes", "paperStartSol", "paperTake", "paperStop", "paperTrail"] }] },
-  { id: "tracking", title: "What gets tracked", parts: [{ keys: ["nurseryMinMcap", "nurseryMinVol5m", "maxTracked", "minSafety", "minExitLiq"] }, { title: "Signals", keys: ["launchScore", "momentumScore", "spikeMinVol"] }] },
-  { id: "alerts", title: "Alerts", parts: [{ keys: ["notifyKinds", "telegramChat", "alertCooldownMin", "quietStart", "quietEnd", "pushUnscreened"] }, { title: "Briefs", keys: ["aiBriefs", "briefEveryMin"] }] },
-  { id: "wallets", title: "Wallets", parts: [{ keys: ["autoFollowSmart", "maxSmartWallets", "walletMinSol", "fomoAutoFollow", "fomoFollowTop"] }] },
-  { id: "picks", title: "Picks", blurb: "When Blix calls a coin a pick, how it enters, and how it exits", parts: [
+  { id: "trading", icon: "bolt", title: "Quick buy and exits", blurb: "The buy buttons, and the exit rule each new paper position starts with", parts: [{ keys: ["quickSizes", "paperStartSol", "paperTake", "paperStop", "paperTrail"] }] },
+  { id: "tracking", icon: "crosshair", title: "What gets tracked", blurb: "Which launches Blix follows, and when they count as a signal", parts: [{ keys: ["nurseryMinMcap", "nurseryMinVol5m", "maxTracked", "minSafety", "minExitLiq"] }, { title: "Signals", keys: ["launchScore", "momentumScore", "spikeMinVol"] }] },
+  { id: "alerts", icon: "send", title: "Alerts", blurb: "What gets pushed to Discord and Telegram, and when", parts: [{ keys: ["notifyKinds", "telegramChat", "alertCooldownMin", "quietStart", "quietEnd", "pushUnscreened"] }, { title: "Briefs", keys: ["aiBriefs", "briefEveryMin"] }] },
+  { id: "wallets", icon: "wallets", title: "Wallets", blurb: "Which wallets Blix follows for you", parts: [{ keys: ["autoFollowSmart", "maxSmartWallets", "walletMinSol", "fomoAutoFollow", "fomoFollowTop"] }] },
+  { id: "picks", icon: "picks", title: "Picks", blurb: "When Blix calls a coin a pick, how it enters, and how it exits", parts: [
     { title: "Pick rule", keys: ["pickMinTraction", "pickMinPwin", "pickMinMcap", "pickMaxMcap", "pickMinScore", "aiInGate", "buyConviction"] },
     { title: "Early coins", keys: ["earlyMinTraders", "earlyMinPwin"] },
     { title: "Entry", keys: ["entryWaitMin", "entryChasePct", "entryCancelPct", "entryFallPct", "entryOffHighPct"] },
     { title: "Exit", keys: ["pickTakeProfit", "pickSellPct", "pickTrailPct", "pickStopPct", "pickMaxHours"] },
     { title: "Risk guard", keys: ["guardLosses", "guardPauseMin", "guardDayLoss"] },
   ] },
-  { id: "ai", title: "AI reads", parts: [
+  { id: "ai", icon: "ai", title: "AI reads", blurb: "Which models read coins, how often, and how much they may spend", parts: [
     { title: "Research", keys: ["researchAuto", "researchPerHour", "queueMax"] },
     { title: "Quick reads", keys: ["quickReads", "quickGrok", "quickGrokModel"] },
     { title: "Fast reads", keys: ["fastProvider", "fastModel", "fastPerHour", "claudeFast"] },
     { title: "Triage", keys: ["triageOn", "triageProvider", "triageModel", "triageGrokModel", "triageEscalate", "earlyAuto"] },
     { title: "Deep reads", keys: ["deepMinScore", "deepProvider", "deepModel", "deepSearches", "deepPerHour"] },
-    { title: "Grok", keys: ["grokModel", "grokSearch", "grokDailyBudget"] },
-    { title: "Narratives", keys: ["scoutEveryMin", "scoutSearches", "scoutEffort", "narrativeModel", "narrativeCardsPerHour"] },
+    { title: "Grok", keys: ["grokModel", "grokSearch", "grokDailyBudget", "grokOff"] },
+    { title: "Backups", keys: ["geminiPerDay"] },
+    { title: "Narratives", keys: ["scoutEveryMin", "scoutSearches", "scoutEffort", "narrativeModel", "narrativeCardsPerHour", "runningAi"] },
     { title: "Self-review", keys: ["reviewMinNew"] },
   ] },
+  { id: "data", icon: "health", title: "Data and servers", blurb: "Where Blix's live data comes from and what it may use", parts: [{ keys: ["marketFeeds", "chartDailyMB", "heliusProjectId", "heliusProjectId2", "fomoRelayTo"] }] },
 ];
-export const KEYS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "jupiterKey"];
+export const KEYS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "chartWsUrl", "chartWsUrl2", "jupiterKey"];
 // Not shown at all: one-time flags and the public-access switches.
 export const HIDDEN = new Set(["buyMigrated", "publicHost", "publicMode", "remoteKey", "tunnelKey"]);

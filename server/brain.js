@@ -477,7 +477,15 @@ function replayPicks() {
 // exit rule, grouped by what the radar said about it at the time. Re-measured every 5 minutes; it goes
 // into the AI's prompt and onto the Today tab.
 let evCache = { t: 0, v: null };
+// A week of graded outcomes, re-read for every Picks request: the answer moves by a few rows a minute, so one
+// reading serves for 60 s.
+let evidenceCache = { t: 0, v: null };
 export function evidence() {
+  if (evidenceCache.v && now() - evidenceCache.t < 60_000) return evidenceCache.v;
+  evidenceCache = { t: now(), v: evidenceNow() };
+  return evidenceCache.v;
+}
+function evidenceNow() {
   if (evCache.v && now() - evCache.t < 5 * 60_000) return evCache.v;
   const rows = db.prepare("SELECT mint, mcap0, last_mcap, illiq, sim, exit_mult, traction, pwin, action FROM outcomes WHERE kind = 'grade' AND mcap0 > 0 AND sim IS NOT NULL AND t0 > ? AND t0 < ? ORDER BY t0").all(now() - 7 * 24 * H, now() - 45 * 60_000);
   const res = (o) => { const sim = json(o.sim, null); return o.exit_mult ?? (sim ? sim.realized + sim.left * (o.illiq ? 0 : o.last_mcap / o.mcap0) * COST : null); };
@@ -626,7 +634,10 @@ async function trackTick() {
     const open = db.prepare("SELECT * FROM outcomes WHERE done = 0").all();
     if (!open.length) return;
     const pairs = await dexTokens([...new Set(open.map((o) => o.mint))]);
+    let n = 0;
     for (const o of open) {
+      // Hundreds of open outcomes, each a few writes: a pause every 40 lets the live feeds through.
+      if (++n % 40 === 0) await new Promise((go) => setImmediate(go));
       const p = pairs.get(o.mint);
       if (!p && pairs.failed?.has(o.mint)) continue;   // DexScreener did not answer: not the same as the coin being gone
       let mcap = p ? (p.marketCap || p.fdv || 0) : 0;
@@ -649,7 +660,10 @@ async function trackTick() {
       const peak = Math.max(o.peak_mcap || 0, mcap), low = Math.min(o.low_mcap || mcap, mcap), mult = mcap / o.mcap0;
       const cp = (col, at) => (o[col] == null && age >= at ? mult : o[col]);
       const done = age >= 24 * H ? 1 : 0;
-      db.prepare(`UPDATE outcomes SET peak_mcap = ?, peak_t = ?, low_mcap = ?, last_mcap = ?, last_t = ?, m1h = ?, m6h = ?, m24h = ?, missing = 0, done = ? WHERE kind = ? AND ref = ?`)
+      // Same reading as last time and nothing due: only refreshed once a minute (it was rewritten on every pass).
+      const same = mcap === o.last_mcap && peak === o.peak_mcap && low === o.low_mcap && !o.missing && done === (o.done || 0)
+        && cp("m1h", H) === o.m1h && cp("m6h", 6 * H) === o.m6h && cp("m24h", 24 * H) === o.m24h;
+      if (!(same && now() - (o.last_t || 0) < 60_000)) db.prepare(`UPDATE outcomes SET peak_mcap = ?, peak_t = ?, low_mcap = ?, last_mcap = ?, last_t = ?, m1h = ?, m6h = ?, m24h = ?, missing = 0, done = ? WHERE kind = ? AND ref = ?`)
         .run(peak, peak > (o.peak_mcap || 0) ? now() : o.peak_t, low, mcap, now(), cp("m1h", H), cp("m6h", 6 * H), cp("m24h", 24 * H), done, o.kind, o.ref);
       if (o.kind === "pick" || o.kind === "grade") advancePick({ ...o, peak_mcap: peak }, mcap);
       if (o.kind === "call") {

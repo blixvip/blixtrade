@@ -11,7 +11,7 @@ import { settings } from "./settings.js";
 import { recentLaunches, devLaunches, launchLog, adoptLaunch } from "./engine.js";
 import { getMeta } from "./pulse.js";
 import { liveStats } from "./livetrades.js";
-import { askFast, fastReady as groqReady } from "./fast.js";
+import { askFast, groqKeyReady as groqReady } from "./fast.js";
 import { askGrok, grokReady } from "./grok.js";
 import { ask, claudeStatus, FAST_MODEL } from "./ai.js";
 
@@ -91,7 +91,7 @@ async function batch() {
   const t0 = now();
   try {
     const r = useGroq
-      ? await askFast(SYSTEM, prompt, 1600, { models: [settings.triageModel, "openai/gpt-oss-20b", "llama-3.1-8b-instant"] })
+      ? await askFast(SYSTEM, prompt, 1600, { models: [settings.triageModel, "openai/gpt-oss-20b", "llama-3.1-8b-instant"], gemini: false })
       : llm === "grok" ? await askGrok(SYSTEM, prompt, { model: settings.triageGrokModel, search: false, maxTokens: 900, timeout: 30_000, lane: "triage" })
       : await ask(SYSTEM, prompt, 1600, { model: FAST_MODEL });
     const out = JSON.parse(r.text.match(/\{[\s\S]*\}/)?.[0] || "{}");

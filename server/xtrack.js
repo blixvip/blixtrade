@@ -12,12 +12,9 @@
 // Posts are stored with the coins they mention (contract addresses, pump.fun / trading links, $tickers);
 // contract addresses are handed to the radar so those coins get tracked. Profile changes (name, picture,
 // bio) seen in the answers are recorded too. Account details when adding one come from FxTwitter (free).
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { runRepl } from "./browser.js";
 import { db, logEvent } from "./db.js";
 
-const ASIDE_EXE = path.join(process.env.LOCALAPPDATA || "", "Aside", "CLI", "current", "aside.exe");
 const EVERY_MS = 45_000, QUERY_MAX = 450, MAX_ACCOUNTS = 200;
 const now = () => Date.now();
 export const TAB_URL = "https://x.com/search?q=from%3Ablknoiz06&f=live&blix=tracker";
@@ -133,23 +130,9 @@ const READ = `
   }
   return { posts: out };`;
 
-function aside(script, timeoutMs = 100_000) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(ASIDE_EXE)) return reject(new Error("Aside isn't installed (its CLI was not found)."));
-    const code = `await eval("(async () => {" + atob("${Buffer.from(script, "utf8").toString("base64")}") + "})()");`;
-    const child = spawn(ASIDE_EXE, ["repl", code], { windowsHide: true });
-    let out = "", err = "";
-    child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => { child.kill(); reject(new Error("Aside took too long reading X.")); }, timeoutMs);
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
-    child.on("close", () => {
-      clearTimeout(timer);
-      const line = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith('{"xtrack"'));
-      if (!line) return reject(new Error((out + err).replace(/\x1b\[[0-9;]*m/g, "").trim().slice(0, 300) || "No answer from Aside."));
-      try { resolve(JSON.parse(line)); } catch { reject(new Error("Aside's answer could not be read.")); }
-    });
-  });
-}
+// In Aside on the owner's PC, in the server's own headless browser elsewhere (browser.js); there the tracker tab
+// is never found, so every check takes the FxTwitter road below.
+const aside = (script, timeoutMs = 100_000) => runRepl(script, { marker: "xtrack", timeoutMs, what: "X" });
 
 // One check: find the tracker tab, run the search, wait (up to 60 s; a background tab is slow) for X's answer.
 async function readX(query) {

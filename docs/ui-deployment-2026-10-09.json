@@ -1,0 +1,8 @@
+{
+  "previousVersion": "04cfc3f0-7230-4cb2-b2d1-6db21626fa60",
+  "deployedVersion": "927f40a4-0d3c-4407-b250-b9a0b1926891",
+  "scope": "Homepage and sign-in HTML/CSS only; other JavaScript and admin/demo modules preserved byte-for-byte",
+  "bindingsAndSettingsUnchanged": true,
+  "assetsPreserved": true,
+  "verifiedAt": "2026-10-09T18:51:22.767Z"
+}

@@ -54,7 +54,7 @@ const P: Record<string, string> = {
 };
 export type IconName = keyof typeof P;
 export function DI({ name, className }: { name: IconName; className?: string }) {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("size-4 shrink-0", className)} dangerouslySetInnerHTML={{ __html: P[name] ?? P.code }} />;
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("size-4 shrink-0", className)} dangerouslySetInnerHTML={{ __html: P[name] ?? P.code }} />;
 }
 // A graphite tile with a lit top edge, holding one icon.
 export function Tile({ name, small }: { name: IconName; small?: boolean }) {
@@ -189,7 +189,7 @@ export function Hero({ icon, title, lead, children, side }: { icon: IconName; ti
         style={{ backgroundImage: "linear-gradient(var(--color-rule-2) 1px, transparent 1px), linear-gradient(90deg, var(--color-rule-2) 1px, transparent 1px)", backgroundSize: "28px 28px",
           maskImage: "radial-gradient(520px 260px at 100% 0%, black, transparent 75%)", WebkitMaskImage: "radial-gradient(520px 260px at 100% 0%, black, transparent 75%)" }} />
       <div className="flex min-w-0 gap-6 max-md:flex-col max-md:gap-4">
-      <span className="chrome-fill grid size-[66px] shrink-0 place-items-center rounded-[19px] [&_svg]:size-[31px] [&_svg]:stroke-[1.9] max-md:size-[52px] max-md:rounded-[15px] max-md:[&_svg]:size-[25px]">
+      <span className="chrome-fill grid size-[66px] shrink-0 place-items-center rounded-[19px] [&_svg]:size-[31px] [&_svg]:stroke-[1.5] max-md:size-[52px] max-md:rounded-[15px] max-md:[&_svg]:size-[25px]">
         <DI name={icon} />
       </span>
       <div className="min-w-0">

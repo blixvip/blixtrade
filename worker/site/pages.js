@@ -66,11 +66,11 @@ const HOLDERS_SAMPLE = code(`{
 // ---------- /api ----------
 const api = {
   path: "/api", crumb: "API", og: "og-api.png",
-  title: "Blix API: Free Solana Memecoin API, a GMGN & Axiom Alternative",
-  ogTitle: "Blix API: the free Solana memecoin API",
-  description: "Free, open-source Solana memecoin API: every pump.fun launch, live trades, holders, snipers, bundles, candles and Jupiter quotes. No API key, no credits.",
+  title: "Free Solana API for Memecoins & pump.fun (No Key) | Blix",
+  ogTitle: "Blix: the free Solana API for memecoins and pump.fun",
+  description: "Free Solana API for memecoins: every pump.fun launch, live trades, holders, snipers, bundles, candles and Jupiter quotes. Open source, no API key, no credits.",
   eyebrow: `Blix API · ${N_ENDPOINTS} endpoints · free`,
-  h1: "Free Solana memecoin API",
+  h1: "Free Solana API for memecoins",
   lede: `Blix is an open-source memecoin terminal that runs on your own machine and serves everything it sees as JSON: every pump.fun launch within about a second, every trade decoded straight from Solana, holder ledgers with dev, sniper and bundle shares, 5-second candles, real Jupiter quotes, safety checks and AI reads. ${N_ENDPOINTS} endpoints and one live event stream, with <b>no API key, no credits and no rate card</b>.`,
   related: ["/mcp", "/pump-fun-api", "/gmgn-api", "/axiom-api", "/fomo-api"],
   body: `${cta(`<a class="btn" href="/mcp">Connect an AI client (MCP)</a>`)}
@@ -161,11 +161,11 @@ const SETUP = [
 ];
 const mcp = {
   path: "/mcp", crumb: "MCP", og: "og-mcp.png",
-  title: "Blix MCP: Solana Memecoin MCP Server for Claude, Cursor, Codex",
-  ogTitle: "Blix MCP: the Solana memecoin MCP server",
-  description: `Give Claude, Cursor or Codex live Solana memecoin data: pump.fun launches, holders, snipers, bundles, candles, Jupiter quotes and AI reads. ${N_TOOLS} tools, free.`,
+  title: "Solana MCP Server for Claude, Cursor & Codex (Free) | Blix",
+  ogTitle: "Blix: the free Solana MCP server for memecoin data",
+  description: `Free Solana MCP server: give Claude, Cursor or Codex live memecoin data, pump.fun launches, holders, snipers, bundles, candles and Jupiter quotes. ${N_TOOLS} tools.`,
   eyebrow: `Blix MCP · ${N_TOOLS} tools · free`,
-  h1: "Solana memecoin MCP server",
+  h1: "Solana MCP server for memecoin data",
   lede: `Blix MCP turns the <a href="/api">Blix API</a> into ${N_TOOLS} tools an AI client can call. Ask Claude what is running on pump.fun right now, who holds a coin and whether the dev sold, or have it paper-trade a call. It is free, open source and has no dependencies, and it <b>reads only, plus a paper-money desk</b>: nothing it does can spend real funds.`,
   related: ["/api", "/pump-fun-api", "/gmgn-api", "/axiom-api"],
   body: `${cta(`<a class="btn" href="/api">See the API</a>`)}
@@ -461,5 +461,123 @@ ${NOT_AFFILIATED("pump.fun or PumpPortal")}`,
   ],
 };
 
-export const PAGES = Object.fromEntries([api, mcp, pump, gmgn, axiom, fomo].map((p) => [p.path, p]));
+
+// ---------- pages for traders (the terminal itself, not the API) ----------
+// Each says only what the terminal at /app does today (the landing's features); the button goes to sign-up.
+const START = () => `<div class="cta"><a class="btn primary" href="/start">Start trading free</a><a class="btn" href="/">See BLIX</a></div>`;
+
+const tracker = {
+  path: "/pump-fun-tracker", crumb: "pump.fun tracker", og: "home/og.jpg",
+  title: "pump.fun Tracker: Live New Pairs, Bonding & Migrations (Free) | BLIX",
+  ogTitle: "BLIX: a free live pump.fun tracker",
+  description: "Free live pump.fun tracker: every new coin as it launches, bonding curve progress, final stretch and migrations, holders, snipers and bundles, with AI ratings. Sign in with Google.",
+  eyebrow: "pump.fun tracker · updated " + UPDATED_TEXT,
+  h1: "Live pump.fun tracker",
+  lede: `BLIX shows every pump.fun coin the moment it launches and follows it live: market cap, buys and sells, bonding curve progress, the final stretch before migration, and the move to PumpSwap. Each coin gets a live AI rating and a holder breakdown (dev, snipers, bundles, top 10), so you can tell a real runner from a rug before you buy. It is free and runs in your browser: sign in with Google and it is on screen.`,
+  related: ["/solana-memecoin-screener", "/memecoin-paper-trading", "/pump-fun-api"],
+  body: `${START()}
+${facts([
+    ["New pairs", "Every pump.fun launch, about a second after it hits the chain"],
+    ["Final stretch", "Coins closest to completing the bonding curve, with live progress"],
+    ["Migrated", "Coins that graduated, priced live after the move"],
+    ["Holders", "Dev, snipers, bundles, top 10 and who already sold"],
+    ["AI", "A live rating per coin and one-click research"],
+    ["Cost", "Free; paper trading to practise"],
+  ])}
+<h2 id="pulse">Pulse: the whole pump.fun lifecycle on one screen</h2>
+<p>The Pulse board splits pump.fun into the stages that matter for a trade. <b>New pairs</b> lists coins seconds after launch. <b>Final stretch</b> holds the ones close to finishing the bonding curve, where most of the volume arrives. <b>Migrated</b> shows coins that graduated and keep trading. Every row updates live from the chain: market cap, volume, buys and sells, holders and age, with the coin's picture and links to its X, Telegram and website.</p>
+<h2 id="safety">Spot rugs before you buy</h2>
+<ul>
+<li><b>Dev history:</b> how many coins the creator launched before and how they ended.</li>
+<li><b>Snipers and bundles:</b> wallets that bought in the first blocks, and how much they still hold.</li>
+<li><b>Top 10 share:</b> how concentrated the supply is.</li>
+<li><b>Live rating:</b> built from liquidity, holders, volume and risk signals, updated as the coin trades.</li>
+</ul>
+<h2 id="follow">Follow the wallets and accounts that move coins</h2>
+<p>Follow top traders and smart wallets to see their buys and sells as they land, and watch the X accounts that call memecoins: when they post a ticker or contract address it appears next to the chart. The live feed brings pump.fun callouts and big Fomo trades into one list.</p>
+<h2 id="practise">Practise first with paper trading</h2>
+<p>Buy and sell any coin with paper SOL at real quoted prices, with take profit, stop loss and trailing stop, and see your profit move with the coin. Nothing is sent to the chain. <a href="/memecoin-paper-trading">How paper trading works</a>.</p>
+${START()}
+${NOT_AFFILIATED("pump.fun")}`,
+  faq: [
+    ["Is there a free pump.fun tracker?", `Yes. BLIX is free: sign in with Google and the live board of new pairs, final stretch and migrated coins is on screen, with holders, snipers and AI ratings for every coin.`],
+    ["How do I see new pump.fun coins as they launch?", `Open BLIX and look at the New pairs column on Pulse. Coins appear about a second after they are created on chain and update live from then on.`],
+    ["What is the pump.fun final stretch?", `The coins closest to completing their bonding curve. When the curve completes the coin migrates and trades on a regular pool; BLIX shows the progress live for each coin.`],
+    ["How do I check a pump.fun coin for snipers and bundles?", `Open the coin in BLIX: the holder panel shows the dev, wallets that bought in the first blocks (snipers and bundles), the top 10 share, and who has already sold.`],
+    ["Can I practise without risking SOL?", `Yes. Paper trading uses real quoted prices and costs but never sends a transaction.`],
+  ],
+};
+
+const screener = {
+  path: "/solana-memecoin-screener", crumb: "Memecoin screener", og: "home/og.jpg",
+  title: "Solana Memecoin Screener with AI Ratings & Narratives (Free) | BLIX",
+  ogTitle: "BLIX: a free Solana memecoin screener with AI ratings",
+  description: "Free Solana memecoin screener: trending, surging and new coins with live AI ratings, narrative tracking, holder and rug checks, wallet and X tracking. Sign in with Google.",
+  eyebrow: "Memecoin screener · updated " + UPDATED_TEXT,
+  h1: "Solana memecoin screener with AI",
+  lede: `Thousands of memecoins launch on Solana every day. BLIX narrows them down: trending and surging coins, new pairs, AI ratings that update as each coin trades, daily AI picks with the reasons behind them, and narrative tracking that shows which stories (AI agents, cats, political coins and the rest) are heating up and which coins ride them. Free, in the browser, sign in with Google.`,
+  related: ["/pump-fun-tracker", "/memecoin-paper-trading", "/api"],
+  body: `${START()}
+${facts([
+    ["Lists", "Trending, Surge, New pairs and Bonded"],
+    ["AI ratings", "Every coin, updated live from liquidity, holders, volume and risk"],
+    ["Daily picks", "A short list each day, with why"],
+    ["Narratives", "Which stories are heating up, and their coins"],
+    ["Research", "One click: dev history, holders, socials, red flags"],
+    ["Cost", "Free"],
+  ])}
+<h2 id="discover">Discover: what is moving right now</h2>
+<p>Discover sorts Solana memecoins into <b>Trending</b>, <b>Surge</b> (coins accelerating in the last minutes), <b>New pairs</b> and <b>Bonded</b>. Each row shows market cap, change, volume and holders, with the coin's live rating, and opens straight into its chart.</p>
+<h2 id="ai">AI ratings, picks and research</h2>
+<p>Every coin gets a rating that updates as it trades. Each day BLIX picks the coins worth watching and says why, so you start with a short list instead of the whole firehose. One click on any coin runs a full read: the dev's history, holder concentration, socials, red flags and how it compares with the rest of its narrative.</p>
+<h2 id="narratives">Narrative tracking</h2>
+<p>Memecoins move in themes. BLIX groups coins by the story they ride and tracks which stories are gaining, so you can see a narrative heat up and find its leading coins early.</p>
+<h2 id="tracking">Wallets, X accounts and live feed</h2>
+<p>Follow top traders and smart wallets, watch the X accounts that call coins, and keep one live feed of pump.fun callouts and big Fomo trades with each position's profit moving as the coin trades.</p>
+${START()}`,
+  faq: [
+    ["What is the best free Solana memecoin screener?", `BLIX is free and adds what most screeners leave out: live AI ratings, daily AI picks, narrative tracking and one-click research on any coin, alongside trending, surge and new pair lists.`],
+    ["How are BLIX's AI ratings made?", `From each coin's live liquidity, holders, volume and risk signals (dev history, snipers, bundles, supply concentration). The rating changes as the coin trades.`],
+    ["What are memecoin narratives?", `The themes coins trade on, such as AI agents, animals or politics. BLIX groups coins by narrative and shows which narratives are gaining attention.`],
+    ["Do I need a wallet to use it?", `No. Sign in with Google to browse, rate and paper trade. Nothing touches your funds.`],
+  ],
+};
+
+const paperPage = {
+  path: "/memecoin-paper-trading", crumb: "Paper trading", og: "home/og.jpg",
+  title: "Memecoin Paper Trading on Solana: Real Prices, No Risk (Free) | BLIX",
+  ogTitle: "BLIX: free memecoin paper trading on Solana",
+  description: "Paper trade Solana and pump.fun memecoins for free: real quoted prices and trading costs, take profit, stop loss and trailing stop, live profit. Nothing is sent to the chain.",
+  eyebrow: "Paper trading · updated " + UPDATED_TEXT,
+  h1: "Memecoin paper trading on Solana",
+  lede: `Practise trading memecoins without risking SOL. BLIX's paper desk fills every buy and sell at the price a real swap would get right now, takes trading costs off each side, and tracks your profit live as the coin trades. Set take profit, stop loss or a trailing stop and BLIX closes the position for you. No wallet, no transaction, nothing on chain: sign in with Google and start with paper SOL.`,
+  related: ["/pump-fun-tracker", "/solana-memecoin-screener"],
+  body: `${START()}
+${facts([
+    ["Prices", "Real swap quotes at the moment you trade"],
+    ["Costs", "Trading costs taken off each side, like a real trade"],
+    ["Exits", "Take profit, stop loss, trailing stop, partial sells"],
+    ["Coins", "Any Solana memecoin, pump.fun included"],
+    ["Risk", "None: nothing is ever sent to the chain"],
+    ["Cost", "Free"],
+  ])}
+<h2 id="how">How it works</h2>
+<ol>
+<li>Sign in with Google: your paper desk opens with paper SOL.</li>
+<li>Find a coin on Pulse or Discover and buy with a size you set once.</li>
+<li>Add a take profit, stop loss or trailing stop, or sell part or all by hand.</li>
+<li>Watch the position's profit move live, and review closed trades and your record.</li>
+</ol>
+<h2 id="why">Why paper trade memecoins first</h2>
+<p>Memecoins move fast and most new coins go to zero. Paper trading lets you test an entry rule, a take profit or a stop on live coins and see what it would have done, with the same prices and costs as real trades, before any SOL is at stake.</p>
+${START()}`,
+  faq: [
+    ["Is memecoin paper trading free?", `Yes. Sign in with Google and the paper desk is ready; there is nothing to pay and no wallet to connect.`],
+    ["Are paper trade prices realistic?", `Each buy and sell fills at a real swap quote for that coin at that moment, and trading costs are taken off each side, so results track what a real trade would have done.`],
+    ["Can I set a stop loss on a paper trade?", `Yes: take profit, stop loss and trailing stop on every position, and partial sells.`],
+    ["Is anything sent to the blockchain?", `No. Paper trades exist only in BLIX; no transaction is ever signed or sent.`],
+  ],
+};
+
+export const PAGES = Object.fromEntries([api, mcp, pump, gmgn, axiom, fomo, tracker, screener, paperPage].map((p) => [p.path, p]));
 export const render = (path) => layout(PAGES[path]);

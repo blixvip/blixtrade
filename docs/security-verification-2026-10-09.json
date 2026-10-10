@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-09",
+  "status": "partially_deployed_external_coordination_required",
+  "scope": ["blixvip.com", "trade.blixvip.com", "origin.blixvip.com", "blix-vault", "legacy blixvip-home alternate URLs"],
+  "verified_deployed": {
+    "origin": {
+      "source_hashes_match": true,
+      "account_reads_per_minute": 600,
+      "anonymous_reads_per_minute": 240,
+      "pictures_per_minute": 240,
+      "writes_per_minute": 30,
+      "sensitive_writes_per_minute": 5,
+      "ip_requests_per_minute": 1200,
+      "streams_per_account": 6,
+      "global_streams": 500,
+      "global_nonstream_requests_in_flight": 256,
+      "limiter_scope": "one public web process; shared by Worker and direct-origin requests; resets on process restart",
+      "direct_browser_writes": "rejected; frontend writes use the main Worker without network-error retries",
+      "machine_relay_exception": "signed pc-relay owner identity on four explicitly allowed routes only",
+      "outbound_images": "DNS checked and pinned at connection; each redirect revalidated; byte and duration limits",
+      "unauthenticated_direct_api_checks": [401, 401, 401],
+      "rollback_backup": "/opt/blix/data/deploy-backups/2026-10-09T18-29-05-258Z"
+    },
+    "vault": {
+      "body_reader": "bounded bytes, object-only JSON, timeout and abort handling",
+      "request_timeout_ms": 20000,
+      "headers_timeout_ms": 10000,
+      "health": "passed after deployment",
+      "unresolved_transactions_before_restart": 0,
+      "rollback_backup": "/var/lib/blix-vault/deploy-backups/20261009T182559Z"
+    },
+    "infrastructure": {
+      "application_and_vault_listeners": "loopback only",
+      "public_listener": "SSH only",
+      "ssh_password_authentication": false,
+      "host_firewall": "allows established traffic, loopback, ICMP and SSH; rejects other inbound traffic",
+      "legacy_workers_dev_and_preview_urls": "disabled and verified through Cloudflare API"
+    }
+  },
+  "worker": {
+    "our_deployed_version": "efbb8438-a387-4304-92fa-84318da0c2bf",
+    "last_observed_live_version": "fecd6032-39e7-48b6-b226-feb67a8c76be",
+    "our_version_superseded_by_another_session": true,
+    "last_observed_live_rate_bindings": ["SIGNIN_LIMIT"],
+    "prepared_changes": ["persistent exact auth counters", "early body limits", "CSRF checks", "generic errors", "response security headers", "fresh membership for writes", "bounded analytics", "API and analytics burst bindings"],
+    "local_availability_policy": "another session retained read and Google-login availability when edge limit services fail; sensitive exact counters fail closed",
+    "live_edge_rate_limit_verification": "not passed: invalid admin-key probes returned 403 rather than the planned 429"
+  },
+  "validation": {
+    "terminal_suite_passed": 152,
+    "security_tests_passed": 20,
+    "vault_suite_passed": 42,
+    "frontend_typecheck_and_build": "passed",
+    "active_frontend_npm_audit": "zero reported vulnerabilities",
+    "durable_object_runtime_test": "200, 200, then 429 after local runtime restart with persistent SQLite storage",
+    "local_runtime_compatibility_date": "2026-05-22 (installed runtime cannot run 2026-09-01)",
+    "production_load_test": "not performed; only bounded unauthenticated probes",
+    "real_fund_transfers": "none"
+  },
+  "remaining": [
+    "Coordinate Worker deployment ownership; a competing session repeatedly replaces the security release.",
+    "Reconcile and deploy the current Worker changes, then verify API_LIMIT and ANALYTICS_LIMIT bindings and live 429 responses.",
+    "Cloudflare credential can access Workers/tunnels but DNS, WAF rulesets and zone settings return permission errors. Full domain inventory and WAF/DDoS configuration are not verified.",
+    "No claim of complete protection, globally exact API quotas, or immunity to distributed attacks.",
+    "Legacy storefront dependency audit previously reported advisories; that code was not upgraded or redeployed here. Its alternative public URLs are disabled."
+  ]
+}

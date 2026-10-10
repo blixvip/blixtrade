@@ -1,5 +1,5 @@
 // The strip along the bottom of every page, laid out like Axiom's: connection, settings, Watchlist, Wallets,
-// PnL, Activity, then Pulse, Discover, Picks, Alerts and Research (named as the side rail names those pages),
+// PnL, Activity, then Pulse, Discover and Alerts (named as the side rail names those pages),
 // the live feed's pace, BTC/ETH/SOL prices, and links.
 // Each item maps to the Blix page or figure that does the same job; the small windows (Watchlist, PnL, Feed,
 // Alerts) open upward and only ask the server while they are open. Desktop only (phones keep the bottom tabs).
@@ -12,13 +12,17 @@ import { usePoll } from "@/lib/coin";
 import { ageStr, compact, pct, shortAddr, tone } from "@/lib/format";
 import { loadPaperWallet, useTrade } from "@/lib/mode";
 import { usePulse } from "@/lib/pulse";
-import { useRoute, useRouteArg } from "@/lib/route";
-import { loadMe, useMe } from "@/lib/ui";
+import { useRoute, useRouteArg, pageHref } from "@/lib/route";
+import { loadMe, useDesktop, useMe } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "./icons";
+import { LiveMc } from "@/components/Live";
+import { thumb } from "@/lib/thumb";
+import { useRole } from "@/lib/role";
+import { SLOW_MS, useNet, watchNet } from "@/lib/net";
 
-const I = (d: ReactNode) => (p: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...p}>{d}</svg>
+const I = (d: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("shrink-0", className)} {...p}>{d}</svg>
 );
 const Ico = {
   bars: I(<path d="M5 18v-3M10 18v-6M15 18v-9M20 18V6" />),
@@ -30,12 +34,17 @@ const Ico = {
   callout: I(<path d="M3 11l14-6v14L3 13zM11.6 16.8a3 3 0 1 1-5.8-1.6" />),
   github: I(<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4M9 18c-4.51 2-5-2-7-2" />),
   docs: I(<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />),
+  x: I(<path fill="currentColor" stroke="none" d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77zm-1.08 16.18h1.7L7.4 4.73H5.58z" />),
+  discord: I(<path fill="currentColor" stroke="none" d="M20.32 4.37A19.8 19.8 0 0 0 15.4 2.85a13.7 13.7 0 0 0-.63 1.29 18.4 18.4 0 0 0-5.53 0 13 13 0 0 0-.64-1.29 19.7 19.7 0 0 0-4.92 1.52C.57 9.05-.27 13.6.15 18.1a19.9 19.9 0 0 0 6.03 3.05c.49-.66.92-1.36 1.29-2.1a12.9 12.9 0 0 1-2.03-.97c.17-.12.34-.25.5-.38a14.2 14.2 0 0 0 12.12 0c.16.13.33.26.5.38-.65.38-1.33.71-2.04.97.37.74.8 1.44 1.29 2.1a19.8 19.8 0 0 0 6.04-3.05c.5-5.2-.84-9.72-3.53-13.73M8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42s.96-2.42 2.16-2.42 2.18 1.09 2.16 2.42c0 1.34-.96 2.42-2.16 2.42m7.97 0c-1.18 0-2.15-1.08-2.15-2.42s.95-2.42 2.15-2.42 2.18 1.09 2.16 2.42c0 1.34-.95 2.42-2.16 2.42" />),
 };
 
 // BTC and ETH in their own colours, like Axiom's strip (brand marks, not interface colour).
 const Btc = () => <span className="grid size-3.5 place-items-center rounded-full bg-[#F7931A] text-[9px] font-bold text-black">₿</span>;
 const Eth = () => <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden><path fill="#8A92B2" d="M12 2 5.5 12.3 12 16l6.5-3.7z" /><path fill="#62688F" d="M12 17.2 5.5 13.5 12 22l6.5-8.5z" /></svg>;
 
+// Blix's socials, at the end of the bar. The Discord invite is still to come: until then its icon only says so.
+const X_URL = "https://x.com/blix_vip";
+const DISCORD_URL = "";
 const item = "flex h-full items-center gap-1.5 px-2 text-xs whitespace-nowrap text-ink-2 transition-colors duration-100 hover:bg-paper-3 hover:text-ink";
 
 // A small window that opens upward from its button and closes on a click anywhere else.
@@ -51,7 +60,7 @@ function Pop({ label, icon, children, width = "w-80", badge }: { label: string; 
   }, [open]);
   return (
     <div ref={ref} className="relative h-full">
-      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className={cn(item, open && "bg-paper-3 text-ink")}>{icon}{label}{badge}</button>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className={cn(item, open && "bg-paper-3 text-ink")}>{icon}<span className="max-xl:sr-only">{label}</span>{badge}</button>
       {open && (
         <div className={cn("absolute bottom-full left-0 z-50 mb-1 overflow-hidden rounded-card border border-rule-2 bg-paper-2 shadow-raised", width)}>
           <header className="border-b border-rule px-3 py-2 text-sm font-semibold">{label}</header>
@@ -66,19 +75,9 @@ const Empty = ({ children }: { children: ReactNode }) => <p className="px-3 py-6
 // ---------- connection ----------
 function Connection() {
   const connected = usePulse((s) => s.connected), polling = usePulse((s) => s.polling);
-  const [ms, setMs] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const ping = async () => {
-      const t0 = performance.now();
-      try { await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(8000) }); if (alive) setMs(Math.round(performance.now() - t0)); }
-      catch { if (alive) setMs(null); }
-    };
-    ping();
-    const id = setInterval(ping, 15_000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-  const state = (!connected && !polling) || ms == null ? "Offline" : ms > 1000 ? "Slow" : connected ? "Stable" : "Polling";
+  const ms = useNet((s) => s.ms), net = useNet((s) => s.state);
+  useEffect(watchNet, []);
+  const state = (!connected && !polling) || ms == null || net === "offline" ? "Offline" : net === "slow" || ms > SLOW_MS ? "Slow" : connected ? "Stable" : "Polling";
   const col = state === "Stable" || state === "Polling" ? "text-up" : state === "Slow" ? "text-warn" : "text-down";
   return (
     <Tip tip={state === "Offline" ? "Not connected to the radar" : state === "Polling" ? `Live, refreshed every 2 s (the live stream cannot get through this connection) · ${ms} ms to the server` : `Live feed connected · ${ms} ms to the server`}>
@@ -124,7 +123,7 @@ function WatchRows({ open, stars, here, hereSymbol, onSave }: { open: boolean; s
           <div key={s.mint} className="group flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-3">
             <a href={`#/coin/${s.mint}`} className="flex min-w-0 flex-1 items-center justify-between gap-2">
               <b className="truncate font-semibold">${s.symbol}</b>
-              <span className="num flex gap-2"><span className="text-ink-2">{compact(mc)}</span><span className={tone(r?.chg)}>{pct(r?.chg)}</span></span>
+              <span className="num flex gap-2"><LiveMc mint={s.mint} value={mc} className="font-normal text-ink-2" /><span className={tone(r?.chg)}>{pct(r?.chg)}</span></span>
             </a>
             <button aria-label="Remove" onClick={() => onSave(stars.filter((x) => x.mint !== s.mint))} className="text-muted opacity-0 group-hover:opacity-100 hover:text-down">×</button>
           </div>
@@ -192,7 +191,7 @@ function XRows({ open }: { open: boolean }) {
   return <>
     {data.posts.map((p) => (
       <a key={p.id} href={p.mints[0] ? `#/coin/${p.mints[0]}` : `https://x.com/${p.handle}/status/${p.id}`} target={p.mints[0] ? undefined : "_blank"} rel="noopener noreferrer" className="flex gap-2 border-b border-rule px-3 py-2 text-sm hover:bg-paper-3">
-        {p.avatar ? <img src={p.avatar} alt="" className="size-6 shrink-0 rounded-full" /> : <span className="size-6 shrink-0 rounded-full bg-paper-4" />}
+        {p.avatar ? <img src={thumb(p.avatar, 24)} alt="" className="size-6 shrink-0 rounded-full" /> : <span className="size-6 shrink-0 rounded-full bg-paper-4" />}
         <span className="min-w-0 flex-1"><b className="font-semibold">@{p.handle}</b>{p.mints.length > 0 && <em className="ml-1.5 rounded bg-up/15 px-1 text-2xs font-semibold not-italic text-up">COIN</em>}
           <span className="line-clamp-2 text-xs text-ink-2">{p.text}</span></span>
         <span className="num shrink-0 text-2xs text-muted">{ageStr(Date.now() - p.t)}</span>
@@ -235,17 +234,22 @@ function AlertRows({ open }: { open: boolean }) {
 
 // ---------- prices ----------
 type Px = { usd: number; chg24: number | null } | null;
+const priceWhole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const priceCents = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 function Prices() {
   const { data } = usePoll<{ btc: Px; eth: Px; sol: Px }>("market", 15_000);
   const live = usePulse((s) => s.live.solUsd);
-  const fmt = (n?: number | null) => (n ? `$${n.toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2, minimumFractionDigits: n >= 1000 ? 0 : 2 })}` : "—");
+  const fmt = (n?: number | null) => (n != null && Number.isFinite(n) && n > 0 ? `$${(n >= 1000 ? priceWhole : priceCents).format(n)}` : "—");
   const one = (icon: ReactNode, name: string, p: Px, usd: number | null | undefined, col: string) => (
     <Tip tip={`${name}${p?.chg24 != null ? ` · ${pct(p.chg24)} in 24h` : ""}`}><span className={cn("num flex items-center gap-1 px-1.5 text-xs font-medium", col)}>{icon}{fmt(usd)}</span></Tip>
   );
+  // On a tablet only Solana's price stays (the one every figure here is in); Bitcoin and Ether need the room.
   return (
     <span className="flex h-full items-center">
-      {one(<Btc />, "Bitcoin", data?.btc ?? null, data?.btc?.usd, "text-[#F7931A]")}
-      {one(<Eth />, "Ether", data?.eth ?? null, data?.eth?.usd, "text-[#8A92B2]")}
+      <span className="flex h-full items-center max-lg:hidden">
+        {one(<Btc />, "Bitcoin", data?.btc ?? null, data?.btc?.usd, "text-[#F7931A]")}
+        {one(<Eth />, "Ether", data?.eth ?? null, data?.eth?.usd, "text-[#8A92B2]")}
+      </span>
       {one(<SolanaLogo className="w-3.5" />, "Solana", data?.sol ?? null, data?.sol?.usd ?? live, "text-up")}
     </span>
   );
@@ -268,39 +272,50 @@ function XAlerts() {
 }
 
 export function StatusBar() {
-  const live = usePulse((s) => s.live);
-  // AI buy calls on coins the Pulse is showing right now: Picks gets its dot only when there is one.
-  const buys = usePulse((s) => { let n = 0; for (const m in s.coins) if (s.coins[m].ai?.action === "buy") n++; return n; });
-  const go = (route: string, label: string, icon: ReactNode, tip: string, dot?: boolean) => (
-    <Tip tip={tip}><a href={`#/${route}`} className={item}>{icon}{label}{dot && <i className="size-1.5 rounded-full bg-up" />}</a></Tip>
+  const desktop = useDesktop();
+  // Alerts remain active on phones; invisible desktop controls need no subscriptions or requests.
+  return <><XAlerts />{desktop && <DesktopStatusBar />}</>;
+}
+
+function DesktopStatusBar() {
+  const tradesPerSec = usePulse((s) => s.live.tradesPerSec);
+  const launchesPerMin = usePulse((s) => s.live.launchesPerMin);
+  const owner = useRole() === "owner";
+  const go = (route: string, label: string, icon: ReactNode, tip: string) => (
+    <Tip tip={tip}><a href={pageHref(route)} className={item}>{icon}<span className="max-xl:sr-only">{label}</span></a></Tip>
   );
   return (
-    <footer className="flex h-8 shrink-0 items-stretch border-t border-rule bg-paper-2 max-md:hidden">
-      <XAlerts />
+    // On a tablet the bar has ~580 px beside the rail: the launch rate and the docs and GitHub links step aside
+    // below 1024 px, and anything still too wide is clipped rather than pushed past the edge.
+    <footer className="flex h-8 shrink-0 items-stretch overflow-hidden border-t border-rule bg-paper-2 max-md:hidden">
       <Connection />
-      <Tip tip="Settings"><a href="#/settings" aria-label="Settings" className={item}><Icon.settings className="size-3.5" /></a></Tip>
+      {owner && <Tip tip="Settings"><a href="#/settings" aria-label="Settings" className={item}><Icon.settings className="size-3.5" /></a></Tip>}
       <span className="my-2 w-px bg-rule" />
       <Watchlist />
-      {go("account", "Wallets", <Icon.wallets className="size-3.5" />, "Your Blix wallet: deposit, withdraw, holdings")}
+      {owner && go("account", "Wallets", <Icon.wallets className="size-3.5" />, "Your Blix wallet: deposit, withdraw, holdings")}
       <Pnl />
       <Feed />
       {go("", "Pulse", <Icon.pulse className="size-3.5" />, "Every new pump.fun coin, live")}
       {go("coins", "Discover", <Ico.trend className="size-3.5" />, "The most traded coins right now")}
-      {go("picks", "Picks", <Ico.alpha className="size-3.5" />, buys ? `${buys} live AI buy call${buys === 1 ? "" : "s"} on the Pulse right now` : "Coins the AI rated worth a buy (none live right now)", buys > 0)}
       <Alerts />
-      {go("research", "Research", <Ico.callout className="size-3.5" />, "The AI's read on every coin with traction")}
       <span className="my-2 w-px bg-rule" />
       <Tip tip="pump.fun trades per second, from the live feed">
         <span className="mx-1.5 my-1.5 flex items-center gap-1.5 rounded-full border border-rule-2 px-2 text-2xs text-ink-2">
-          <PumpLogo className="size-3" /><span className="num">{live.tradesPerSec != null ? `${Math.round(live.tradesPerSec)}/s` : "—"}</span>
+          <PumpLogo className="size-3" /><span className="num">{tradesPerSec != null ? `${Math.round(tradesPerSec)}/s` : "—"}</span>
         </span>
       </Tip>
       <Prices />
       <span className="flex-1" />
-      <Tip tip="New pump.fun coins per minute"><span className="num flex items-center gap-1 px-2 text-xs text-ink-2"><Icon.launch className="size-3.5" />{live.launchesPerMin != null ? `${Math.round(live.launchesPerMin)}/min` : "—"}</span></Tip>
-      <span className="my-2 w-px bg-rule" />
-      <Tip tip="API docs"><a href="#/api" aria-label="API docs" className={item}><Ico.docs className="size-3.5" /></a></Tip>
-      <Tip tip="Blix on GitHub"><a href="https://github.com/blixvip/blixtrade" target="_blank" rel="noopener noreferrer" aria-label="GitHub" className={item}><Ico.github className="size-3.5" /></a></Tip>
+      <span className="flex items-stretch max-lg:hidden">
+        <Tip tip="New pump.fun coins per minute"><span className="num flex items-center gap-1 px-2 text-xs text-ink-2"><Icon.launch className="size-3.5" />{launchesPerMin != null ? `${Math.round(launchesPerMin)}/min` : "—"}</span></Tip>
+        <span className="my-2 w-px bg-rule" />
+        <Tip tip="API docs"><a href={pageHref("api")} aria-label="API docs" className={item}><Ico.docs className="size-3.5" /></a></Tip>
+        <Tip tip="Blix on GitHub"><a href="https://github.com/blixvip/blixtrade" target="_blank" rel="noopener noreferrer" aria-label="GitHub" className={item}><Ico.github className="size-3.5" /></a></Tip>
+        <Tip tip="Blix on X"><a href={X_URL} target="_blank" rel="noopener noreferrer" aria-label="Blix on X" className={item}><Ico.x className="size-3.5" /></a></Tip>
+        <Tip tip={DISCORD_URL ? "Blix Discord" : "Blix Discord: coming soon"}>{DISCORD_URL
+          ? <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" aria-label="Blix Discord" className={item}><Ico.discord className="size-3.5" /></a>
+          : <span role="img" tabIndex={0} aria-label="Blix Discord, coming soon" className={cn(item, "cursor-default")}><Ico.discord className="size-3.5" /></span>}</Tip>
+      </span>
     </footer>
   );
 }

@@ -449,6 +449,59 @@ test("holder ledger: dev, snipers, bundle and top 10 come from the trade feed al
   assert.deepEqual([late.partial, late.genesis, late.snipers, late.bundle, late.holders], [true, false, null, null, 1]);
 });
 
+test("PumpSwap events: a pool with SOL on the base side is read with its sides swapped", async () => {
+  const P = await import("../server/pumpswap.js");
+  // A BuyEvent: 14 u64 fields after the discriminator, then the pool and the user.
+  const buf = Buffer.alloc(8 + 14 * 8 + 64);
+  const set = (i, v) => buf.writeBigUInt64LE(BigInt(v), 8 + i * 8);
+  set(1, 2_000_000_000); set(7, 1_000_000_000); set(5, 100_000_000_000); set(6, 50_000_000_000); set(9, 0);
+  const n = P.decode(buf, true);
+  // The usual pool: base is the coin (2000 tokens bought), quote is SOL (1 SOL paid): 0.0005 SOL a token, 500K SOL on 1B.
+  assert.deepEqual([n.buy, n.tokens, n.sol, Math.round(n.exec), +n.depth.toFixed(1)], [true, 2000, 1, 500_000, 51]);
+  // The same bytes from a swapped pool: the user bought 2 SOL with 1000 tokens, a sell of the coin at 0.002 SOL a token.
+  const r = P.decode(buf, true, { rev: true, dec: 6 });
+  assert.deepEqual([r.buy, r.rev, r.tokens, r.sol, Math.round(r.exec), +r.depth.toFixed(1)], [false, true, 1000, 2, 2_000_000, 98]);
+  assert.equal(P.poolOfEvent(buf), "11111111111111111111111111111111");
+});
+
+test("holder ledger: a partial book is seeded from the chain once, then follows the coin into its pool", async () => {
+  const H = await import("../server/holders.js");
+  const http = await import("node:http");
+  const mint = "SEEDMINT";
+  // The radar saw this coin late: two trades, one of them a sell it never saw the buy of.
+  H._onTrade(mint, { progress: 0.6 }, 1, true, { user: "A", tokens: 3e5, slot: 50 });
+  H._onTrade(mint, { progress: 0.6 }, 1, false, { user: "B", tokens: 4e5, slot: 51 });
+  assert.deepEqual([H.holdersFor(mint).partial, H.holdersFor(mint).holders, H.holdersFor(mint).unknownSells ?? undefined], [true, 1, undefined]);
+  // A chain that says: A holds 2e5 (sold some unseen), B holds 1e5 (bought more than it sold, unseen), C holds 5e5, 6 decimals.
+  const acct = (owner, tokens) => { const d = Buffer.alloc(40); Buffer.from(owner.padEnd(32, "\0")).copy(d, 0, 0, 32); d.writeBigUInt64LE(BigInt(tokens * 1e6), 32); return { pubkey: owner + "-acct", account: { data: [d.toString("base64")] } }; };
+  const B58 = (buf) => { let n = 0n; for (const b of buf) n = (n << 8n) | BigInt(b); let s = ""; const A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; while (n > 0n) { s = A[Number(n % 58n)] + s; n /= 58n; } for (const b of buf) { if (b !== 0) break; s = "1" + s; } return s; };
+  const key = (name) => B58(Buffer.from(name.padEnd(32, "\0")));
+  const srv = http.createServer((req, res) => {
+    let body = ""; req.on("data", (c) => body += c).on("end", () => {
+      const q = JSON.parse(body);
+      const out = q.method === "getAccountInfo" ? { value: { owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", data: [Buffer.from([6]).toString("base64")] } }
+        : [acct("A", 2e5), acct("B", 1e5), acct("C", 5e5), acct("D", 0)];
+      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ jsonrpc: "2.0", id: q.id, result: out }));
+    });
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  const was = S.settings.rpcUrl;
+  S.settings.rpcUrl = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    // The ledger keys wallets by the base58 of their key; the trades above used plain names, so the seeded
+    // wallets are new ones to it and the traded ones are zeroed (the chain did not list them).
+    await H._seedBook(H.books.get(mint));
+  } finally { S.settings.rpcUrl = was; srv.close(); }
+  let h = H.holdersFor(mint);
+  assert.deepEqual([h.partial, h.holders, h.top.map((t) => t.wallet).sort()], [false, 3, [key("A"), key("B"), key("C")].sort()], "seeded from the chain: three holders, no longer partial");
+  assert.equal(h.top[0].pct, 0.05, "C's 5e5 of 1B");
+  // The coin bonds and trades in its pool: the same ledger keeps counting (C sells out, E buys in).
+  H._onTrade(mint, { progress: 1 }, 2, false, { user: key("C"), tokens: 5e5, slot: 900 });
+  H._onTrade(mint, { progress: 1 }, 2, true, { user: "E", tokens: 7e5, slot: 901 });
+  h = H.holdersFor(mint);
+  assert.deepEqual([h.partial, h.holders, h.top[0].wallet], [false, 3, "E"]);
+});
+
 test("paper desk: sizes parse, a buy needs a live price, and sells book 3% each way", async () => {
   const P = await import("../server/paper.js");
   S.settings.quickSizes = "1, 0.25,0.1, bad, 0.25";
@@ -541,13 +594,14 @@ test("simultaneous paper sells cannot spend the same position twice", async () =
   L.feed.connected = true; L.feed.lastMsg = Date.now(); L.feed.solUsd = 100; L.feed.solKnown = true;
   try {
     const pos = await P.openQuoted(mint, 1);
+    // Paper sells fill instantly at the desk's own value (no quote to wait on), so two at once run one after the
+    // other: the second sells half of what the first left. Nothing is sold twice and the SOL adds up.
     const result = await Promise.allSettled([P.sellQuoted(pos.id, 50), P.sellQuoted(pos.id, 50)]);
-    assert.equal(result.filter((r) => r.status === "fulfilled").length, 1);
-    assert.equal(result.find((r) => r.status === "rejected").reason.status, 409);
+    assert.equal(result.filter((r) => r.status === "fulfilled").length, 2);
     const rows = P.positionsFor(mint);
-    assert.equal(rows.filter((p) => p.status === "closed").length, 1);
-    assert.equal(rows.find((p) => p.status === "open").sol, 0.5);
-    assert.equal(rows.reduce((s, p) => s + p.sol, 0), 1);
+    assert.equal(rows.filter((p) => p.status === "closed").length, 2);
+    assert.equal(rows.find((p) => p.status === "open").sol, 0.25);
+    assert.ok(Math.abs(rows.reduce((s, p) => s + p.sol, 0) - 1) < 1e-9);
   } finally { L.live.delete(mint); }
 });
 
@@ -815,11 +869,12 @@ test("a visitor on the public site can read the live views and nothing else", as
 test("the public front door: one PC request serves every visitor, and the last copy survives the PC going off", async () => {
   const W = await import("../worker/edge.js");
   const U = (s) => new URL(s, "https://trade.blixvip.com");
-  // Who is a visitor: no access key. The owner and every write go straight to the PC.
-  assert.equal(W.isVisitorRead("GET", U("/api/pulse"), ""), true);
-  assert.equal(W.isVisitorRead("GET", U("/api/pulse"), "a=1; blix_key=abc"), false);
-  assert.equal(W.isVisitorRead("GET", U("/?key=abc"), ""), false);
-  assert.equal(W.isVisitorRead("POST", U("/api/paper"), ""), false);
+  // A visitor's read is any GET or HEAD (there is no access key any more: who someone is comes from their
+  // Google sign-in, decided in the Worker before this is asked). Every write goes straight to the PC.
+  assert.equal(W.isVisitorRead("GET"), true);
+  assert.equal(W.isVisitorRead("HEAD"), true);
+  assert.equal(W.isVisitorRead("POST"), false);
+  assert.equal(W.isVisitorRead("DELETE"), false);
   // What is kept, and that made-up query strings cannot get past the kept copy.
   assert.equal(W.keepPlan(U("/api/pulse?x=" + Math.random())).key, "https://trade.blixvip.com/api/pulse");
   assert.equal(W.keepPlan(U("/api/settings")), null);
@@ -919,4 +974,90 @@ test("paper wallet: fake SOL is limited, buys spend it, sells return it, a reset
   const r = P.resetWallet(5);
   assert.deepEqual([r.start, r.cash, r.open, r.trades], [5, 5, 0, 0]);
   S.saveSettings({ paperStartSol: 1000 }); P.resetWallet();
+});
+
+test("outbound fetches: redirects and names cannot lead back to this machine or its network", async () => {
+  const N = await import("../server/netguard.js");
+  for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1", "::1", "::", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "64:ff9b::7f00:1".replace("7f00:1", "127.0.0.1")]) assert.equal(N.publicAddress(ip), false, ip);
+  for (const ip of ["8.8.8.8", "104.16.0.1", "2606:4700::1111"]) assert.equal(N.publicAddress(ip), true, ip);
+  // Names that need no lookup to refuse.
+  for (const u of ["http://localhost/x", "http://127.0.0.1:4420/api/health", "http://[::1]/x", "http://10.0.0.5/x", "http://radar.local/x", "ftp://example.com/x", "http://user:pw@example.com/x"]) assert.equal(await N.safeToFetch(u), null, u);
+  assert.equal(await N.safeToFetch("http://example.com/x", { https: true }), null);
+});
+
+// Wallet polling: an RPC that does not know a page's anchor ("Transaction … not found") no longer fails the poll.
+{
+  const { pageSignatures } = await import("../server/wallets.js");
+  const sig = (i) => ({ signature: `s${i}` });
+  const notFound = () => Object.assign(new Error("Transaction sX not found"), {});
+  test("wallet pages: normal paging stops at the last one seen", async () => {
+    const asked = [];
+    const r = await pageSignatures(async (o) => { asked.push(o); return [sig(1), sig(2)]; }, { first: false, lastSig: "s0", pages: 3 });
+    assert.deepEqual(r.all.map((x) => x.signature), ["s1", "s2"]);
+    assert.equal(r.reached, true);
+    assert.equal(asked[0].until, "s0");
+  });
+  test("wallet pages: an unknown anchor on a later page keeps what was read and marks a gap", async () => {
+    let n = 0;
+    const r = await pageSignatures(async () => { if (n++ === 0) return Array.from({ length: 50 }, (_, i) => sig(i)); throw notFound(); }, { first: false, lastSig: "old", pages: 3 });
+    assert.equal(r.all.length, 50);
+    assert.equal(r.reached, false);
+  });
+  test("wallet pages: an unknown `until` reads the newest page without it and stops at the last one seen", async () => {
+    const asked = [];
+    const r = await pageSignatures(async (o) => { asked.push(o); if (o.until) throw notFound(); return [sig(1), sig(2), { signature: "last" }, sig(3)]; }, { first: false, lastSig: "last", pages: 3 });
+    assert.deepEqual(r.all.map((x) => x.signature), ["s1", "s2"]);
+    assert.equal(r.reached, true);
+    assert.equal(asked.length, 2);
+    assert.equal(asked[1].until, undefined);
+  });
+  test("wallet pages: without `until` and the last one not found, it is a gap, not 'reached'", async () => {
+    const r = await pageSignatures(async (o) => { if (o.until) throw notFound(); return [sig(1), sig(2)]; }, { first: false, lastSig: "gone", pages: 3 });
+    assert.deepEqual(r.all.map((x) => x.signature), ["s1", "s2"]);
+    assert.equal(r.reached, false);
+  });
+  test("wallet pages: other RPC errors still throw", async () => {
+    await assert.rejects(pageSignatures(async () => { throw new Error("rate limited"); }, { first: false, lastSig: "x", pages: 3 }), /rate limited/);
+  });
+}
+
+// Discovery: Jupiter's newest tokens put non-pump.fun launches in the nursery (pump.fun's come from PumpPortal).
+{
+  const E2 = await import("../server/engine.js");
+  test("recent feed: non-pump launches are nursed once, pump.fun ones and 429s are skipped", async () => {
+    const real = globalThis.fetch;
+    const mk = (id, launchpad) => ({ id, symbol: id.slice(0, 4), name: id, launchpad, firstPool: { createdAt: new Date().toISOString() } });
+    let status = 200;
+    globalThis.fetch = async (url, init) => String(url).includes("tokens/v2/recent")
+      ? new Response(JSON.stringify([mk("DbcCoin1111111111111111111111111111111111", "met-dbc"), mk("PumpCoin111111111111111111111111111111pump", "pump.fun"), mk("PoolCoin1111111111111111111111111111111111", null)]), { status })
+      : real(url, init);
+    try {
+      const before = { ...E2.recentFeed };
+      await E2.scanRecent();
+      assert.equal(E2.recentFeed.found - before.found, 2, "pump.fun launch skipped");
+      assert.equal(E2.recentFeed.nursed - before.nursed, 2);
+      await E2.scanRecent();
+      assert.equal(E2.recentFeed.nursed - before.nursed, 2, "already nursed coins are not added twice");
+      status = 429;
+      const calls = E2.recentFeed.calls;
+      await E2.scanRecent();
+      assert.equal(E2.recentFeed.error, null, "a 429 is a pause, not an error");
+      await E2.scanRecent();
+      assert.equal(E2.recentFeed.calls - calls, 2);
+    } finally { globalThis.fetch = real; }
+  });
+}
+
+test("creator rewards: vault balance moves and the earned series", async () => {
+  const { vaultDelta, earnedSeries } = await import("../server/creator.js");
+  const V = "Vau1t111111111111111111111111111111111111111";
+  const tx = (pre, post, extra = {}) => ({ transaction: { message: { accountKeys: [{ pubkey: "payer" }, { pubkey: V }] } }, meta: { preBalances: [5, pre], postBalances: [4, post], ...extra } });
+  assert.equal(vaultDelta(tx(1_000_000, 1_250_000), V, false), 250_000);
+  assert.equal(vaultDelta(tx(1_250_000, 890_880), V, false), -359_120);                 // a claim
+  assert.equal(vaultDelta(tx(0, 990_880), V, false), 100_000);                          // the trade that opened it paid its rent too
+  assert.equal(vaultDelta(tx(0, 0), "other", false), 0);
+  const tok = (pre, post) => tx(0, 0, { preTokenBalances: pre == null ? [] : [{ accountIndex: 1, uiTokenAmount: { amount: String(pre) } }], postTokenBalances: [{ accountIndex: 1, uiTokenAmount: { amount: String(post) } }] });
+  assert.equal(vaultDelta(tok(null, 7000), V, true), 7000);
+  assert.equal(vaultDelta(tok(7000, 0), V, true), -7000);
+  assert.deepEqual(earnedSeries([{ t: 3, lamports: 2e9 }, { t: 1, lamports: 1e9 }, { t: 2, lamports: -5e8 }]), [[1, 1], [3, 3]]);
 });

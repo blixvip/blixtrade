@@ -1,6 +1,7 @@
 // Data sources. All free, no keys: DexScreener, GeckoTerminal, RugCheck, PumpPortal (live launches).
 
 import * as health from "./health.js";
+import { settings } from "./settings.js";
 
 // Simple per-host throttle so we stay under each API's rate limit.
 const gates = new Map();
@@ -13,17 +14,24 @@ function throttle(host, perMinute) {
   return new Promise((r) => setTimeout(r, wait));
 }
 
-const LIMITS = { "api.dexscreener.com": 200, "api.geckoterminal.com": 25, "api.rugcheck.xyz": 40 };
+// GeckoTerminal from the VM's address (measured 2026-10-07 23:43 UTC): 6 calls answered, then 429 for the rest
+// of the minute, nowhere near the documented 30. Discovery keeps 4 a minute, the pages 4 (LANES below).
+const LIMITS = { "api.dexscreener.com": 200, "api.geckoterminal.com": 4, "api.rugcheck.xyz": 40 };
+// The pages' calls (a chart's history, a coin's pool, its price) run in their own lane with their own share of a
+// host's allowance, so they never queue behind the discovery scans: GeckoTerminal allows ~30 a minute from one
+// address; discovery keeps 15, the pages 10 (gtgate.js caps them by rank).
+const LANES = { "api.geckoterminal.com": { page: 4 }, "api.coingecko.com": { keyed: 60 } };   // keyed: 100/min allowed; the daily cap (gtgate.js) guards the month
 
-const SERVICE = { "api.dexscreener.com": "dexscreener", "api.geckoterminal.com": "geckoterminal", "api.rugcheck.xyz": "rugcheck" };
+const SERVICE = { "api.dexscreener.com": "dexscreener", "api.geckoterminal.com": "geckoterminal", "api.coingecko.com": "coingecko", "api.rugcheck.xyz": "rugcheck" };
 
-export async function getJson(url, { timeout = 15000 } = {}) {
+export async function getJson(url, { timeout = 15000, lane = null, headers = {} } = {}) {
   const host = new URL(url).host;
-  await throttle(host, LIMITS[host] || 60);
+  const perMin = lane && LANES[host]?.[lane];
+  await throttle(perMin ? `${host}:${lane}` : host, perMin || LIMITS[host] || 60);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   try {
-    const r = await fetch(url, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "meme-radar/0.1" } });
+    const r = await fetch(url, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "meme-radar/0.1", ...headers } });
     if (r.status === 429) throw Object.assign(new Error(`${host} rate limited`), { status: 429 });
     if (!r.ok) throw Object.assign(new Error(`${host} ${r.status}`), { status: r.status });
     const body = await r.json();
@@ -84,6 +92,22 @@ function geckoPools(res) {
     return { mint: base, name: p.attributes?.name?.split(" / ")[0], source: "gecko" };
   }).filter((p) => p.mint && p.mint !== "So11111111111111111111111111111111111111112");
 }
+// Jupiter's newest tokens (lite-api tokens/v2/recent): the 30 whose first pool was created most recently, on any
+// launchpad or DEX (pump.fun, Meteora DBC and DAMM, Bags, LaunchLab, memefun, plain pools). About 30 seconds of
+// launches at a busy hour, so it is asked every 25 s. Keyless and shared with trade quotes and Blix Vault's swaps
+// (jupdisc.js): one call per 25 s, and 15 s of silence after a 429.
+let jupRecentCooling = 0;
+export async function jupRecent() {
+  if (Date.now() < jupRecentCooling) return [];
+  const r = await fetch("https://lite-api.jup.ag/tokens/v2/recent", { headers: { accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+  if (r.status === 429) { jupRecentCooling = Date.now() + 15_000; return []; }   // the list spans under a minute: a longer silence loses coins
+  if (!r.ok) throw new Error(`lite-api.jup.ag ${r.status}`);
+  const list = await r.json();
+  return (Array.isArray(list) ? list : []).filter((t) => t?.id && t.id !== "So11111111111111111111111111111111111111112").map((t) => ({
+    mint: t.id, symbol: t.symbol || null, name: t.name || null, image: t.icon || null, creator: t.dev || null,
+    launchpad: t.launchpad || null, poolAt: Date.parse(t.firstPool?.createdAt || "") || null, source: "jup-recent",
+  }));
+}
 export const geckoNew = async () => geckoPools(await getJson("https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1"));
 export const geckoTrending = async () => geckoPools(await getJson("https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?page=1&duration=1h"));
 
@@ -130,10 +154,13 @@ export function pumpStream({ onToken, onMigration, onStatus }) {
   let ws, alive = true, retry = 2000, lastMsg = Date.now();
   // Watchdog: launches arrive every second or two, so 90s of silence means a dead socket.
   const dog = setInterval(() => {
+    // A copy with the market feeds off (marketFeeds false: the PC beside the VM) never connected: it says "off", not "stalled".
+    if (settings.marketFeeds === false) return;
     if (Date.now() - lastMsg > 90_000) { onStatus?.("stalled, reconnecting"); lastMsg = Date.now(); try { ws?.close(); } catch {} }
   }, 30_000);
   const connect = () => {
     if (!alive) return;
+    if (settings.marketFeeds === false) { onStatus?.("off (marketFeeds false)"); return; }
     ws = new WebSocket("wss://pumpportal.fun/api/data");
     ws.addEventListener("message", () => { lastMsg = Date.now(); });
     ws.onopen = () => {

@@ -30,8 +30,15 @@ export const DEFAULTS = {
   alertCooldownMin: 10,      // at most one push per coin in this many minutes; the rest are grouped into the next one
   pushUnscreened: false,     // also push wallet buys of coins that failed (or have not had) the safety check
   // wallets
+  marketFeeds: true,        // false = this copy streams no market firehose (pump.fun/PumpSwap/LaunchLab/PumpPortal/wallet sockets): a dev copy on
+                            // the owner's PC that must not eat the home line while the real Blix runs on the VM (server.js, sources.js, wallets.js)
   rpcUrl: "",               // blank = free public Solana RPC (slow). A free Helius URL is ~10x faster.
   rpcWsUrl: "",             // websocket for the live pump.fun trade feed; blank = derived from rpcUrl, else the public one
+  chartWsUrl: "",           // websocket for open charts only (one small subscription per coin, chartstream.js), e.g. a free Helius wss URL; blank = off
+  chartDailyMB: 1400,       // chart stream budget per day: Helius free = 1M credits/month at 2 credits per 0.1 MB ≈ 1,650 MB/day
+  heliusProjectId: "",      // Helius project ID (dashboard.helius.dev, project settings): lets Health read the month's credits used and the reset date (helius.js)
+  chartWsUrl2: "",          // a second Helius key (another project) the chart stream moves to when the first has used its day or month (heliuskeys.js)
+  heliusProjectId2: "",     // the second key's project ID
   jupiterKey: "",           // optional: increases the shared quote/price request allowance
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
@@ -41,6 +48,7 @@ export const DEFAULTS = {
   researchPerHour: 20,       // cap on Claude research runs per hour (each uses your Claude subscription)
   queueMax: 60,              // most coins allowed to wait for a read; the weakest and oldest are dropped past this
   fastProvider: "grok",      // "grok" = this PC's Grok CLI login (SuperGrok, searches X live); "groq" = free Groq key; "claude" = Claude Haiku on this PC's Claude login
+  grokOff: false,            // true: never call Grok, even with a Grok login here (the owner's subscription stays untouched)
   grokModel: "grok-4.7-build-fast",
   grokSearch: true,          // let Grok search X and the web for every coin it reads
   grokDailyBudget: 3,        // dollars of Grok subscription credit the radar may spend per day (0 = no limit). Narrative work may use all of it; per-coin reads stop earlier.
@@ -53,6 +61,7 @@ export const DEFAULTS = {
   claudeFast: true,          // when Grok and Groq are both unavailable, Claude Haiku does the fast first reads
   groqKey: "",               // free key from console.groq.com/keys: fast lane grades every candidate in ~1s
   fastModel: "openai/gpt-oss-120b",
+  geminiPerDay: 1000,        // cap on Gemini calls a day (free tier); the fast lane's fallback when Groq has no key or is cooling
   fastPerHour: 60,           // cap on fast first reads per hour (each Grok read with X search uses subscription credits)
   deepMinScore: 45,          // fast grades at or above this get a deep read (~top 10%; the self-review can tune this)
   deepProvider: "grok",      // "grok" (grok-4.7 with deep X/web search, makes buy calls) or "claude"
@@ -106,6 +115,9 @@ export const DEFAULTS = {
   publicMode: false,         // true = anyone may open the public hostname, read-only (access.js); false = access key required
   remoteKey: "",
   tunnelKey: "",             // shared with the Worker on the public hostname (its REG_KEY secret); blank = no tunnel
+  // the server this PC hands its Fomo sign-in token to (fomorelay.js), e.g. https://origin.blixvip.com; blank = none
+  fomoRelayTo: "",
+  runningAi: false,          // Narratives' "Running now" grouped by Claude on this PC (running-ai.js); off: Blix's own themes
   // paper desk: the one-click buy buttons on every Pulse row (SOL sizes) and the exit rule each new paper position starts with (0 = none)
   quickSizes: ["0.1", "0.25", "0.5", "1"],
   paperTake: 0,              // sell everything at this multiple
@@ -120,7 +132,10 @@ function load() {
 export const settings = load();
 
 // Never sent to the browser: the page only learns whether each one is set, and its last 4 characters.
-export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "jupiterKey", "remoteKey", "tunnelKey"];
+export const SECRETS = ["discordWebhook", "telegramToken", "groqKey", "rpcUrl", "rpcWsUrl", "chartWsUrl", "chartWsUrl2", "jupiterKey", "remoteKey", "tunnelKey", "memberKey", "edgeKey", "coingeckoKey", "geminiKey"];
+// Never sent at all, not even a hint, and never cleared from the dashboard: the keys the Worker and this server
+// prove each other with (worker/index.js, webapp.js). With memberKey anyone can sign requests as the owner.
+export const PRIVATE = ["memberKey", "edgeKey", "tunnelKey", "remoteKey"];
 
 function coerce(k, v) {
   const d = DEFAULTS[k];
@@ -135,16 +150,19 @@ export function saveSettings(patch, { clear = [] } = {}) {
     if (!(k in DEFAULTS) || blankSecret(k, v)) continue;
     settings[k] = coerce(k, v);
   }
-  for (const k of clear) if (SECRETS.includes(k)) settings[k] = "";
+  for (const k of clear) if (SECRETS.includes(k) && !PRIVATE.includes(k)) settings[k] = "";
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(settings, null, 2));
   return settings;
 }
 
-// What the dashboard gets: every setting except the secrets themselves.
+// What the dashboard gets: the settings it knows (DEFAULTS; whatever else data/settings.json holds stays here)
+// except the secrets themselves.
 export function publicSettings() {
-  const out = { ...settings }, secrets = {};
+  const out = {}, secrets = {};
+  for (const k of Object.keys(DEFAULTS)) out[k] = settings[k];
   for (const k of SECRETS) {
+    if (PRIVATE.includes(k)) { delete out[k]; continue; }
     const v = String(settings[k] || "");
     secrets[k] = { set: Boolean(v), hint: v ? `…${v.slice(-4)}` : "" };
     out[k] = "";

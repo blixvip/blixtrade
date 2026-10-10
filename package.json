@@ -6,8 +6,13 @@
   "type": "module",
   "scripts": {
     "start": "node --no-warnings server/server.js",
-    "test": "node --no-warnings --test test/radar.test.mjs",
-    "test:browser": "node scripts/browser-check.mjs"
+    "test": "node --no-warnings --test test/radar.test.mjs test/journal.test.mjs test/market.test.mjs test/wallet-identity.test.mjs test/hosted-accounts.test.mjs test/hosted-route.test.mjs test/wallet-oauth.test.mjs test/member-profile.test.mjs test/worker-profile-route.test.mjs test/feed-history.test.mjs test/known-holders.test.mjs test/worker-landing.test.mjs test/worker-security.test.mjs",
+    "test:security": "node --test test/security.test.mjs test/origin-security.test.mjs test/netguard-security.test.mjs test/worker-security-route.test.mjs",
+    "test:browser": "node scripts/browser-check.mjs",
+    "test:performance": "node scripts/web-performance.mjs && node scripts/landing-performance.mjs",
+    "test:pulse-order": "node scripts/pulse-order-check.mjs",
+    "test:trade-status": "node scripts/trade-status-check.mjs",
+    "test:feed-chat": "node scripts/feed-chat-check.mjs"
   },
   "productName": "Blix",
   "license": "MIT",

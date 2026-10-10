@@ -32,11 +32,25 @@ async function get(path) {
 
 // ---------- per-coin figures ----------
 const cache = new Map();     // mint -> { t, v }
+// Kept on disk (every 30 s, read back at start when under 10 minutes old), so a restart does not leave Discover's
+// holders, top 10 and dev pills empty for the minute it takes to read every listed coin again.
+import fs from "node:fs";
+import path from "node:path";
+import { DATA } from "./db.js";
+const CACHE_FILE = path.join(DATA, "jupdisc-cache.json");
+try { const j = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); for (const [m, c] of j) if (now() - c.t < 10 * 60_000) cache.set(m, c); } catch {}
+let savedAt = 0;
+function saveCache() {
+  if (now() - savedAt < 30_000 || !cache.size) return;
+  savedAt = now();
+  fs.promises.writeFile(CACHE_FILE + ".tmp", JSON.stringify([...cache])).then(() => fs.promises.rename(CACHE_FILE + ".tmp", CACHE_FILE)).catch(() => {});
+}
 const wanted = new Map();    // mint -> last asked
 function keep(list) {
   for (const v of Array.isArray(list) ? list : []) if (v?.id) cache.set(v.id, { t: now(), v });
   if (cache.size > 3000) for (const [m, c] of cache) if (now() - c.t > 10 * 60_000) cache.delete(m);
   jupStats.mints = cache.size;
+  saveCache();
 }
 // Coins never read yet are asked for at once (one search, paced like every other call), so a fresh list
 // shows its figures in a second or two instead of waiting for the 12 s cycle.
@@ -50,11 +64,16 @@ export function want(mints) {
 // The figures for one window, or null when Jupiter has not answered for this coin in the last 30 s.
 export function figures(mint, win = "1h") {
   const c = cache.get(mint);
-  if (!c || now() - c.t > 60_000) return null;
+  // Up to 10 minutes old (a restart's saved copy, or a coin Jupiter is slow to answer for) rather than nothing;
+  // every coin on screen is read again every 25 s, and the live feeds move the market cap meanwhile.
+  if (!c || now() - c.t > 10 * 60_000) return null;
   const v = c.v, s = v[WIN[win] || "stats1h"] || {};
   const vol = (s.buyVolume || 0) + (s.sellVolume || 0);
   return { mc: v.mcap || v.fdv || null, chg: s.priceChange ?? null, vol: s.buyVolume != null ? vol : null, buys: s.numBuys ?? null, sells: s.numSells ?? null,
     traders: s.numTraders ?? null, holders: v.holderCount ?? null, top10: v.audit?.topHoldersPercentage ?? null, dev: v.audit?.devBalancePercentage ?? null,
+    // The dev wallet and supply, so the dev's share can be read from the chain when the audit leaves it out (devbal.js).
+    devWallet: v.dev || null, supply: v.circSupply || v.totalSupply || null, liq: v.liquidity ?? null,
+    mintOff: v.audit?.mintAuthorityDisabled ?? null, freezeOff: v.audit?.freezeAuthorityDisabled ?? null,
     graduated: Boolean(v.graduatedPool), launchpad: v.launchpad || null, t: c.t };
 }
 

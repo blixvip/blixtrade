@@ -12,14 +12,15 @@
 // each followed trader's real wallet is found on chain from their swaps and only that wallet is followed
 // (source 'fomo', with their handle). A wallet Blix followed this way is paused after PAUSE_DAYS off both
 // lists; wallets you follow or unfollow yourself are left as you set them.
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { canBrowse, hasAside, runRepl as runScript, signedOutText } from "./browser.js";
+import { fomoFetch, fomoToken, fomoTokenKnown } from "./fomochart.js";
 import { db, logEvent } from "./db.js";
 import * as sol from "./solana.js";
 import { resolveAndStore, walletFor } from "./fomoresolve.js";
+import { offChain, offSwap } from "./chains.js";
+import { warmBoard } from "./feedwarm.js";
+import { holderSummary, parseKnownTokens, knownKey, SOL_NETWORK } from "./known-holders.js";
 
-export const ASIDE_EXE = path.join(process.env.LOCALAPPDATA || "", "Aside", "CLI", "current", "aside.exe");
 export const RANGES = ["24h", "7d", "30d", "all-time"];
 const FOLLOW_24H = 15, FOLLOW_7D = 10, PAUSE_DAYS = 7;
 const HOUR = 3600e3, DAY = 24 * HOUR, PROFILE_TTL = 6 * HOUR, PER_CALL = 3;
@@ -54,11 +55,29 @@ const FIND_FN = `
     const ff = urls.find((n) => /\\/fomoFetch-[^/]*\\.js/.test(n));
     if (!ff) return null;
     const m = await import(ff);
-    const fn = Object.values(m).find((v) => typeof v === "function" && /statusCode:401|Authorization/.test(String(v)));
+    const fn = Object.values(m).find((v) => typeof v === "function" && /statusCode:401|Authorization|timing:\{|timeoutMs/.test(String(v)));
     if (!fn) return { error: "Fomo's web client changed: its fetch function was not found." };
     const get = async (p) => { const x = await fn(p, { method: "GET" }); if (x.statusCode === 401) throw new Error("signed-out"); return x.statusCode === 200 ? x.responseObject : null; };`;
 
+// The same body run here, with Fomo's API answering the server's own Fomo token (fomochart.js): no tab, no
+// queue. Only when the token is at hand; otherwise the tab way below.
+const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+async function here(body) {
+  const fn = (p, init = {}) => fomoFetch(p, { method: init.method || "GET", body: init.body });
+  const get = async (p) => { const x = await fn(p, { method: "GET" }); if (x.statusCode === 401) throw new Error("signed-out"); return x.statusCode === 200 ? x.responseObject : null; };
+  try {
+    const value = await new AsyncFn("fn", "get", body)(fn, get);
+    boardState.signedOut = false;
+    return value;
+  } catch (e) {
+    if (e.message === "signed-out") { boardState.signedOut = true; throw Object.assign(new Error(signedOutText()), { signedOut: true }); }
+    throw e;
+  }
+}
 export function inFomo(body, url = "https://fomo.family/leaderboard", { pri = 1, timeoutMs = 115e3 } = {}) {
+  // Fomo answers the server's own Node fetch with 430 "unauthorized" (2026-10-08, lists and board too), yet the same
+  // token works from the headless browser's fomo.family tab: there, read through the tab.
+  if (fomoTokenKnown()) return hasAside() ? here(body) : inFomoTab(body, { pri, timeoutMs });
   // A fomo.family tab that is already open and working is used as is (only read from; nothing in it changes),
   // because a fresh Aside tab sometimes never starts Fomo's sign-in layer ("No global PrivyClient instance").
   // Otherwise a new tab opens for this call and closes with it.
@@ -96,13 +115,44 @@ if (!res) {
 console.log(JSON.stringify({ fomoboard: 1, via, ...(res || { error: "fomo.family did not load in Aside." }) }));
 `;
   return repl(script, timeoutMs, pri).then((r) => {
-    if (r.error === "signed-out") { boardState.signedOut = true; throw Object.assign(new Error("Aside is signed out of Fomo. Sign in at fomo.family in Aside, then refresh."), { signedOut: true }); }
+    if (r.error === "signed-out") { boardState.signedOut = true; throw Object.assign(new Error(signedOutText()), { signedOut: true }); }
     asideState.hasTab = r.via !== "opened";
     if (r.error) throw new Error(r.error);
     boardState.signedOut = false;
     return r.value;
   });
 }
+
+// Fomo's /hodlers and /feed/token turn the server's own fetch away (430 "unauthorized") even with a good token,
+// yet answer the same token from a real browser (checked 2026-10-08 on the VM: 200 in ~0.5 s). So on the server
+// (headless Chromium, no Aside) the coin reads run in the kept fomo.family tab with the token the PC relays
+// (fomorelay.js): no sign-in needed in that tab. Through the same one-at-a-time queue as every browser read.
+async function inFomoTab(body, { pri = 1, timeoutMs = 60e3 } = {}) {
+  // The same 60 s as fomoTokenKnown: with fomoToken's default 5 min, a token with 1-5 min left and a failed renewal
+  // sent this back into inFomo, which sent it straight back here, a loop with no real wait that froze the radar.
+  const tok = await fomoToken(60_000).catch(() => null);
+  if (!tok) throw new Error("No usable Fomo sign-in token right now.");
+  const script = `
+const page = await openTab("https://fomo.family/");
+const res = await page.evaluate(async ({ tok }) => {
+  const fn = async (p, init = {}) => {
+    const r = await fetch("https://prod-api.fomo.family" + p, { method: init.method || "GET", headers: { Authorization: "Bearer " + tok } });
+    let j = null; try { j = await r.json(); } catch (e) {}
+    return { statusCode: r.status === 431 ? 401 : r.status, responseObject: j && j.responseObject !== undefined ? j.responseObject : null };
+  };
+  const get = async (p) => { const x = await fn(p); if (x.statusCode === 401) throw new Error("signed-out"); return x.statusCode === 200 ? x.responseObject : null; };
+  try { return { value: await (async () => { ${body} })() }; } catch (e) { return { error: e.message === "signed-out" ? "signed-out" : e.message }; }
+}, { tok: ${JSON.stringify(tok)} }).catch((e) => ({ error: String(e.message).slice(0, 200) }));
+console.log(JSON.stringify({ fomoboard: 1, via: "tab", ...res }));
+`;
+  const r = await repl(script, timeoutMs, pri);
+  if (r.error === "signed-out") { boardState.signedOut = true; throw Object.assign(new Error(signedOutText()), { signedOut: true }); }
+  if (r.error) throw new Error(r.error);
+  boardState.signedOut = false;
+  return r.value;
+}
+// The coin reads: in the browser with the relayed token on the server; through Aside's signed-in tab on the PC.
+const coinRead = (body, opts) => (!hasAside() && fomoTokenKnown() ? inFomoTab(body, opts) : inFomo(body, undefined, opts));
 
 // One Aside call at a time (Fomo should see one reader, and Aside jams when it is driven from several
 // places at once), highest priority first: 0 = a page someone is looking at, 1 = background (the daily
@@ -131,23 +181,8 @@ function pump() {
   }).finally(() => { running = false; pump(); });
 }
 export const asideQueue = () => ({ running, waiting: queue.length, paused: now() < asideState.pausedUntil, hasTab: asideState.hasTab });
-function runRepl(inner, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(ASIDE_EXE)) return reject(new Error("Aside isn't installed (its CLI was not found)."));
-    const code = `await eval("(async () => {" + atob("${Buffer.from(inner, "utf8").toString("base64")}") + "})()");`;
-    const child = spawn(ASIDE_EXE, ["repl", code], { windowsHide: true });
-    let out = "", err = "";
-    child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error("Aside took too long reading Fomo.")); }, timeoutMs);
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
-    child.on("close", () => {
-      clearTimeout(timer);
-      const line = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith('{"fomoboard"'));
-      if (!line) return reject(new Error((out + err).replace(/\x1b\[[0-9;]*m/g, "").trim().slice(0, 300) || "No answer from Aside."));
-      try { resolve(JSON.parse(line)); } catch { reject(new Error("Aside's answer could not be read.")); }
-    });
-  });
-}
+// In Aside on the owner's PC, in the server's own headless browser elsewhere (browser.js).
+const runRepl = (inner, timeoutMs) => runScript(inner, { marker: "fomoboard", timeoutMs, what: "Fomo" });
 
 // The leaderboards and clans. Fomo's clan windows are named 24h, 7d, 30d, all.
 const BOARD_BODY = `
@@ -346,7 +381,9 @@ async function followTop(addWallet, removeWallet) {
 }
 
 let deps = null;
-export async function refreshBoard(addWallet, removeWallet) {
+// `live`: a read for someone looking at the board now (boardLive below): the board only, the wallets and follows
+// are left to the hourly schedule.
+export async function refreshBoard(addWallet, removeWallet, { live = false } = {}) {
   deps = { addWallet, removeWallet };
   if (boardState.running) return boardState;
   boardState.running = true;
@@ -358,12 +395,26 @@ export async function refreshBoard(addWallet, removeWallet) {
     db.prepare("INSERT INTO fomo_board_runs (t, ok, rows, followed, error, ms) VALUES (?, 1, ?, ?, NULL, ?)").run(t0, rows, 0, now() - t0);
     logEvent("fomo", `Fomo leaderboard read: ${rows} rows`);
     boardState.last = t0; boardState.error = null;
-    followTop(addWallet, removeWallet);   // background: profiles, wallets, follows
+    // Every range's avatars onto the page server's disk now, so the board opens with its pictures (feedwarm.js).
+    try { warmBoard(db.prepare("SELECT pic, top FROM fomo_board WHERE day = (SELECT MAX(day) FROM fomo_board)").all()); } catch {}
+    if (!live) followTop(addWallet, removeWallet);   // background: profiles, wallets, follows
   } catch (e) {
     db.prepare("INSERT INTO fomo_board_runs (t, ok, rows, followed, error, ms) VALUES (?, 0, 0, 0, ?, ?)").run(t0, e.message, now() - t0);
     boardState.error = e.message;
   } finally { boardState.running = false; }
   return boardState;
+}
+
+// While someone has the Top traders page open (each GET /api/fomo/board), Fomo's board is read again every BOARD_LIVE_MS
+// (a read takes ~13 s and replaces today's rows), so the page follows Fomo's ranks through the day instead of the
+// one morning read. After a failed read (Aside closed, signed out), every BOARD_LIVE_ERROR_MS.
+const BOARD_LIVE_MS = 60_000, BOARD_LIVE_ERROR_MS = 5 * 60_000;
+let liveTried = 0;
+export function boardLive() {
+  if (boardState.running || !deps) return;
+  if (now() - Math.max(boardState.last || 0, liveTried) < (boardState.error ? BOARD_LIVE_ERROR_MS : BOARD_LIVE_MS)) return;
+  liveTried = now();
+  refreshBoard(deps.addWallet, deps.removeWallet, { live: true }).catch(() => {});
 }
 
 // ---------- reading it back ----------
@@ -387,8 +438,8 @@ export function board({ range = "24h", day } = {}) {
   const set = d ? followSet(d) : [];
   return {
     range, day: d, days, ranges: RANGES, prevDay, clans,
-    rows: rows.map((r) => ({ ...r, top: safeJson(r.top), prevRank: prev.get(r.handle) ?? null, days: daysOnBoard(r.handle, range), tracked: false, ...walletInfo(r.uid) })),
-    status: { running: boardState.running, error: boardState.error, signedOut: boardState.signedOut, lastRun, lastOk, next: boardState.next, aside: fs.existsSync(ASIDE_EXE), profiles: boardState.profiles, wallets: boardState.wallets, working: following },
+    rows: rows.map((r) => ({ ...r, top: (safeJson(r.top) || []).filter((h) => !offChain(h.chain)), prevRank: prev.get(r.handle) ?? null, days: daysOnBoard(r.handle, range), tracked: false, ...walletInfo(r.uid) })),
+    status: { running: boardState.running, error: boardState.error, signedOut: boardState.signedOut, lastRun, lastOk, next: boardState.next, aside: hasAside(), browser: canBrowse(), profiles: boardState.profiles, wallets: boardState.wallets, working: following },
     follow: { top24h: FOLLOW_24H, top7d: FOLLOW_7D, pauseDays: PAUSE_DAYS, picked: set.length,
       resolved: set.filter((u) => walletFor(u.uid)?.wallet).length,
       following: db.prepare("SELECT COUNT(*) n FROM fomo_board_follows f JOIN wallets w ON w.address = f.address WHERE f.paused = 0 AND w.watching = 1").get().n },
@@ -414,6 +465,10 @@ export async function trader(handle, { fresh = false } = {}) {
   const p = safeJson(row?.data, null);
   if (!p || p.missing) throw Object.assign(new Error(`Fomo has no trader @${handle}.`), { status: 404 });
   delete p.rawSwaps;
+  // BNB Chain and Robinhood Chain coins stay off Blix (chains.js), in stored profiles too.
+  if (Array.isArray(p.best)) p.best = p.best.filter((x) => !offChain(x.chain));
+  if (Array.isArray(p.positions)) p.positions = p.positions.filter((x) => !offChain(x.chain));
+  if (Array.isArray(p.recent)) p.recent = p.recent.filter((x) => !offSwap(x));
   const day = db.prepare("SELECT MAX(day) d FROM fomo_board").get().d;
   const ranks = {};
   for (const r of RANGES) {
@@ -438,24 +493,31 @@ const resolving = new Set();
 // coin page asks, kept COIN_TTL, never awaited by the page: the first answer says it is loading.
 const COIN_TTL = 3 * 60_000, SOL_NET = 1399811149;
 db.exec("CREATE TABLE IF NOT EXISTS fomo_coin (mint TEXT PRIMARY KEY, data TEXT, t INTEGER)");
-const coinBody = (mints) => `
-    const net = ${SOL_NET};
+// One Fomo holder row as Blix keeps it (both the full coin read and the quick holders-only read below).
+const HOLDER_FNS = `
     const thesis = (c) => c && c.comment ? { id: c.id, text: c.comment, likes: c.numLikes ?? c.reactions?.counts?.likeCount ?? 0, mcap: c.marketCapAtCreation ?? null, price: c.priceUsdAtCreation ?? null, t: c.createdAt } : null;
+    const holder = (x) => ({
+      handle: x.user?.userHandle, name: x.user?.displayName, pic: x.user?.profilePictureLink, followers: x.user?.followers ?? null, verified: !!x.user?.verified,
+      amount: x.humanAmount ?? null, value: x.value ?? null, pnl: x.pnl ?? null, unrealized: x.unrealizedPnl ?? null, realized: x.realizedPnl ?? null,
+      cost: x.costBasis ?? null, entry: x.averageEntryPrice ?? null, external: !!x.isExternallyReceived, dev: !!x.isDev, avgHold: x.averageHoldTimeSeconds ?? null,
+      thesis: x.showComment === false ? null : thesis(x.comment) });`;
+const coinBody = (mints) => `
+    const net = ${SOL_NET};${HOLDER_FNS}
     // Every coin's holders in one request, then each coin's thesis feed, all at once.
     const h = await get("/hodlers/top?tokens=" + encodeURIComponent(JSON.stringify(${JSON.stringify(mints)}.map((address) => ({ address, networkId: net })))));
     if (!Array.isArray(h)) throw new Error("Fomo did not answer for the holders.");
     const one = async (mint) => {
       const top = h.find((x) => x.tokenAddress === mint) || {};
-      const holders = (top.topHolders || []).map((x) => ({
-        handle: x.user?.userHandle, name: x.user?.displayName, pic: x.user?.profilePictureLink, followers: x.user?.followers ?? null, verified: !!x.user?.verified,
-        amount: x.humanAmount ?? null, value: x.value ?? null, pnl: x.pnl ?? null, unrealized: x.unrealizedPnl ?? null, realized: x.realizedPnl ?? null,
-        cost: x.costBasis ?? null, entry: x.averageEntryPrice ?? null, external: !!x.isExternallyReceived, dev: !!x.isDev, avgHold: x.averageHoldTimeSeconds ?? null,
-        thesis: x.showComment === false ? null : thesis(x.comment) }));
-      const theses = [];
+      const holders = (top.topHolders || []).map(holder);
+      const theses = [], swaps = [];
       let lastId = null;
-      for (let page = 0; page < 1; page++) {   // one page of the feed: most theses are the holders' pinned ones below
-        const f = await get("/feed/token?tokenAddress=" + mint + "&networkId=" + net + "&threshold=1000" + (lastId ? "&lastId=" + lastId : ""));
+      // Three pages of the coin's feed (every size of trade): theses, and each Fomo trader's buys and sells for the
+      // chart's faces (chartpeople.js). Most theses are the holders' pinned ones below.
+      for (let page = 0; page < 3; page++) {
+        const f = await get("/feed/token?tokenAddress=" + mint + "&networkId=" + net + "&threshold=0" + (lastId ? "&lastId=" + lastId : ""));
         const items = (f && f.items) || [];
+        for (const i of items) if ((i.type === "swap_buy" || i.type === "swap_sell") && i.userHandle) swaps.push({ t: i.createdAt, buy: i.type === "swap_buy", usd: i.usdAmount ?? null,
+          mc: i.marketCap ?? i.fdv ?? null, handle: i.userHandle, name: i.displayName, pic: i.profilePictureLink || null, dev: !!i.isDev });
         for (const i of items) if (i.type === "thesis" && i.comment) theses.push({ ...thesis(i.comment), handle: i.userHandle, name: i.displayName, pic: i.profilePictureLink, verified: !!i.verified, dev: !!i.isDev,
           replies: i.numReplies ?? 0, position: i.authorTrade ? { amount: i.authorTrade.humanTokenAmount, value: i.authorTrade.usdValue, unrealized: i.authorTrade.unrealizedPnlUsd, realized: i.authorTrade.realizedPnlUsd, pct: i.authorTrade.percentageUnrealizedPnl, closed: i.authorTrade.closedAt } : null });
         if (!f || !f.hasNextPage || !items.length) break;
@@ -466,30 +528,30 @@ const coinBody = (mints) => `
       for (const x of holders) if (x.thesis && !seen.has(x.thesis.id)) { seen.add(x.thesis.id); theses.push({ ...x.thesis, handle: x.handle, name: x.name, pic: x.pic, verified: x.verified, dev: x.dev, replies: 0,
         position: { amount: x.amount, value: x.value, unrealized: x.unrealized, realized: x.realized, pct: x.cost ? (x.unrealized / x.cost) * 100 : null, closed: null } }); }
       theses.sort((a, b) => (b.likes || 0) - (a.likes || 0) || String(b.t).localeCompare(String(a.t)));
-      return [mint, { holders, totalHolders: top.totalHolders ?? null, theses }];
+      return [mint, { holders, totalHolders: top.totalHolders ?? null, theses, swaps }];
     };
     return Object.fromEntries(await Promise.all(${JSON.stringify(mints)}.map(one)));`;
 
 // Coins waiting for a read: pages first (someone is looking), then coins on screen in lists (prefetch, so
 // opening one is instant). Up to 8 coins go in one Aside call; a page's coin never waits behind a prefetch.
 const coinState = new Map();   // mint -> { busy, error, tried }
-const wantPage = new Set(), wantList = new Set();
+const wantPage = new Set(), wantList = new Set(), urgent = new Set();   // urgent: read even if fresh (wantFomoFresh)
 let coinLoop = null;
 const fresh = (mint) => { const t = db.prepare("SELECT t FROM fomo_coin WHERE mint = ?").get(mint)?.t; return t && now() - t < COIN_TTL; };
 function scheduleCoins() {
   if (coinLoop) return;
   coinLoop = setTimeout(async () => {
     coinLoop = null;
-    const page = [...wantPage].filter((m) => !fresh(m)), list = [...wantList].filter((m) => !fresh(m) && !wantPage.has(m));
+    const page = [...wantPage].filter((m) => !fresh(m) || urgent.has(m)), list = [...wantList].filter((m) => !fresh(m) && !wantPage.has(m));
     const ok = (m) => { const st = coinState.get(m); return !st?.busy && now() - (st?.tried || 0) > (st?.error ? 60_000 : 0); };
     // A page's coins go alone (fast); prefetches go two at a time, so a page never waits long behind one.
     const pages = page.filter(ok);
     const batch = pages.length ? pages.slice(0, 8) : list.filter(ok).slice(0, 2);
     if (!batch.length) { wantPage.clear(); wantList.clear(); return; }
     const pri = batch.some((m) => wantPage.has(m)) ? 0 : 1;
-    for (const m of batch) { wantPage.delete(m); wantList.delete(m); coinState.set(m, { busy: true, error: null, tried: now() }); }
+    for (const m of batch) { wantPage.delete(m); wantList.delete(m); urgent.delete(m); coinState.set(m, { busy: true, error: null, tried: now() }); }
     try {
-      const got = await inFomo(coinBody(batch), undefined, { pri, timeoutMs: 45e3 });
+      const got = await coinRead(coinBody(batch), { pri, timeoutMs: 45e3 });
       const put = db.prepare("INSERT INTO fomo_coin (mint, data, t) VALUES (?, ?, ?) ON CONFLICT(mint) DO UPDATE SET data = excluded.data, t = excluded.t");
       for (const m of batch) { if (got?.[m]) put.run(m, JSON.stringify(got[m]), now()); coinState.set(m, { busy: false, error: got?.[m] ? null : "Fomo had nothing for this coin.", tried: now() }); }
     } catch (e) {
@@ -501,15 +563,141 @@ function scheduleCoins() {
 // Coins shown in a list (Discover, Pulse): read in the background so their pages open with Fomo's data ready.
 export function prefetchCoins(mints) {
   // Only while Aside is idle and healthy: a prefetch never adds to a queue or to a jam.
-  if (!fs.existsSync(ASIDE_EXE) || boardState.signedOut || running || queue.length || now() < asideState.pausedUntil) return;
-  for (const m of mints.slice(0, 8)) if (!fresh(m)) wantList.add(m);
+  if (!canBrowse() || boardState.signedOut || queue.length > 1 || now() < asideState.pausedUntil) return;
+  for (const m of mints.slice(0, 28)) if (!fresh(m)) wantList.add(m);
   if (wantList.size) scheduleCoins();
 }
 
+// ---------- new pairs: who is in them, kept current ----------
+// The Pulse's newest coins (New pairs, and Final stretch) change by the second, so their Fomo holders are read
+// every LIVE_MS while someone has the Pulse open: one /hodlers/top call covers LIVE_CHUNK coins (holders only;
+// the theses feed is read when a coin's page opens or it is on Discover). Each read is merged into the coin's
+// stored Fomo data (holders, their pinned theses), so its page's Known holders tab is current too, and a short
+// summary per coin (count, top faces) goes to the Pulse rows (pulseKnown).
+const LIVE_MS = 15_000, LIVE_CHUNK = 20, LIVE_SEEN_MS = 2 * 60_000;
+let liveMints = () => [], pulseSeen = 0, liveBusy = false;
+export const setLiveMints = (fn) => { liveMints = fn; };
+// Discover's shared lists (server.js discoverLists): their coins' faces are kept read whether or not anyone has a
+// page open, every DISCOVER_MS, so /api/discover can carry them and the page draws every row complete at once.
+const DISCOVER_MS = 60_000;
+let discoverMints = () => [];
+export const setDiscoverMints = (fn) => { discoverMints = fn; };
+// One coin's last reading, for rows that carry it ([count, faces]), or null when there is none in the last 10 min.
+// After a restart the map is empty: the coin's stored reading (fomo_coin, written by every read) fills it, so the
+// list does not lose its faces for the minutes the background reads take to come round again.
+let knownRow = null;
+export function knownOf(mint) {
+  const key = knownKey({ address: mint, networkId: SOL_NETWORK });
+  let k = known.get(key);
+  if (!k || now() - k.t >= 10 * 60_000) {
+    try {
+      knownRow ??= db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
+      const row = knownRow.get(mint), data = safeJson(row?.data, null), t = data?.ht || row?.t || 0;
+      if (data && now() - t < 10 * 60_000) { const [n, faces] = holderSummary(data); k = { n, faces, t }; known.set(key, k); }
+    } catch {}
+  }
+  return k && now() - k.t < 10 * 60_000 ? [k.n, k.faces] : null;
+}
+export const notePulseSeen = () => { pulseSeen = now(); };
+export const liveKnownStats = { runs: 0, coins: 0, withPeople: 0, last: 0, lastError: null };
+const known = new Map();   // mint -> { n, faces: [[handle, pic, value]], t }
+const knownWanted = new Map(); // chain-scoped visible rows, expiring after the viewer leaves
+const knownTried = new Map();
+const liveBody = (mints, network = SOL_NET) => `
+    const net = ${network};${HOLDER_FNS}
+    const h = await get("/hodlers/top?tokens=" + encodeURIComponent(JSON.stringify(${JSON.stringify(mints)}.map((address) => ({ address, networkId: net })))));
+    if (!Array.isArray(h)) throw new Error("Fomo did not answer for the holders.");
+    return Object.fromEntries(h.map((x) => [x.tokenAddress, { holders: (x.topHolders || []).map(holder), totalHolders: x.totalHolders ?? null }]));`;
+async function liveTick() {
+  let disc = [];
+  try { disc = [...new Set(discoverMints())].slice(0, 300); } catch {}
+  if (liveBusy || (now() - pulseSeen > LIVE_SEEN_MS && !disc.length) || !canBrowse() || boardState.signedOut || now() < asideState.pausedUntil) return;
+  liveBusy = true;
+  try {
+    for (const [key, target] of knownWanted) if (now() - target.seen > LIVE_SEEN_MS) knownWanted.delete(key);
+    const pulseOn = now() - pulseSeen <= LIVE_SEEN_MS;
+    const targets = new Map(pulseOn ? [...new Set(liveMints())].slice(0, 60).map(address => [address, { address, networkId: SOL_NETWORK }]) : []);
+    for (const [key, target] of knownWanted) targets.set(key, target);
+    // Discover's coins are read less often than the Pulse's newest (their holders move slower).
+    for (const address of disc) if (!targets.has(address)) targets.set(address, { address, networkId: SOL_NETWORK, slow: true });
+    // Oldest readings first: later rows/columns cannot starve behind the newest launches.
+    const checked = t => Math.max(known.get(knownKey(t))?.t || 0, knownTried.get(knownKey(t)) || 0);
+    const due = [...targets.values()].filter(t => now() - checked(t) >= (t.slow ? DISCOVER_MS : LIVE_MS))
+      .sort((a, b) => checked(a) - checked(b)).slice(0, 100);
+    const mints = due.map(t => t.address);
+    const get = db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
+    const put = db.prepare("INSERT INTO fomo_coin (mint, data, t) VALUES (?, ?, ?) ON CONFLICT(mint) DO UPDATE SET data = excluded.data");
+    let people = 0;
+    for (const network of new Set(due.map(t => t.networkId))) {
+     const addresses = due.filter(t => t.networkId === network).map(t => t.address);
+     for (let i = 0; i < addresses.length; i += LIVE_CHUNK) {
+      const chunk = addresses.slice(i, i + LIVE_CHUNK);
+      for (const address of chunk) knownTried.set(knownKey({ address, networkId: network }), now());
+      const got = await coinRead(liveBody(chunk, network), { pri: 1, timeoutMs: 30e3 });
+      for (const m of chunk) {
+        const x = got?.[m];
+        if (!x) continue;
+        const holders = x.holders || [];
+        const [n, faces] = holderSummary(x);
+        known.set(knownKey({ address: m, networkId: network }), { n, faces, t: now() });
+        if (holders.length) people++;
+        if (network !== SOL_NETWORK) continue; // the coin-page table is Solana-only
+        const row = get.get(m), d = safeJson(row?.data, null) || { holders: [], totalHolders: null, theses: [], swaps: [] };
+        // Holders' pinned theses join the coin's theses (one per thesis id), as the full read does.
+        const theses = [...(d.theses || [])], seen = new Set(theses.map((t) => t.id));
+        for (const h of holders) if (h.thesis && !seen.has(h.thesis.id)) { seen.add(h.thesis.id); theses.push({ ...h.thesis, handle: h.handle, name: h.name, pic: h.pic, verified: h.verified, dev: h.dev, replies: 0,
+          position: { amount: h.amount, value: h.value, unrealized: h.unrealized, realized: h.realized, pct: h.cost ? (h.unrealized / h.cost) * 100 : null, closed: null } }); }
+        if (!row && !holders.length) continue;   // nobody from Fomo in it yet: nothing to keep
+        put.run(m, JSON.stringify({ ...d, holders, totalHolders: x.totalHolders ?? d.totalHolders, theses, ht: now() }), row?.t ?? 0);
+      }
+     }
+    }
+    for (const [m, k] of known) if (now() - k.t > 10 * 60_000) known.delete(m);
+    for (const [m, t] of knownTried) if (now() - t > 10 * 60_000) knownTried.delete(m);
+    Object.assign(liveKnownStats, { runs: liveKnownStats.runs + 1, coins: mints.length, withPeople: people, last: now(), lastError: null });
+  } catch (e) { liveKnownStats.lastError = e.message; }
+  finally { liveBusy = false; }
+}
+if (!process.env.RADAR_DATA) setInterval(liveTick, LIVE_MS).unref();
+// GET /api/fomo/known: the Pulse rows' faces, { mint: [count, [[handle, pic, value], ...]] } for coins with people.
+export function pulseKnown(tokens = "") {
+  notePulseSeen();
+  const requested = parseKnownTokens(tokens), get = db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
+  for (const token of requested) {
+    const key = knownKey(token);
+    knownWanted.set(key, { ...token, seen: now() });
+    // Reuse coin-page/relay readings immediately, including a confirmed zero.
+    if (token.networkId === SOL_NETWORK) {
+      const row = get.get(token.address), data = safeJson(row?.data, null), t = data?.ht || row?.t || 0;
+      if (data && now() - t < COIN_TTL && t > (known.get(key)?.t || 0)) {
+        const [n, faces] = holderSummary(data); known.set(key, { n, faces, t });
+      }
+    }
+  }
+  while (knownWanted.size > 1000) knownWanted.delete(knownWanted.keys().next().value);
+  void liveTick();
+  const out = {};
+  const keys = requested.length ? requested.map(knownKey) : [...known.keys()];
+  for (const key of keys) { const k = known.get(key); if (k && now() - k.t < 10 * 60_000) out[key] = [k.n, k.faces]; }
+  return out;
+}
+
+// The chart's faces (chartpeople.js) while a coin page is open: its Fomo trades read again once they are older
+// than `maxAge` (default 20 s), so a Fomo trader's buy shows on the chart within seconds, not after COIN_TTL.
+export function wantFomoFresh(mint, maxAge = 20_000) {
+  if (now() - coinRelayAt < RELAY_ALIVE_MS || !canBrowse() || coinState.get(mint)?.busy) return;
+  const t = db.prepare("SELECT t FROM fomo_coin WHERE mint = ?").get(mint)?.t;
+  if (!t || now() - t > maxAge) { urgent.add(mint); wantPage.add(mint); scheduleCoins(); }
+}
 export function coinFomo(mint) {
   const row = db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?").get(mint);
-  const st = coinState.get(mint) || { busy: false, error: null, tried: 0 };
-  if ((!row || now() - row.t > COIN_TTL) && fs.existsSync(ASIDE_EXE)) { wantPage.add(mint); scheduleCoins(); }
+  if (coinAsked.size > 2000) coinAsked.clear();
+  coinAsked.set(mint, now());
+  // The owner's PC is relaying coins here (coinRelayIn): it reads them (st.busy = its answer is on the way), so
+  // this server's own browser does not try.
+  const relayed = now() - coinRelayAt < RELAY_ALIVE_MS;
+  const st = relayed ? { busy: !row, error: null, tried: 0 } : coinState.get(mint) || { busy: false, error: null, tried: 0 };
+  if (!relayed && (!row || now() - row.t > COIN_TTL) && canBrowse()) { wantPage.add(mint); scheduleCoins(); }
   if (coinState.size > 1000) for (const [m, x] of coinState) if (!x.busy && now() - x.tried > 30 * 60_000) coinState.delete(m);
   const d = safeJson(row?.data, null);
   // Fomo traders whose real wallet Blix found (fomoresolve.js): their rows say TRACKED.
@@ -517,10 +705,39 @@ export function coinFomo(mint) {
   const mark = (x) => ({ ...x, wallet: x.handle ? wallets.get(String(x.handle).toLowerCase()) || null : null });
   const waiting = !row && (st.busy || wantPage.has(mint));
   return {
-    mint, read: row?.t ?? null, loading: waiting, refreshing: Boolean(row) && (st.busy || wantPage.has(mint)), error: row ? null : st.error, signedOut: boardState.signedOut,
+    mint, read: row ? (row.t || d?.ht || null) : null, heldAt: d?.ht ?? row?.t ?? null, loading: waiting, refreshing: Boolean(row) && (st.busy || wantPage.has(mint)), error: row ? null : st.error, signedOut: boardState.signedOut,
     queue: asideQueue(), holders: (d?.holders || []).map(mark), totalHolders: d?.totalHolders ?? null, theses: (d?.theses || []).map(mark),
   };
 }
+// ---------- one coin, relayed from the owner's PC ----------
+// Fomo answers a coin's holders and feed only to a signed-in browser (prod-api says 430 "unauthorized" to the
+// same request from a server, even with a good token), and only the owner's PC has one that stays signed in. So
+// the PC reads the coins this server's pages ask about (coinRelayWanted) in Aside and posts each one here
+// (fomorelay.js, POST /api/fomo/coin/relay as the owner); the rows land in fomo_coin like a read of our own.
+const coinAsked = new Map();   // mint -> when a page here last asked for it
+let coinRelayAt = 0;
+const RELAY_ALIVE_MS = 2 * 60_000, RELAY_COIN_WANT_MS = 60_000, MINT_OK = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+export const coinRelayStats = { posts: 0, coins: 0, lastAt: 0 };
+export const coinRelayWanted = () => [...coinAsked].filter(([, t]) => now() - t < RELAY_COIN_WANT_MS).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([m]) => m);
+// { coins: { <mint>: { t, data: { holders, totalHolders, theses, swaps } } } } from the PC. Answers which coins are wanted now.
+export function coinRelayIn(body) {
+  const put = db.prepare("INSERT INTO fomo_coin (mint, data, t) VALUES (?, ?, ?) ON CONFLICT(mint) DO UPDATE SET data = excluded.data, t = excluded.t WHERE excluded.t >= fomo_coin.t");
+  let n = 0;
+  for (const [mint, x] of Object.entries(body?.coins && typeof body.coins === "object" ? body.coins : {}).slice(0, 20)) {
+    const d = x?.data;
+    if (!MINT_OK.test(mint) || !d || !Array.isArray(d.holders) || !Array.isArray(d.theses)) continue;
+    const text = JSON.stringify({ holders: d.holders.slice(0, 120), totalHolders: Number.isFinite(d.totalHolders) ? d.totalHolders : null, theses: d.theses.slice(0, 200), swaps: Array.isArray(d.swaps) ? d.swaps.slice(0, 600) : [] });
+    if (text.length > 1_500_000) continue;
+    put.run(mint, text, Math.min(Number(x.t) || now(), now()));
+    coinState.set(mint, { busy: false, error: null, tried: now() });
+    n++;
+  }
+  coinRelayAt = now(); coinRelayStats.posts++; coinRelayStats.coins += n; coinRelayStats.lastAt = now();
+  return { ok: true, relayed: n, wanted: coinRelayWanted() };
+}
+// A coin's stored read, for the PC's relay: { data (JSON text), t } or null.
+export const coinRow = (mint) => db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?").get(mint) || null;
+
 let walletCache = { t: 0, m: new Map() };
 function walletMap() {
   if (now() - walletCache.t > 30_000) walletCache = { t: now(), m: new Map(db.prepare("SELECT handle, wallet FROM fomo_wallets WHERE wallet IS NOT NULL").all().map((x) => [String(x.handle).toLowerCase(), x.wallet])) };

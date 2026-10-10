@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+const root = '/opt/blix', release = root + '/data/hosted-wallet-release';
+const backup = release + '/rollback-' + Date.now();
+fs.mkdirSync(backup, { mode: 0o700 });
+for (const name of ['accounts.js', 'access.js', 'webapp.js']) fs.copyFileSync(root + '/server/' + name, backup + '/' + name);
+fs.copyFileSync(root + '/data/settings.json', backup + '/settings.json');
+execFileSync('tar', ['-xzf', release + '/app.tar.gz', '-C', root, 'server']);
+for (const name of ['accounts.js', 'access.js', 'webapp.js', 'hosted-accounts.js', 'wallet-identity.js']) execFileSync('/usr/bin/node', ['--check', root + '/server/' + name]);
+const settings = JSON.parse(fs.readFileSync(root + '/data/settings.json'));
+settings.hostedWallets = true;
+fs.writeFileSync(root + '/data/settings.json', JSON.stringify(settings, null, 2));
+console.log('Hosted account routes installed; existing live frontend retained. Rollback: ' + backup);

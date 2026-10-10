@@ -1,0 +1,19 @@
+# Nightly off-box backup of Blix's data (bin/offsite-backup.mjs). Install on the VM:
+#   sudo cp deploy/blix-backup.service deploy/blix-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now blix-backup.timer
+# The key file /etc/blix-backup.key (openssl passphrase, 32 random bytes as hex) is owned by ubuntu, mode 600, and a
+# copy is kept off the VM: without it no archive can be opened.
+[Unit]
+Description=Blix off-box backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/blix
+Environment=BLIX_BACKUP_KEY=/etc/blix-backup.key
+Environment=BLIX_BACKUP_BUCKET=blix-backups
+ExecStart=/usr/bin/node --no-warnings bin/offsite-backup.mjs
+Nice=10
+IOSchedulingClass=idle

@@ -1,6 +1,7 @@
 // SQLite store: tokens we track, their price history, signals we raised, and briefs.
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,13 +12,41 @@ export const DATA = process.env.RADAR_DATA ? path.resolve(process.env.RADAR_DATA
 fs.mkdirSync(DATA, { recursive: true });
 export const DB_FILE = path.join(DATA, "radar.db");
 export const db = new DatabaseSync(DB_FILE);
+// Checkpoints on a thread of their own (dbcheckpoint.js). Not under test runs, which open throwaway copies.
+export const checkpointStats = { runs: 0, pages: 0, busy: 0, maxMs: 0, lastMs: 0 };
+if (!process.env.RADAR_DATA) {
+  try {
+    const w = new Worker(new URL("./dbcheckpoint.js", import.meta.url), { workerData: { file: DB_FILE, everyMs: 5000 } });
+    w.on("message", (m) => Object.assign(checkpointStats, m));
+    w.on("error", () => {});
+    w.unref();
+  } catch {}
+  // No pass reported within a minute (the thread failed to start): SQLite's own checkpointing comes back on.
+  setTimeout(() => { if (!checkpointStats.runs) try { db.exec("PRAGMA wal_autocheckpoint = 1000"); } catch {} }, 60_000).unref?.();
+}
+// The log is folded back by dbcheckpoint.js on its own thread, never at the end of one of the radar's writes.
+db.exec(`PRAGMA wal_autocheckpoint = ${process.env.RADAR_DATA ? 1000 : 0}`);
 
 // The radar asks the same few hundred questions over and over, many of them every second. Compiling the
 // SQL each time made thousands of throwaway native statements a minute; each query is now compiled once
 // and reused. Queries built on the fly (IN lists, filters) share a bounded pool, oldest dropped first.
 const compile = db.prepare.bind(db);
 const compiled = new Map();
-export const dbStats = { compiled: 0, reused: 0 };
+export const dbStats = { compiled: 0, reused: 0, writers: [] };
+// Which statements write the most (rows changed per statement, since start): the radar's own reads and
+// writes share one thread with every live feed, so a statement run thousands of times a minute shows here.
+const writes = new Map();
+{
+  const proto = Object.getPrototypeOf(compile("SELECT 1"));
+  const run = proto.run;
+  proto.run = function (...a) {
+    const r = run.apply(this, a);
+    const k = this.sourceSQL?.replace(/\s+/g, " ").slice(0, 90) || "?", w = writes.get(k);
+    if (w) { w.n++; w.rows += r.changes || 0; } else if (writes.size < 400) writes.set(k, { n: 1, rows: r.changes || 0 });
+    return r;
+  };
+  setInterval(() => { dbStats.writers = [...writes].sort((x, y) => y[1].n - x[1].n).slice(0, 10).map(([sql, w]) => ({ sql, ...w })); }, 10_000).unref?.();
+}
 db.prepare = (sql) => {
   let s = compiled.get(sql);
   if (s) { dbStats.reused++; compiled.delete(sql); compiled.set(sql, s); return s; }
@@ -32,6 +61,11 @@ db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
+PRAGMA journal_size_limit = 67108864;
+-- A 590 MB file: 64 MB of page cache and the file mapped into memory, so hot reads stop going to disk.
+PRAGMA cache_size = -65536;
+PRAGMA mmap_size = 268435456;
+PRAGMA temp_store = MEMORY;
 
 CREATE TABLE IF NOT EXISTS tokens (
   mint TEXT PRIMARY KEY,
@@ -59,6 +93,10 @@ CREATE INDEX IF NOT EXISTS tokens_status ON tokens(status, updated);
 CREATE INDEX IF NOT EXISTS tokens_score ON tokens(score);
 -- "other coins with this ticker" (every coin page asks): without it each ask reads the whole table
 CREATE INDEX IF NOT EXISTS tokens_symbol_lc ON tokens(lower(symbol));
+-- Pulse's two candidate lists (research.js readCandidates), read every 3 s: coins still on the curve by market
+-- cap, and bonded coins by bonding time. Without these each read sorted every active token.
+CREATE INDEX IF NOT EXISTS tokens_curve_mcap ON tokens(mcap) WHERE status = 'active' AND dex = 'pumpfun' AND COALESCE(graduated, 0) = 0 AND pair IS NOT NULL;
+CREATE INDEX IF NOT EXISTS tokens_bonded_t ON tokens(COALESCE(pair_created, first_seen)) WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS snapshots (
   mint TEXT, t INTEGER, price REAL, mcap REAL, liquidity REAL, vol_m5 REAL
@@ -176,8 +214,8 @@ export async function prune() {
   // A read keeps its grade and report; the raw pages it was written from are only useful for a few days.
   try { await sliced("UPDATE research SET sources = NULL WHERE rowid IN (SELECT rowid FROM research WHERE t < ? AND sources IS NOT NULL LIMIT 200)", now - 3 * 864e5); } catch {}
   await yieldNow();
-  // Fold the write-ahead log back into the database so it does not grow without limit.
-  try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch {}
+  // The write-ahead log is folded back continuously by dbcheckpoint.js (a TRUNCATE here waited for every
+  // reader and writer, on the main thread).
 }
 
 // A consistent copy of the database, safe to take while the radar runs. Keeps the newest `keep` copies.

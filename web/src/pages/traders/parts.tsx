@@ -1,10 +1,11 @@
 // Shared pieces of the Top traders pages (leaderboard and trader profile): money formats in Fomo's style,
 // avatars with their rank badge, the token pile, and the wallet chip.
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CoinImg } from "@/components/page";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
+import { loadedPics, noteFace, thumb } from "@/lib/thumb";
 
 export type Range = "24h" | "7d" | "30d" | "all-time";
 export const RANGES: [Range, string][] = [["24h", "24H"], ["7d", "7D"], ["30d", "30D"], ["all-time", "ALL"]];
@@ -29,10 +30,38 @@ export const hold = (s: number | null | undefined) => (s == null ? "—" : s >= 
 export const traderHref = (handle?: string | null) => (handle ? `#/trader/${encodeURIComponent(handle)}` : undefined);
 export const copy = (text: string, what = "Wallet") => { navigator.clipboard?.writeText(text); toast(`${what} copied`); };
 
-export function Avatar({ src, size = 40, rank, className }: { src?: string | null; size?: number; rank?: number | null; className?: string }) {
+// A person's picture. One already loaded in this tab (or loaded ahead: lib/thumb.ts preloadPics) is there on the
+// first frame; a new one fades in when it has loaded (never a pop), over a disc that stays as its background; a
+// person without one gets their initial on a colour that is theirs (from their name), so a list of people never
+// shows a row of blank grey circles.
+const hueOf = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h % 360; };
+// Fomo's own picture for a trader who never set one: its "eyes" on a blue disc (fomo.family does the same).
+const FOMO_BLUES = ["#4356ff", "#73ccff"];
+export const fomoBlue = (key?: string | null) => FOMO_BLUES[[...(key || "")].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % FOMO_BLUES.length];
+export const FomoEyes = ({ id, className }: { id?: string | null; className?: string }) => (
+  <span aria-hidden className={cn("absolute inset-0 grid place-items-center", className)} style={{ background: fomoBlue(id) }}><img src="brand/fomo-eyes.png" alt="" draggable={false} className="size-[70%]" /></span>
+);
+
+export function Avatar({ src, name, size = 40, rank, className }: { src?: string | null; name?: string | null; size?: number; rank?: number | null; className?: string }) {
+  const url = thumb(src, size);
+  const [shown, setShown] = useState<string | null>(() => (url && loadedPics.has(url) ? src! : null));   // the src that has loaded
+  const [waited, setWaited] = useState(false);   // it had to load: fade it in
+  const [broken, setBroken] = useState<string | null>(null);   // a picture that would not load: Fomo's default instead
+  const initial = (name || "").trim().replace(/^[@$]/, "").charAt(0).toUpperCase();
+  const hue = hueOf(name || src || "");
+  if (src) noteFace(src, size);
+  const loaded = () => { if (url) loadedPics.add(url); setShown(src!); };
   return (
-    <span className={cn("relative inline-block shrink-0", className)} style={{ width: size, height: size }}>
-      {src ? <img src={src} alt="" loading="lazy" className="size-full rounded-full bg-paper-4 object-cover ring-1 ring-edge" /> : <span className="block size-full rounded-full bg-paper-4 ring-1 ring-edge" />}
+    <span className={cn("relative inline-block shrink-0 overflow-hidden rounded-full bg-paper-4 ring-1 ring-edge", className)} style={{ width: size, height: size }}>
+      {(!src || broken === src) && <FomoEyes id={name} />}
+      {initial && src && broken !== src && shown !== src && (
+        <span className="absolute inset-0 grid place-items-center font-display font-semibold text-white/90 select-none" aria-hidden
+          style={{ fontSize: Math.round(size * 0.44), background: `linear-gradient(145deg, oklch(62% 0.14 ${hue}), oklch(42% 0.12 ${(hue + 40) % 360}))` }}>{initial}</span>
+      )}
+      {src && broken !== src && <img key={src} src={url} alt="" loading="lazy" decoding={shown === src ? "sync" : "async"} onLoad={loaded} onError={() => setBroken(src)}
+        // In the browser's memory already (complete on mount): shown now, no fade.
+        ref={(el) => { if (el && el.complete && el.naturalWidth && shown !== src) { if (url) loadedPics.add(url); setShown(src); } else if (el && !el.complete && !waited) setWaited(true); }}
+        className={cn("absolute inset-0 size-full object-cover", waited && "transition-opacity duration-200", shown === src ? "opacity-100" : "opacity-0")} />}
       {rank != null && rank <= 100 && (
         <span className="num absolute -right-1 -bottom-1 grid h-4 min-w-4 place-items-center rounded-full border border-paper-2 bg-paper-5 px-1 text-[9px] font-bold text-ink">{rank}</span>
       )}
@@ -80,7 +109,7 @@ export const Check = ({ className }: { className?: string }) => (
 export function TokenPic({ mint, chain, img, className }: { mint?: string | null; chain?: number | null; img?: string | null; className?: string }) {
   return (
     <span className={`relative block size-full overflow-hidden rounded-full bg-paper-4 ${className || ""}`}>
-      {mint && chain === SOLANA ? <CoinImg mint={mint} /> : img ? <img src={img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : null}
+      {mint && chain === SOLANA ? <CoinImg mint={mint} fallback={img} /> : img ? <img src={thumb(img, 48)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" /> : null}
     </span>
   );
 }

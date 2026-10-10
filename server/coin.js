@@ -7,13 +7,21 @@
 // Holders, top traders and early buyers come from the holder ledger (holders.js), the dev's other coins
 // from the launch log and the tokens table. Nothing here is estimated: a field Blix cannot know is null.
 import { db } from "./db.js";
+import * as coinIndex from "./coinindex.js";
 import { onLiveTrade, feed, liveStats } from "./livetrades.js";
 import { books } from "./holders.js";
 import { launchIndex, enrichNow } from "./engine.js";
 import { getJson, rugcheck } from "./sources.js";
 import { gtGet } from "./gtgate.js";
-import { jupAsset, jupBigTrades, jupFirstTrades, jupHolders, jupRecentTrades, jupTrades } from "./jup.js";
+import { jupAsset, jupBigTrades, jupFirstTrades, jupHolders, jupRecentTrades, jupTrades, supplyOf, knownSupply } from "./jup.js";
 import { fastMcap, focusPrice, rugFigures } from "./pulse.js";
+import { onPoolTrade } from "./pumpswap.js";
+import { levelNow, chartClose } from "./candles.js";
+// An open chart's price from its accounts (fastpx.js, set by server.js): the freshest reading there is, ahead of
+// the logs' (which trail by seconds on a busy link). USD, already on the chart's level; null when not fresh.
+let fastMcUsd = () => null;
+export const setFastMc = (fn) => { fastMcUsd = fn; };
+import { holdersLive, onCurve, soldOut } from "./holderslive.js";
 
 const now = () => Date.now();
 const WINDOW = 30 * 60_000;         // coins are kept while they traded within this long (holders.js keeps its books as long)
@@ -22,36 +30,106 @@ const PER_COIN = 400;               // most recent trades kept per coin
 const PER_FOCUS = 2000;             // ... while its page is open
 const MAX_COINS = 4000;
 const SUPPLY = 1e9;                 // every pump.fun and LaunchLab coin
+// Tokens in circulation for turning a price into a market cap: Jupiter's on-chain figure (the scale the chart
+// is drawn in; burns make it less than 1B), else the radar's own price-to-cap ratio, else pump.fun's 1B.
+const supplyFor = (mint, t) => supplyOf(mint) ?? (t?.price > 0 && t?.mcap > 0 ? t.mcap / t.price : SUPPLY);
 const BUCKET = 15_000, FLOW_BUCKETS = 20; // 5 minutes of flow
 const GT = "https://api.geckoterminal.com/api/v2/networks/solana";
 
-// mint -> { trades: [[t, buy 1|0, sol, tokens, mcSol, wallet, slot]], last, focus, wallets }
+// mint -> { trades: [[t, buy 1|0, sol, tokens, mcSol, wallet, slot, sig]], last, focus, wallets, since, sigs }
 // wallets: wallet -> [tokens bought, tokens sold, SOL in, SOL out, first trade time], for average buy and
 // sell prices. It starts when this module does, so a wallet whose first trade came earlier gets no average.
+// Every trade Blix reads from the chain lands here the moment it is read: curve trades (livetrades.js),
+// PumpSwap pool trades (pumpswap.js) and, for an open coin in a Raydium / Orca / Meteora pool, the trades
+// read from its transactions (cointape.js). `since`: from when the ring has every trade of the coin.
 const tapes = new Map();
 export const coinStats = { coins: 0, trades: 0, poolFetches: 0, poolErrors: 0 };
+// fn(mint, row) for every trade added (server.js pushes an open coin's to its page).
+const tapeFns = [];
+export const onTape = (fn) => tapeFns.push(fn);
 
-onLiveTrade((mint, s, sol, buy, x) => {
+function tapeOf(mint, since = now()) {
   let r = tapes.get(mint);
-  if (!r) { r = { trades: [], last: 0, focus: 0, wallets: new Map(), flow: [] }; tapes.set(mint, r); }
-  const t = now(), user = x?.user ?? null;   // null on feeds that do not name the trader (LaunchLab)
-  r.trades.push([t, buy ? 1 : 0, sol, x?.tokens ?? null, s.mc, user, x?.slot ?? null]);
+  if (!r) { r = { trades: [], last: 0, focus: 0, wallets: new Map(), flow: [], since, sigs: new Set(), who: new Map() }; tapes.set(mint, r); }
+  return r;
+}
+// A gap in what the ring heard (a pool coin's page closed for a while): the flow restarts from `t`.
+export function tapeGap(mint, t = now()) { const r = tapes.get(mint); if (r) r.since = Math.max(r.since, t); else tapeOf(mint, t); }
+
+// One trade. `sig` (+ size, for a transaction with several legs) keeps a trade read twice from counting twice.
+// `at`: when it happened, for a trade found seconds late in a block (journalfeed.js) that the live feed skipped:
+// it goes in its place in the list and its own 15-second bucket, and is not pushed to an open page as new.
+// `fast`: read from the wallet's balance change (server.js), seconds before the logs on a busy link. The logs'
+// row for the same slot and wallet is then not added again (its transaction shows once Jupiter lists it).
+export function addTape(mint, { buy, sol, tokens = null, mcSol, user = null, slot = null, sig = null, fast = false, at = null }) {
+  if (!(sol >= 0) || !(mcSol > 0)) return;
+  const r = tapeOf(mint);
+  if (slot != null && user) {
+    const k = `${slot}|${user}`, had = r.who.get(k);
+    if (fast ? had : had === "fast") return;
+    if (!had) { r.who.set(k, fast ? "fast" : "log"); if (r.who.size > 4000) r.who.delete(r.who.keys().next().value); }
+  }
+  if (sig) {
+    const k = `${sig}:${tokens == null ? "" : Math.round(tokens)}`;
+    if (r.sigs.has(k)) return;
+    r.sigs.add(k); if (r.sigs.size > 5000) r.sigs = new Set([...r.sigs].slice(-2500));
+  }
+  const t = at != null ? Math.min(at, now()) : now();
+  const late = at != null && r.trades.length > 0 && t < r.trades[r.trades.length - 1][0];
+  const row = [t, buy ? 1 : 0, sol, tokens, mcSol, user, slot, sig];
+  if (!buy && user && tokens > 0 && !fast) soldOut(mint, user, tokens);   // a fast row's balance is already the new one
+  if (late) {
+    let i = r.trades.length;
+    while (i > 0 && r.trades[i - 1][0] > t) i--;
+    r.trades.splice(i, 0, row);
+  } else r.trades.push(row);
   // 5-minute flow in 15-second buckets, so a busy coin's figures do not depend on how many trades are kept.
   const k = Math.floor(t / BUCKET);
   let f = r.flow[r.flow.length - 1];
-  if (!f || f.k !== k) { f = { k, b: 0, s: 0, bs: 0, ss: 0, w: new Set() }; r.flow.push(f); if (r.flow.length > FLOW_BUCKETS) r.flow.shift(); }
-  if (buy) { f.b++; f.bs += sol; } else { f.s++; f.ss += sol; }
-  if (user && f.w.size < 500) f.w.add(user);
-  if (user && x.tokens > 0) {
+  if (late && f && k < f.k) {
+    // A late trade's own bucket: found among those kept, made in its place if missing, or left out if older than all.
+    f = null;
+    for (let i = r.flow.length - 1; i >= 0; i--) {
+      if (r.flow[i].k === k) { f = r.flow[i]; break; }
+      if (r.flow[i].k < k) { f = { k, b: 0, s: 0, bs: 0, ss: 0, w: new Set() }; r.flow.splice(i + 1, 0, f); break; }
+    }
+  } else if (!f || f.k !== k) { f = { k, b: 0, s: 0, bs: 0, ss: 0, w: new Set() }; r.flow.push(f); if (r.flow.length > FLOW_BUCKETS) r.flow.shift(); }
+  if (f) {
+    if (buy) { f.b++; f.bs += sol; } else { f.s++; f.ss += sol; }
+    if (user && f.w.size < 500) f.w.add(user);
+  }
+  if (user && tokens > 0) {
     let w = r.wallets.get(user);
     if (!w) { w = [0, 0, 0, 0, t]; r.wallets.set(user, w); }
-    if (buy) { w[0] += x.tokens; w[2] += sol; } else { w[1] += x.tokens; w[3] += sol; }
+    if (buy) { w[0] += tokens; w[2] += sol; } else { w[1] += tokens; w[3] += sol; }
   }
   const cap = now() - r.focus < FOCUS_KEEP ? PER_FOCUS : PER_COIN;
   if (r.trades.length > cap + 100) r.trades.splice(0, r.trades.length - cap);
   r.last = now();
   coinStats.trades++;
-});
+  if (!late && tapeFns.length && now() - r.focus < 15_000) for (const fn of tapeFns) try { fn(mint, rowOut(mint, row)); } catch {}
+}
+// null `user` on feeds that do not name the trader (LaunchLab).
+// The curve reads its cap on 1B tokens; on the circulating-supply scale (knownSupply, cache only) like every
+// other figure, so the trade list, the chart and Jupiter's rows agree on a coin with burned tokens.
+const onCirc = (mint, mc) => mc * ((knownSupply(mint) ?? 1e9) / 1e9);
+onLiveTrade((mint, s, sol, buy, x) => addTape(mint, { buy, sol, tokens: x?.tokens ?? null, mcSol: onCirc(mint, s.mc), user: x?.user ?? null, slot: x?.slot ?? null, sig: x?.sig ?? null }));
+onPoolTrade((mint, e) => addTape(mint, { buy: e.buy, sol: e.sol, tokens: e.tokens ?? null, mcSol: e.mcSol, user: e.user ?? null, slot: e.slot ?? null, sig: e.sig ?? null }));
+
+// A trade row as the page reads it, tagged (dev, sniper, bundle, followed). The tagger is kept a few seconds per coin.
+const taggers = new Map();
+function tagsFor(mint) {
+  const c = taggers.get(mint);
+  if (c && now() - c.t < 5000) return c.f;
+  const f = tagger(mint, books.get(mint), launchIndex.get(mint)?.creator || tokenRow(mint)?.creator || null);
+  taggers.set(mint, { t: now(), f }); if (taggers.size > 200) taggers.delete(taggers.keys().next().value);
+  return f;
+}
+function rowOut(mint, [t, buy, sol, tokens, mcSol, wallet, slot, sig], tagOf = tagsFor(mint)) {
+  const usd = feed.solUsd || null;
+  return { t, side: buy ? "buy" : "sell", sol: +sol.toFixed(4), usd: usd ? +(sol * usd).toFixed(2) : null, tokens: tokens == null ? null : Math.round(tokens),
+    mcUsd: usd ? Math.round(mcSol * usd) : null, wallet, slot, tx: sig || null, ...tagOf(wallet) };
+}
 
 function prune() {
   const t = now();
@@ -77,16 +155,24 @@ const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch { return n
 
 // The curve's last trade is the price while the coin is on it; once bonded, the curve goes quiet and the
 // tracked pool price takes over.
-const curveLive = (L, t) => Boolean(L) && !t?.graduated && now() - L.last < 30 * 60_000;
+// A curve at 99.5% has bonded even before the tokens table says so: its last curve trade is history, not a price
+// (CumRocket's header held its $48.9K bonding price while it traded at $2.4K in the pool, 2026-10-06).
+const curveLive = (L, t) => Boolean(L) && !t?.graduated && (L.progress ?? 0) < 0.995 && now() - L.last < 30 * 60_000;
 // SOL per token now, for valuing balances: the curve while on it, then the Pulse's pool price (Jupiter or
 // DexScreener, seconds old) and last the radar's tracked price.
 function priceSol(mint, t) {
   const L = liveStats(mint);
   if (curveLive(L, t) && feed.solUsd) return { sol: L.mc / feed.solUsd / SUPPLY, live: true };
   const fast = fastMcap(mint);
-  if (fast > 0 && feed.solUsd) return { sol: fast / feed.solUsd / SUPPLY, live: true };
+  if (fast > 0 && feed.solUsd) return { sol: fast / feed.solUsd / supplyFor(mint, t), live: true };
   if (t?.price > 0 && feed.solUsd) return { sol: t.price / feed.solUsd, live: false };
   return { sol: null, live: false };
+}
+
+// A market cap the radar stored (DexScreener's, in its own supply) moved onto the circulating-supply scale.
+function onScale(mint, t, mc) {
+  const s = supplyOf(mint);
+  return mc > 0 && s && t?.price > 0 && t?.mcap > 0 ? Math.round(mc * s / (t.mcap / t.price)) : mc ?? null;
 }
 
 // Who a wallet is on this coin: dev, sniper, bundle, a top-10 holder, a wallet you follow.
@@ -208,7 +294,10 @@ function build(mint, top) {
   const ring = tapes.get(mint);
   const bonded = Boolean(t?.graduated) || (L?.progress ?? 0) >= 0.995;
   if (bonded) focusPrice(mint);   // its pool price every few seconds while this page is open (pulse.js)
-  if (bonded && t?.vol_m5 != null) {
+  // The ring has every trade of the last five minutes (it has been hearing the coin that long): exact and live,
+  // curve or pool. Otherwise the tracked figures (DexScreener's) for a bonded coin.
+  const covered = ring?.trades.length && ring.since <= now() - FLOW_BUCKETS * BUCKET;
+  if (bonded && !covered && t?.vol_m5 != null) {
     m5 = { source: "tracked", buys: t.buys_m5, sells: t.sells_m5, buyUsd: null, sellUsd: null, volUsd: t.vol_m5, netUsd: null, traders: null };
   } else if (ring?.trades.length) {
     const from = Math.floor(now() / BUCKET) - FLOW_BUCKETS + 1, wallets = new Set();
@@ -272,28 +361,53 @@ function build(mint, top) {
     if (h != null) dev.pct = +((h / J.supply) * 100).toFixed(3);
     if (w || h != null) dev.via = "jupiter";
   }
-  const viaJup = holders?.source === "jupiter";
+  // Holders from the chain itself (holderslive.js) once its first read lands: the exact count and every
+  // balance, moving with each trade. The curve ledger stays first while it saw the coin's every trade.
+  const exactLedger = onLedger && !holders.partial;
+  const chainH = exactLedger ? null : holdersLive(mint, { hint: rf?.holders ?? J.asset?.holders ?? 0, n: top });
+  if (chainH) {
+    const supply = J.supply || supplyFor(mint, t), pools = new Set([...J.poolWallets, t?.pair].filter(Boolean));
+    const list = chainH.top.map(([wallet, tokens]) => jupLine(wallet, { held: tokens, w: J.recentTally?.get(wallet), supply, priceUsd: priceUsdNow, solUsd, tagOf, pool: pools.has(wallet) || !onCurve(wallet) }));
+    const real = list.filter((x) => x.label !== "Pool");
+    const maxPct = Math.max(...real.map((x) => x.pct), 0);
+    for (const x of list) x.maxPct = maxPct;
+    holders = { count: chainH.count, wallets: list.length, trades: 0, since: null, last: now(), genesis: false, partial: false, frozen: false,
+      top10: +real.slice(0, 10).reduce((sum, x) => sum + x.pct, 0).toFixed(2), list, source: "chain", stale: false };
+    if (dev) { dev.pct = +((chainH.of(dev.wallet) / supply) * 100).toFixed(3); dev.via = "chain"; }
+  }
+  // Never an empty Holders tab while a figure is known: Jupiter's, else RugCheck's count (flagged stale).
+  if (!holders && (rf?.holders ?? J.asset?.holders) != null) {
+    holders = { count: rf?.holders ?? J.asset.holders, wallets: 0, trades: 0, since: null, last: rf?.checked ?? null, genesis: false, partial: true, frozen: false,
+      top10: rf?.top10 ?? null, list: [], source: rf?.holders != null ? "rugcheck" : "jupiter", stale: true };
+  }
+  if (holders && !holders.source) holders.source = "ledger";
+  if (holders && holders.stale == null) holders.stale = holders.frozen;
+  const viaJup = holders?.source === "jupiter", viaChain = holders?.source === "chain";
   return {
-    mint, symbol: t?.symbol || launchIndex.get(mint)?.symbol || null, name: t?.name || launchIndex.get(mint)?.name || null,
+    mint, symbol: t?.symbol || launchIndex.get(mint)?.symbol || coinIndex.nameOf(mint)?.symbol || null, name: t?.name || launchIndex.get(mint)?.name || coinIndex.nameOf(mint)?.name || null,
     solUsd, live: curveLive(L, t), onCurve: Boolean(L) && !t?.graduated,
-    mcUsd: curveLive(L, t) ? Math.round(L.mc) : fastMcap(mint) ?? t?.mcap ?? (L ? Math.round(L.mc) : null),
+    // Live readings on the chart's level (candles.js levelNow), so the header and the chart's last candle agree.
+    // Off the curve with no live price, the chart's newest close (seconds old while it is open) before the stored
+    // DexScreener reading (minutes old: it showed $21K for a coin that had dumped to $2.4K).
+    // While its chart is open the header shows what the chart shows: the fast feed, else the newest candle.
+    mcUsd: fastMcUsd(mint) != null ? Math.round(fastMcUsd(mint)) : chartClose(mint) != null ? Math.round(chartClose(mint)) : curveLive(L, t) ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : (fastMcap(mint) != null ? Math.round(fastMcap(mint) * levelNow(mint)) : null) ?? (chartClose(mint) != null ? Math.round(chartClose(mint)) : null) ?? onScale(mint, t, t?.mcap) ?? (L ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : null),
     // How old the market cap above is: under a few seconds while it trades on the curve or the Pulse prices it.
     priceAgeMs: curveLive(L, t) ? now() - L.last : fastMcap(mint) != null ? 0 : t?.price_t ? now() - t.price_t : null,
     priceUsd: p.sol != null && solUsd ? p.sol * solUsd : t?.price ?? null,
-    athUsd: Math.max(L?.ath || 0, t?.peak_mcap || 0) || null,
-    progress: L?.progress ?? null, supply: SUPPLY,
+    athUsd: Math.max(onCirc(mint, L?.ath || 0), onScale(mint, t, t?.peak_mcap) || 0) || null,
+    progress: L?.progress ?? null, supply: curveLive(L, t) ? SUPPLY : supplyFor(mint, t),
     m5, holders, traders, early, dev,
     // Where the wallet tabs came from when not the ledger ("holders", "traders", "early" from Jupiter), and
     // Jupiter's audit of the coin (authorities, top holders, bots, bundles, the dev's launches) for Safety and Dev.
     // When the coin was really created (Jupiter), for its age: first_seen is when Blix met it, which for a coin
     // adopted late (another launchpad, or found after launch) can be days after.
-    created: J.asset?.created ?? null,
+    created: J.asset?.created ?? coinIndex.get(mint)?.created ?? null,
     jupiter: J.source ? { tabs: J.source, tradersWindow: J.tradersWindow || null } : null,
     audit: J.asset ? { ...(J.asset.audit || {}), holders: J.asset.holders, launchpad: J.asset.launchpad, organic: J.asset.organic } : null,
     info: {
-      holders: onLedger ? holders.count : viaJup ? holders.count : rf?.holders ?? J.asset?.holders ?? null,
-      top10: onLedger ? holders.top10 : rf?.top10 ?? (viaJup ? holders.top10 : null),
-      devPct: onLedger ? dev?.pct ?? rf?.dev ?? null : rf?.dev ?? null,
+      holders: viaChain || onLedger || viaJup ? holders.count : rf?.holders ?? J.asset?.holders ?? null,
+      top10: viaChain || onLedger || viaJup ? holders.top10 : rf?.top10 ?? null,
+      devPct: viaChain || onLedger ? dev?.pct ?? rf?.dev ?? null : rf?.dev ?? null,
       // Snipers' and bundlers' share still held: the ledger knows it only while the coin is on the curve.
       snipers: b?.genesis && !bonded ? groupPct(b, b.snipers) : null,
       bundle: b?.genesis && !bonded ? groupPct(b, b.bundle) : null,
@@ -301,8 +415,8 @@ function build(mint, top) {
       lpLocked,
       safety: rf?.safety ?? null,
       traders: bonded ? null : L?.traders ?? null,   // the feed counts curve traders only
-      source: onLedger ? (holders.partial ? "live ledger (partial: Blix missed this coin's first trades)" : "live ledger") : rf?.holders != null || rf?.top10 != null ? "RugCheck" : viaJup ? "Jupiter" : null,
-      checked: !onLedger && rf?.checked ? rf.checked : null,   // when that RugCheck reading was taken
+      source: viaChain ? "chain (live)" : onLedger ? (holders.partial ? "live ledger (partial: Blix missed this coin's first trades)" : "live ledger") : viaJup ? "Jupiter" : rf?.holders != null || rf?.top10 != null ? "RugCheck" : null,
+      checked: !onLedger && !viaChain && rf?.checked ? rf.checked : null,   // when that RugCheck reading was taken
     },
     tradesSince: ring?.trades[0]?.[0] ?? null,
     marks: chartMarks(ring, tagOf),
@@ -319,15 +433,14 @@ const extra = new Map();   // mint -> { t, busy, holders, recent, first, asset }
 function enrich(mint, want) {
   let e = extra.get(mint);
   if (!e) { e = { t: 0 }; extra.set(mint, e); if (extra.size > 150) extra.delete(extra.keys().next().value); }
-  if (e.busy || now() - e.t < 15_000) return e;
+  if (e.busy || now() - e.t < 8_000) return e;
   e.busy = true;
-  Promise.allSettled([want.holders ? jupHolders(mint) : null, want.recent ? jupRecentTrades(mint) : null, want.first ? jupFirstTrades(mint) : null, jupAsset(mint)])
-    .then(([h, r, f, a]) => {
-      if (h.value) e.holders = h.value;
-      if (r.value) e.recent = r.value;
-      if (f.value) e.first = f.value;
-      if (a.value) e.asset = a.value;
-    }).finally(() => { e.t = now(); e.busy = false; });
+  // Each answer is used the moment it lands (the holders took 5-7 s on a cold coin while they waited for the
+  // slowest of the four), so the page fills in piece by piece instead of all at the end.
+  const put = (k) => (v) => { if (v) e[k] = v; };
+  Promise.allSettled([want.holders ? jupHolders(mint).then(put("holders")) : null, want.recent ? jupRecentTrades(mint).then(put("recent")) : null,
+    want.first ? jupFirstTrades(mint).then(put("first")) : null, jupAsset(mint).then(put("asset"))])
+    .finally(() => { e.t = now(); e.busy = false; });
   return e;
 }
 
@@ -361,7 +474,9 @@ function jupLine(wallet, { held, w, supply, priceUsd, solUsd, tagOf, pool, lastA
   const avgBuyMc = w && w.tokIn > 0 ? Math.round((w.inUsd / w.tokIn) * supply) : null;
   const avgSellMc = w && w.tokOut > 0 ? Math.round((w.outUsd / w.tokOut) * supply) : null;
   return {
-    wallet, ...tagOf(wallet), ...(pool ? { label: "Pool" } : {}),
+    // A program's account (the bonding curve, an AMM pool, a vault) is never a person: RugCheck's and Jupiter's
+    // lists include the curve, which read as a 30% "holder" on every coin still bonding.
+    wallet, ...tagOf(wallet), ...(pool || !onCurve(wallet) ? { label: "Pool" } : {}),
     tokens: Math.round(held ?? 0), pct: held != null ? +((held / supply) * 100).toFixed(3) : 0, maxPct: 0,
     boughtSol: r2(inSol), soldSol: r2(outSol), valueSol: r2(valueSol), pnlSol: pnlUsd != null && solUsd ? r2(pnlUsd / solUsd) : null, realizedSol: null,
     boughtUsd: w ? +w.inUsd.toFixed(2) : null, soldUsd: w ? +w.outUsd.toFixed(2) : null, valueUsd: valueUsd == null ? null : +valueUsd.toFixed(2), pnlUsd: pnlUsd == null ? null : +pnlUsd.toFixed(2),
@@ -406,6 +521,8 @@ function fillFromJupiter(mint, { holders, traders, early, bonded, genesis, tagOf
     used.push("early");
   }
   out.source = used.length ? used : null;
+  out.recentTally = e.recent?.length ? tally(e.recent) : null;
+  out.poolWallets = new Set((e.holders?.list || []).filter((h) => h.pool).map((h) => h.wallet));
   out.firstTally = e.first?.length ? tally(e.first) : null;
   out.heldOf = (wallet) => held.get(wallet)?.tokens ?? null;
   out.supply = supply;
@@ -432,7 +549,7 @@ function devRows(creator) {
 }
 function devCoins(creator, self) {
   const seen = new Map(cached(`devrows:${creator}`, 120_000, () => devRows(creator)).map((x) => [x.mint, { ...x }]));
-  for (const [m, x] of seen) { const L = liveStats(m); if (L) Object.assign(x, { mcap: Math.round(L.mc), progress: L.progress, peak: Math.max(x.peak || 0, L.ath) || null }); }
+  for (const [m, x] of seen) { const L = liveStats(m); if (L) Object.assign(x, { mcap: Math.round(onCirc(m, L.mc)), progress: L.progress, peak: Math.max(x.peak || 0, onCirc(m, L.ath)) || null }); }
   const list = [...seen.values()].sort((a, b) => (b.t || 0) - (a.t || 0));
   return { count: list.length, others: list.filter((x) => x.mint !== self).length, list: list.slice(0, 40), window: "launches in the last 6 hours plus every coin Blix tracked" };
 }
@@ -446,12 +563,19 @@ export async function coinTrades(mint, { limit = 100 } = {}) {
   const L = liveStats(mint);
   const bonded = Boolean(t?.graduated) || (L?.progress ?? 0) >= 0.995;
   if (bonded && t?.pair) {
-    const pool = await poolTrades(mint, t, n);
-    if (!r?.trades.length) return pool;
-    const curve = liveTrades(mint, r, n);
+    const asked = poolTrades(mint, t, n);
+    if (!r?.trades.length) return asked;
+    // The radar's own chain rows go out at once when Jupiter and GeckoTerminal are slow (8 s, then 12 s, seen
+    // 2026-10-06): the pool's list is kept by both (jup.js, pools) and joins on the page's next ask.
+    const pool = await Promise.race([asked, new Promise((ok) => setTimeout(ok, 600, null))]);
+    if (!pool) { asked.catch(() => {}); return { ...liveTrades(mint, r, n), note: "Bonded: the pool's trades, live from the chain (Jupiter's list is still loading)." }; }
+    // The chain's rows are seconds ahead of Jupiter's (its index trails by 6-10 s); a transaction Jupiter has
+    // indexed is shown as Jupiter lists it (every leg of an arbitrage, exact), the newer ones as read from the chain.
+    const chain = liveTrades(mint, r, n);
     const seen = new Set(pool.trades.map((x) => x.tx).filter(Boolean));
-    const trades = [...pool.trades, ...curve.trades.filter((x) => !x.tx || !seen.has(x.tx))].sort((a, b) => b.t - a.t).slice(0, n);
-    return { ...pool, source: pool.trades.length ? "pool" : "live", trades, note: pool.trades.length ? "Bonded: the pool's trades, then the curve trades before bonding." : pool.note };
+    const newest = pool.trades.reduce((m, x) => Math.max(m, x.t), 0);
+    const trades = [...pool.trades, ...chain.trades.filter((x) => x.tx ? !seen.has(x.tx) : x.t > newest + 15_000)].sort((a, b) => b.t - a.t).slice(0, n);
+    return { ...pool, source: pool.trades.length ? "pool" : "live", trades, note: pool.trades.length ? "Bonded: the pool's trades, live from the chain, checked against Jupiter's list." : pool.note };
   }
   if (r?.trades.length) return cached(`trades:${mint}:${n}`, 500, () => liveTrades(mint, r, n));
   if (t?.pair) return poolTrades(mint, t, n);
@@ -462,11 +586,7 @@ function liveTrades(mint, r, n) {
   const b = books.get(mint);
   const creator = launchIndex.get(mint)?.creator || null;
   const tagOf = tagger(mint, b, creator);
-  const usd = feed.solUsd || null;
-  const trades = r.trades.slice(-n).reverse().map(([t, buy, sol, tokens, mcSol, wallet, slot]) => ({
-    t, side: buy ? "buy" : "sell", sol: +sol.toFixed(4), usd: usd ? +(sol * usd).toFixed(2) : null, tokens: tokens == null ? null : Math.round(tokens),
-    mcUsd: usd ? Math.round(mcSol * usd) : null, wallet, slot, ...tagOf(wallet),
-  }));
+  const trades = r.trades.slice(-n).reverse().map((x) => rowOut(mint, x, tagOf));
   return { mint, source: "live", since: r.trades[0]?.[0] ?? null, trades };
 }
 
@@ -477,7 +597,7 @@ export async function coinBigTrades(mint) {
   const t = tokenRow(mint) || {};
   try {
     const rows = await jupBigTrades(mint);
-    const supply = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : SUPPLY, tagOf = tagger(mint, books.get(mint), t.creator || null);
+    const supply = supplyFor(mint, t), tagOf = tagger(mint, books.get(mint), t.creator || null);
     return { mint, trades: rows.map((x) => ({ t: x.t, side: x.side, sol: x.sol, usd: x.usd, mcUsd: x.priceUsd ? Math.round(x.priceUsd * supply) : null, wallet: x.wallet, tx: x.tx, ...tagOf(x.wallet) })) };
   } catch (e) { return { mint, trades: [], note: e.message }; }
 }
@@ -491,7 +611,7 @@ async function poolTrades(mint, t, n) {
   try {
     const rows = await jupTrades(mint, n);
     if (rows.length) {
-      const supply = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : SUPPLY, tagOf = tagger(mint, books.get(mint), t.creator || null);
+      const supply = supplyFor(mint, t), tagOf = tagger(mint, books.get(mint), t.creator || null);
       const trades = rows.filter(sized).map((x) => ({ t: x.t, side: x.side, sol: x.sol, usd: x.usd, tokens: x.tokens, mcUsd: x.priceUsd ? Math.round(x.priceUsd * supply) : null, wallet: x.wallet, tx: x.tx, ...tagOf(x.wallet) }));
       return { mint, source: "pool", pool: t.pair, dex: t.dex, trades, note: "The pool's latest trades from Jupiter, refreshed every few seconds." };
     }
@@ -509,7 +629,7 @@ async function geckoTrades(mint, t, n) {
       coinStats.poolFetches++;
       const j = await gtGet(`${GT}/pools/${t.pair}/trades`, { timeout: 12_000 });
       const usd = feed.solUsd || null;
-      const supply = t.price > 0 && t.mcap > 0 ? t.mcap / t.price : SUPPLY;
+      const supply = supplyFor(mint, t);
       const creator = t.creator || null;
       const tagOf = tagger(mint, books.get(mint), creator);
       const trades = (j.data || []).map(({ attributes: a }) => {

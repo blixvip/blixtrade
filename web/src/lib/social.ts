@@ -15,7 +15,7 @@ export interface UserPage { profile: Profile; holdings: Holdings | null; activit
 export type FollowRow = ({ kind: "user" } & Profile) | { kind: "trader" | "wallet"; target: string; t: number; following: boolean };
 
 export async function social<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(`/api/account/${path}`, body === undefined ? { signal: AbortSignal.timeout(30_000) }
+  const r = await fetch(`api/account/${path}`, body === undefined ? { signal: AbortSignal.timeout(30_000) }
     : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
   if (!r.ok) throw Object.assign(new Error(j.error || String(r.status)), { status: r.status });

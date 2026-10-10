@@ -36,7 +36,7 @@ export async function viewAccount(main, { toast = (t) => alert(t) } = {}) {
   const signedOut = () => `<div class="page-head"><div><h1>Account</h1><p>Sign in and Blix makes you a Solana wallet for real buys and sells.</p></div></div>
     <div class="card acct-form">
       ${state.me?.google ? `<a class="btn acct-google" href="/api/account/google">${ICON.google}Sign in with Google</a>
-        <p class="note">Your first sign-in creates your wallet. Blix holds its key; you can export it at any time.</p>`
+        <p class="note">Your first sign-in creates your wallet. You can export your key at any time.</p>`
         : `<p class="note"><b>Google sign-in is not set up yet.</b> The owner needs to add a Google client id and secret (data/google.json).</p>`}
       ${failed ? `<p class="down">${esc(failed)}</p>` : ""}
     </div>`;

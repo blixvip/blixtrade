@@ -35,7 +35,7 @@ const gate = (err = "") => page(`<h1>Demo</h1><p>${err ? `<span class="err">${er
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 let appCsp = null;
 async function app(req) {
-  appCsp ||= `default-src 'none'; script-src 'sha256-${b64(await crypto.subtle.digest("SHA-256", enc.encode(APP.match(/<script>([\s\S]*?)<\/script>/)[1])))}' https://unpkg.com https://static.cloudflareinsights.com; connect-src 'self' https://api.geckoterminal.com https://cloudflareinsights.com; style-src 'unsafe-inline'; img-src 'self' data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
+  appCsp ||= `default-src 'none'; script-src 'sha256-${b64(await crypto.subtle.digest("SHA-256", enc.encode(APP.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/\r\n?/g, "\n"))))}' https://unpkg.com https://static.cloudflareinsights.com; connect-src 'self' https://api.geckoterminal.com https://cloudflareinsights.com; style-src 'unsafe-inline'; img-src 'self' data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
   return new Response(req.method === "HEAD" ? null : APP, { headers: { ...HEADERS, "content-security-policy": appCsp } });
 }
 

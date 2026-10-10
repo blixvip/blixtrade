@@ -76,8 +76,10 @@ export async function socialRoute(req, res, url, { me, send, fail, readBody, vau
     return true;
   }
 
-  // Everyone on Blix, most followed first; ?q= searches names and usernames.
+  // Everyone on Blix, most followed first; ?q= searches names and usernames. For the signed-in: the list carries
+  // every account's wallet address, which is not for anyone who happens by.
   if (p === "/api/account/people" && m === "GET") {
+    if (!me) throw fail(401, "Sign in to see who is on Blix.");
     const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
     for (const a of db.prepare("SELECT * FROM accounts").all()) profileOf(a);
     const rows = db.prepare(`SELECT a.*, p.username, p.display, (SELECT COUNT(*) FROM follows f WHERE f.kind = 'user' AND f.target = CAST(a.id AS TEXT)) followers

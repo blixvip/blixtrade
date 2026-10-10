@@ -7,12 +7,12 @@ import { PAGES } from "./pages.js";
 export const INDEXNOW_KEY = "abd478b11910a71b7800f8f8ebf4c1c5";
 
 // Order = priority in the sitemap and llms.txt.
-export const PUBLIC_PATHS = ["/api", "/mcp", "/pump-fun-api", "/gmgn-api", "/axiom-api", "/fomo-api"];
+export const PUBLIC_PATHS = ["/api", "/mcp", "/pump-fun-api", "/gmgn-api", "/axiom-api", "/fomo-api", "/pump-fun-tracker", "/solana-memecoin-screener", "/memecoin-paper-trading"];
 
 // The live terminal and its JSON API sit behind Blix's own key gate (401, noindex); only the docs are
 // meant for search engines.
-export const ROBOTS = `# trade.blixvip.com: public docs at /api, /mcp and the comparison pages.
-# The terminal itself is private (key required).
+// For trade.blixvip.com, which now only sends everything public on to blixvip.com (301s, see index.js).
+export const ROBOTS = `# BLIX: the landing at /, the terminal at /app (sign-in), public docs at /api, /mcp and the pages in the sitemap.
 User-agent: *
 Disallow: /api/
 Disallow: /img/
@@ -21,10 +21,14 @@ Allow: /
 Sitemap: ${ORIGIN}/sitemap.xml
 `;
 
+// Blix's entries in blixvip.com's sitemap: index.js adds them to the main site's own sitemap.xml.
+export const SITEMAP_URLS = [
+  ...PUBLIC_PATHS.map((p, i) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${UPDATED}</lastmod><changefreq>weekly</changefreq><priority>${i < 2 ? "0.9" : "0.8"}</priority></url>`),
+  `  <url><loc>${ORIGIN}/</loc><lastmod>${UPDATED}</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>`,
+].join("\n");
 export const SITEMAP = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>${ORIGIN}/</loc><lastmod>${UPDATED}</lastmod></url>
-${PUBLIC_PATHS.map((p) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${UPDATED}</lastmod></url>`).join("\n")}
+${SITEMAP_URLS}
 </urlset>
 `;
 

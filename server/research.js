@@ -4,7 +4,7 @@
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { ask, extractJson, claudeStatus, FAST_MODEL } from "./ai.js";
-import { askFast, fastReady as groqReady, fastStatus as groqStatus } from "./fast.js";
+import { askFast, fastReady as groqReady, fastStatus as groqStatus, fastProviderNow, geminiReady } from "./fast.js";
 import { askGrok, grokInstalled, grokStatus, grokBlocked, grokReady } from "./grok.js";
 import { trackGrade, considerCall, considerPick, playbookPrompt, playbook, evidence } from "./brain.js";
 import { liveStats, live } from "./livetrades.js";
@@ -58,7 +58,9 @@ export function setSolPrice(v) { if (v > 0) solUsd = v; }
 // Cached: it scans snapshots, and bondingProgress() calls it once per coin.
 let gradCache = { t: 0, v: 0 };
 function gradMcapUsd() {
-  if (Date.now() - gradCache.t < 5 * MIN && gradCache.v) return gradCache.v;
+  // The median bonding market cap moves with the SOL price only; re-learning it (a 24 h scan of snapshots,
+  // ~0.4 s) every 5 minutes held the radar up for nothing.
+  if (Date.now() - gradCache.t < 30 * MIN && gradCache.v) return gradCache.v;
   gradCache = { t: Date.now(), v: computeGradMcap() };
   return gradCache.v;
 }
@@ -85,9 +87,12 @@ export function candidates() {
   return candCache.v;
 }
 function readCandidates() {
-  const near = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND pair IS NOT NULL AND ${MEME} ORDER BY mcap DESC LIMIT 200`).all()
+  // A coin that already bonded can still read dex 'pumpfun' (DexScreener lists its old curve pair for a while,
+  // frozen at the bonding price): it is not near bonding, and showed in Final stretch at a price it no longer had.
+  const near = db.prepare(`SELECT * FROM tokens INDEXED BY tokens_curve_mcap WHERE status = 'active' AND dex = 'pumpfun' AND COALESCE(graduated, 0) = 0 AND pair IS NOT NULL AND ${MEME} ORDER BY mcap DESC LIMIT 200`).all()
     .map((t) => ({ ...t, progress: bondingProgress(t) })).filter((t) => t.progress >= 0.6 && t.progress < 0.995).sort((a, b) => b.progress - a.progress);
-  const bonded = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND ${MEME}
+  // Both lists read through their own partial index (db.js): ~1 ms instead of sorting every active token.
+  const bonded = db.prepare(`SELECT * FROM tokens INDEXED BY tokens_bonded_t WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND ${MEME}
     AND COALESCE(pair_created, first_seen) > ? ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(now() - 3 * 60 * MIN);
   return { near, bonded };
 }
@@ -428,6 +433,13 @@ async function gradeDeep(data, fast) {
       if (!e.blocked && !e.busy) throw e;
     }
   }
+  if (!claudeStatus().ready && geminiReady()) {
+    const { text, model, ms } = await askFast(SYSTEM_DEEP_CLAUDE(), prompt, 3000, { key: null, models: ["gemini-3.8-flash", "gemini-3.5-flash"] });
+    return { ...parse(text), model, ms, tier: "deep", searched: false };
+  }
+  // No AI left for a deep read (Grok out of credits or off, no Gemini, no Claude login on this machine): that is
+  // not the coin's fault. `busy` puts it back in the queue untouched instead of failing it and logging per coin.
+  if (!claudeStatus().ready) throw Object.assign(new Error(`No AI is available for a deep read right now (${claudeStatus().loginError})`), { busy: true });
   const t0 = Date.now();
   const { text, model, truncated } = await ask(SYSTEM_DEEP_CLAUDE(), prompt, 3000);
   if (truncated) throw new Error("the answer was cut off");
@@ -633,7 +645,9 @@ function pump() {
 
 // Pick up new candidates. With the fast lane on, rate every coin close to bonding or freshly bonded;
 // without it, only the strongest (Claude's hourly budget is small).
-export const scoutStats = { runs: 0, lastMs: 0, maxMs: 0 };
+export const scoutStats = { runs: 0, lastMs: 0, maxMs: 0, partMs: {} };
+// Worst time of each part of the scout over the last few minutes, so a slow one can be named (Health).
+const part = (name, t0) => { const ms = Math.round(performance.now() - t0); const p = scoutStats.partMs; p[name] = Math.max(ms, Math.round((p[name] || 0) * 0.98)); };
 function scout() {
   const t0 = now();
   try { scoutOnce(); } finally { scoutStats.runs++; scoutStats.lastMs = now() - t0; scoutStats.maxMs = Math.max(scoutStats.maxMs * 0.99, scoutStats.lastMs); }
@@ -646,6 +660,7 @@ function scoutOnce() {
   const fast = fastReady();
   // Straight from the live trade feed: a coin is queued the second it crosses 60% bonded with real buyers,
   // not at the next stored price refresh (which can be half a minute behind).
+  let t0 = performance.now();
   if (fast) {
     for (const [mint, s] of live) {
       if (!(s.progress >= 0.6 && s.progress < 0.995) || now() - s.last > 60_000 || s.traders.size < 20) continue;
@@ -658,9 +673,13 @@ function scoutOnce() {
       enqueue(mint, "near", Math.round(s.progress * 100) * 1000);
     }
   }
+  part("live", t0);
   // A coin read earlier that has since taken off gets a fresh read: the first one judged a different coin.
-  if (fast && scoutStats.runs % 5 === 0) {
-    for (const r of db.prepare("SELECT mint, mcap_at, COALESCE(reads, 1) reads FROM research WHERE status = 'done' AND t > ? AND t < ?").all(now() - 60 * MIN, now() - 4 * MIN)) {
+  // On its own second of the five (the stored-price pass below has another), newest reads first, 80 at most:
+  // the two together on one tick, over every read of the hour, were a 1-2 s stall.
+  t0 = performance.now();
+  if (fast && scoutStats.runs % 5 === 2) {
+    for (const r of db.prepare("SELECT mint, mcap_at, COALESCE(reads, 1) reads FROM research WHERE status = 'done' AND t > ? AND t < ? ORDER BY t DESC LIMIT 80").all(now() - 60 * MIN, now() - 4 * MIN)) {
       if (r.reads >= 3) continue;
       const t = q.getToken.get(r.mint);
       if (!t || t.status !== "active" || t.quarantine || json(t.safety)?.danger > 0) continue;
@@ -673,9 +692,11 @@ function scoutOnce() {
       logEvent("research", `$${t.symbol} is taking off (traction ${tr}, ${r.mcap_at > 0 ? `${(m / r.mcap_at).toFixed(1)}x since its last read` : "no price at its last read"}): reading it again`);
     }
   }
+  part("reread", t0);
   // The stored-price view of the same market moves every half minute at best, so it is read every fifth
   // second, not every second (each read walks the tracked coins and was the scout's whole cost).
   if (scoutStats.runs % 5 !== 0) return;
+  t0 = performance.now();
   const { near, bonded } = candidates();
   for (const t of near) {
     if (t.progress < (fast ? 0.6 : 0.8) || (t.vol_h1 || 0) < (fast ? 3000 : 8000) || json(t.safety)?.danger > 0) continue;
@@ -685,6 +706,7 @@ function scoutOnce() {
     if ((t.mcap || 0) < (fast ? 25000 : 35000) || (t.vol_h1 || 0) < (fast ? 5000 : 15000) || json(t.safety)?.danger > 0) continue;
     enqueue(t.mint, "bonded", Math.round((t.vol_h1 || 0) / 1000));
   }
+  part("stored", t0); t0 = performance.now();
   // Fast lane only: young coins that survived their first minutes with real trading get a first read too.
   if (fast && !quotaLow()) {
     const young = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND dex = 'pumpfun' AND graduated = 0 AND first_seen > ? AND mcap >= 15000 AND vol_h1 >= 4000 AND ${MEME}
@@ -696,6 +718,7 @@ function scoutOnce() {
       enqueue(t.mint, "new", Math.round((t.vol_h1 || 0) / 2000));
     }
   }
+  part("young", t0);
 }
 
 // Grok's rate-limit headers: when under 15% of requests are left, skip reads on brand-new coins.
@@ -704,9 +727,12 @@ function quotaLow() {
   return Boolean(l?.requestsLimit && l.requestsLeft < l.requestsLimit * 0.15);
 }
 
+// `paused`: no AI can read coins right now (every lane is out), so a queued read waits instead of coming within a
+// minute; the coin page says so rather than showing "Queued" forever.
+export const aiPaused = () => !fastReady() && !grokDeep() && !claudeStatus().ready && !geminiReady();
 export function researchFor(mint) {
-  const r = db.prepare("SELECT * FROM research WHERE mint = ?").get(mint);
-  return r && { ...r, report: json(r.report), sources: json(r.sources) };
+  const r = db.prepare("SELECT * FROM research WHERE mint = ?").get(mint), paused = aiPaused() || undefined;
+  return r ? { ...r, report: json(r.report), sources: json(r.sources), paused } : paused ? { paused } : null;
 }
 
 export function desk() {
@@ -754,11 +780,11 @@ export function queueStatus() {
 // Which AI is really doing each job right now, what was configured, and why they differ.
 export function providers() {
   const g = grokStatus(), c = claudeStatus(), k = groqStatus();
-  const name = { grok: "Grok", groq: "Groq", claude: "Claude", haiku: "Claude Haiku" };
+  const name = { grok: "Grok", groq: "Groq", gemini: "Gemini", claude: "Claude", haiku: "Claude Haiku" };
   const fastWant = settings.fastProvider === "groq" ? "groq" : settings.fastProvider === "claude" ? "haiku" : "grok";
-  const fastNow = grokOn() || grokQuick() ? "grok" : groqReady() && settings.fastProvider !== "claude" ? "groq" : claudeFast() ? "haiku" : null;
+  const fastNow = grokOn() || grokQuick() ? "grok" : groqReady() && settings.fastProvider !== "claude" ? fastProviderNow() : claudeFast() ? "haiku" : null;
   const deepWant = settings.deepProvider === "claude" ? "claude" : "grok";
-  const deepNow = grokDeep() ? "grok" : c.ready ? "claude" : null;
+  const deepNow = grokDeep() ? "grok" : c.ready ? "claude" : geminiReady() ? "gemini" : null;
   const grokWhy = !g.installed ? "Grok is not logged in on this PC (run `grok login`)" : g.blocked ? `${g.blocked}; re-checked ${g.blockedUntil ? `in ${Math.max(1, Math.round((g.blockedUntil - now()) / MIN))} min` : "soon"}` : g.coolingSecs ? `Grok is rate limited for ${g.coolingSecs}s` : null;
   // Grok taking the quick calls while the lane is set to Claude is the intended arrangement, not a fallback.
   const lane = (want, cur, why) => { const fb = want !== cur && !(want === "haiku" && cur === "grok"); return { configured: want, configuredName: name[want], actual: cur, actualName: cur ? name[cur] : null, fallback: fb, reason: fb ? why : null }; };
@@ -768,7 +794,7 @@ export function providers() {
     deep: { ...lane(deepWant, deepNow, deepWant === "grok" ? grokWhy : c.loginError), search: deepNow === "grok",
       note: deepNow === "claude" ? "Claude reads only what the radar gathered (X profile, linked tweet, website, news). It does not search X live." : null },
     grok: { installed: g.installed, ok: g.installed && !g.blocked && !g.coolingSecs, blocked: g.blocked, blockedUntil: g.blockedUntil, blockedSince: g.blockedSince, errors: g.errors, calls: g.calls, lastError: g.lastError, lastErrorAt: g.lastErrorAt, lastOk: g.lastOk, tier: g.tier, limits: g.limits, spend: g.spend, billing: g.billing },
-    groq: { configured: k.ready, errors: k.errors, calls: k.calls, lastError: k.lastError, cooling: k.cooling },
+    groq: { configured: Boolean(settings.groqKey), errors: k.errors, calls: k.calls, lastError: k.lastError, cooling: k.cooling, provider: k.provider, gemini: k.gemini },
     claude: { ok: c.ready, loginError: c.loginError, errors: c.errors, calls: c.calls, truncated: c.truncated, lastError: c.lastError, lastErrorAt: c.lastErrorAt, lastOk: c.lastOk, usedThisHour: grokDeep() ? 0 : inHour(deepHour), perHour: settings.researchPerHour },
     recovery: !g.installed ? "Run `grok login` once to use your SuperGrok subscription, or add a free Groq key in Settings."
       : g.blocked ? "Grok's subscription credits are spent for this billing period. The radar re-checks every 30 minutes and switches back by itself. Until then: add a free Groq key in Settings for fast reads, or leave it on Claude (slower, no live X search)." : null,

@@ -1,6 +1,9 @@
 // The right column: 5-minute flow, the paper trade panel at real quotes, your paper position,
 // token info (an icon and a figure each, green when clean, red when not), addresses and links.
-import { useTrade } from "@/lib/mode";
+import { SolanaLogo } from "@/components/brand";
+import { useFeeBps } from "@/components/ShareLink";
+import { SiteLogo, PADS, padOf, type Site } from "@/components/logos";
+import { depositPaper, loadPaperSizes, useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -13,27 +16,46 @@ import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, copy, SolAmt } from "./parts";
 import type { Pos } from "./position";
+import { usePositionCard } from "./PnlShare";
 
 const card = "surface p-3";
 const H = ({ children }: { children: ReactNode }) => <h3 className="label mb-2 flex items-center gap-1.5">{children}</h3>;
-const PaperTag = () => <span className="rounded-chip border border-warn/50 px-1 text-[0.625rem] font-bold text-warn">PAPER</span>;
-const RealTag = () => <span className="rounded-chip border border-up/50 px-1 text-[0.625rem] font-bold text-up">REAL</span>;
+const PaperTag = () => <span className="rounded-[5px] bg-info/15 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] text-info shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-info)_25%,transparent)]">PAPER</span>;
+const RealTag = () => <span className="flex items-center gap-1 rounded-[5px] bg-up/12 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] text-up shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-up)_25%,transparent)]"><i className="size-1.5 animate-pulse rounded-full bg-up" />LIVE</span>;
 
 export function Flow({ c }: { c: CoinData | null }) {
   const m = c?.m5;
   if (!m) return <div className={cn(card, "text-sm text-muted")}>No trades in the last 5 minutes.</div>;
   const total = m.buyUsd != null && m.sellUsd != null ? m.buyUsd + m.sellUsd : m.buys + m.sells;
   const share = total > 0 ? (m.buyUsd != null && m.sellUsd != null ? m.buyUsd : m.buys) / total : null;
-  const cell = (label: string, value: ReactNode, cls = "") => <div className="flex min-w-0 flex-col gap-0.5"><small className="text-xs text-muted">{label}</small><b className={cn("num truncate text-md font-semibold text-ink", cls)}>{value}</b></div>;
+  const net = m.netUsd ?? null, up = (net ?? 0) >= 0;
+  // Volume and net flow on top, then the buy/sell split as one bar with each side's count and dollars under it.
   return (
-    <div className={card}>
-      <div className="grid grid-cols-4 gap-1.5">
-        {cell("5m Vol", usdK(m.volUsd))}
-        {cell("Buys", <>{m.buys}{m.buyUsd != null && <span className="font-normal"> / {usdK(m.buyUsd)}</span>}</>, "text-up")}
-        {cell("Sells", <>{m.sells}{m.sellUsd != null && <span className="font-normal"> / {usdK(m.sellUsd)}</span>}</>, "text-down")}
-        {cell("Net Vol", m.netUsd == null ? "—" : usdSigned(m.netUsd), (m.netUsd ?? 0) >= 0 ? "text-up" : "text-down")}
+    <div className={cn(card, "flex flex-col gap-3 p-3.5")}>
+      <div className="flex items-end justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted"><i className="size-1.5 animate-pulse rounded-full bg-up" />5m volume</span>
+          <b className="num text-xl leading-none font-semibold tracking-tight text-ink">{usdK(m.volUsd)}</b>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <span className="text-xs font-medium text-muted">Net flow</span>
+          <span className={cn("num flex items-center gap-1 rounded-full px-2 py-0.5 text-sm font-semibold", net == null || net === 0 ? "bg-white/[0.06] text-ink-2" : up ? "bg-up/12 text-up" : "bg-down/12 text-down")}>
+            {net != null && net !== 0 && <svg viewBox="0 0 12 12" className={cn("size-2.5", !up && "rotate-180")} fill="currentColor" aria-hidden><path d="M6 2l4 6H2z" /></svg>}
+            {net == null ? "—" : usdSigned(net)}
+          </span>
+        </div>
       </div>
-      {share != null && <div className="mt-2 h-[3px] overflow-hidden rounded bg-down"><i className="block h-full bg-up" style={{ width: `${share * 100}%` }} /></div>}
+      {share != null && (
+        <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full">
+          <i className="block h-full rounded-l-full bg-gradient-to-r from-up/70 to-up transition-[width] duration-500" style={{ width: `${share * 100}%` }} />
+          <i className="block h-full flex-1 rounded-r-full bg-gradient-to-r from-down to-down/70" />
+        </div>
+      )}
+      <div className="num flex items-center justify-between text-sm">
+        <span className="flex items-baseline gap-1.5"><b className="font-semibold text-up">{m.buys}</b><span className="text-muted">buys{m.buyUsd != null && ` · ${usdK(m.buyUsd)}`}</span></span>
+        {share != null && <span className="text-xs text-muted">{Math.round(share * 100)}% buy</span>}
+        <span className="flex items-baseline gap-1.5"><span className="text-muted">{m.sellUsd != null && `${usdK(m.sellUsd)} · `}sells</span><b className="font-semibold text-down">{m.sells}</b></span>
+      </div>
     </div>
   );
 }
@@ -41,7 +63,11 @@ export function Flow({ c }: { c: CoinData | null }) {
 // Paper buys and sells filled at the real quote (Jupiter, or the curve's own math). Nothing is really bought.
 const SLIPS: [number, string][] = [[100, "1%"], [300, "3%"], [500, "5%"], [1000, "10%"]];
 const PCTS = [25, 50, 100];
-export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void }) {
+export function TradePanel({ mint, symbol, r, onDone, pos, solUsd }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void; pos: Pos; solUsd?: number | null }) {
+  // The live PnL card (./PnlShare.tsx), from the icon by the paper/real tag.
+  const pnlCard = usePositionCard(pos, mint, symbol, solUsd);
+  // Blix's fee on real-money trades (blix-vault feeBps), out of the SOL spent or received: less for an invited trader.
+  const FEE = useFeeBps() / 10_000;
   const open = (r.paper || []).filter((p) => p.status === "open");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [sizes, setSizes] = useState<number[]>([0.1, 0.25, 0.5, 1]);
@@ -58,10 +84,10 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
   const canSell = paperOn ? open.length > 0 : held > 0;
   const s = side === "sell" && !canSell ? "buy" : side;
   const realSell = !paperOn && s === "sell";
-  const key = s === "buy" ? `buy:${mint}:${sol}:${slip}` : realSell ? `sell:real:${pct}` : `sell:${open.map((p) => p.id).join(",")}:${pct}`;
+  const key = s === "buy" ? `buy:${mint}:${sol}:${slip}:${paperOn ? "p" : "r"}` : realSell ? `sell:real:${pct}` : `sell:${open.map((p) => p.id).join(",")}:${pct}`;
   const keyRef = useRef(key); keyRef.current = key;
 
-  useEffect(() => { api<{ sizes?: number[] }>("paper").then((d) => d.sizes?.length && setSizes(d.sizes)).catch(() => {}); }, []);
+  useEffect(() => { loadPaperSizes().then((s) => s && setSizes(s)); }, []);
   // Quote now, then every 3 s; a newer request wins.
   useEffect(() => {
     let alive = true, timer = 0;
@@ -69,7 +95,8 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
       if (realSell || !(s === "buy" ? sol > 0 : open[0])) { setQ(null); return; }
       try {
         // A sell takes the same share of every open paper row (each buy is its own row): their previews summed.
-        const quote = s === "buy" ? await api<Quote>(`quote?mint=${mint}&side=buy&amount=${sol}&slip=${slip}`)
+        // A real buy trades the SOL less Blix's fee, so it is quoted on that.
+        const quote = s === "buy" ? await api<Quote>(`quote?mint=${mint}&side=buy&amount=${paperOn ? sol : +(sol * (1 - FEE)).toFixed(9)}&slip=${slip}`)
           : await Promise.all(open.map((p) => api<Quote>(`paper/${p.id}/preview?pct=${pct}`))).then((qs) => ({ ...qs[0], outSol: qs.reduce((a, x) => a + (x.outSol || 0), 0), impactPct: Math.max(...qs.map((x) => x.impactPct ?? 0)) }));
         if (alive && keyRef.current === key) setQ({ key, quote });
       } catch (e) { if (alive && keyRef.current === key) setQ({ key, error: (e as Error).message }); }
@@ -87,52 +114,89 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
     setBusy(false);
   };
   const quote = q?.key === key ? q.quote : undefined, error = q?.key === key ? q.error : undefined;
-  const chip = (on: boolean) => cn("h-7 min-w-12 rounded-control border px-2 text-sm font-semibold num", on ? "border-accent bg-accent/15 text-ink" : "border-rule text-ink-2 hover:text-ink");
+  const buy = s === "buy";
+  // Buy is green, sell is red: the side colours the tabs, the picked chips, the amount box and the button.
+  const sideOn = buy ? "border-up/45 bg-up/[0.1] text-ink shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-up)_20%,transparent)]" : "border-down/45 bg-down/[0.1] text-ink shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-down)_20%,transparent)]";
+  const chip = (on: boolean) => cn("num h-8 rounded-lg border text-sm font-semibold transition-colors duration-150", on ? sideOn : "border-white/[0.07] bg-paper text-ink-2 hover:border-white/15 hover:text-ink");
+  const balance = paperOn ? (wallet ? wallet.cash.toFixed(3) : null) : me?.signedIn ? (me.wallet?.sol ?? 0).toFixed(3) : null;
+  const stat = (label: string, value: ReactNode, cls = "text-ink-2") => <div className="flex items-center justify-between gap-2"><span className="text-muted">{label}</span><b className={cn("truncate text-right font-semibold", cls)}>{value}</b></div>;
   return (
-    <div className={cn(card, "flex flex-col gap-2.5")}>
-      <div className="flex items-center gap-1.5">
-        <button onClick={() => setSide("buy")} className={cn("h-7 rounded-control px-4 text-sm font-bold", s === "buy" ? "bg-up text-on-fill" : "text-muted hover:text-ink")}>Buy</button>
-        <button onClick={() => setSide("sell")} disabled={!canSell} className={cn("h-7 rounded-control px-4 text-sm font-bold disabled:opacity-40", s === "sell" ? "bg-down text-on-fill" : "text-muted hover:text-ink")}>Sell</button>
-        <span className="ml-auto flex items-center gap-2">
-          {paperOn && wallet && <span className="num text-xs text-muted" title={`Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}`}>{wallet.cash.toFixed(3)} SOL</span>}
-          {!paperOn && <span className="num text-xs text-muted">{me?.signedIn ? `${(me.wallet?.sol ?? 0).toFixed(3)} SOL` : "not signed in"}</span>}
-          {paperOn ? <PaperTag /> : <RealTag />}
-        </span>
+    <div className={cn(card, "flex flex-col gap-3 p-3.5")}>
+      {/* Buy / Sell, then whose money: balance, PAPER or LIVE, the PnL card */}
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/[0.06] bg-paper p-1">
+        <button onClick={() => setSide("buy")} className={cn("h-8 rounded-lg text-sm font-bold transition-all duration-150", buy ? "bg-up text-on-fill shadow-[0_2px_12px_-2px_color-mix(in_oklch,var(--color-up)_60%,transparent)]" : "text-muted hover:text-ink")}>Buy</button>
+        <button onClick={() => setSide("sell")} disabled={!canSell} title={canSell ? undefined : "Nothing to sell yet"} className={cn("h-8 rounded-lg text-sm font-bold transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-35", !buy ? "bg-down text-on-fill shadow-[0_2px_12px_-2px_color-mix(in_oklch,var(--color-down)_60%,transparent)]" : "text-muted hover:text-ink")}>Sell</button>
       </div>
-      {s === "buy" ? (
-        <div className="flex flex-wrap gap-1.5">
-          {sizes.map((v) => <button key={v} onClick={() => setSol(v)} className={chip(sol === v)}>{v}</button>)}
-          <label className="flex h-7 flex-1 items-center gap-1 rounded-control border border-rule px-2 focus-within:border-accent">
-            <input type="number" min="0" step="0.01" value={sol || ""} onChange={(e) => setSol(Math.max(0, +e.target.value || 0))} aria-label="SOL to spend"
-              className="num w-full min-w-0 bg-transparent text-sm text-ink outline-none" />
-            <span className="text-xs text-muted">SOL</span>
+      <div className="flex items-center gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-sm text-muted" title={paperOn && wallet ? `Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}` : undefined}>
+          <Icon.wallets className="size-3.5 shrink-0" />
+          {balance != null ? <><SolanaLogo className="size-3 shrink-0" /><b className="num font-semibold text-ink">{balance}</b><span>SOL</span></> : <span>Not signed in</span>}
+        </span>
+        {paperOn && wallet && <button onClick={() => depositPaper(10).then((w) => toast(`Added 10 fake SOL. ${w.cash.toFixed(3)} SOL to spend.`), (e) => toast((e as Error).message))}
+          title="Add 10 fake SOL to the paper wallet (positions stay)" className="num rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-semibold text-ink-2 transition-colors hover:bg-white/[0.12] hover:text-ink">+10</button>}
+        <span className="ml-auto flex items-center gap-1.5">
+          {paperOn ? <PaperTag /> : <RealTag />}
+          <Tip tip="PnL card: your live result as a picture to save or share">
+            <button onClick={pnlCard.open} aria-label="PnL card" className="grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-white/[0.07] hover:text-ink"><Icon.image className="size-3.5" /></button>
+          </Tip>
+        </span>
+        {pnlCard.dialog}
+      </div>
+
+      {buy ? (
+        <div className="flex flex-col gap-2">
+          <label className={cn("flex h-12 items-center gap-2.5 rounded-xl border bg-paper px-3.5 transition-colors duration-150 focus-within:border-up/50", "border-white/[0.08] hover:border-white/15")}>
+            <SolanaLogo className="size-4.5 shrink-0" />
+            <input type="number" min="0" step="0.01" value={sol || ""} onChange={(e) => setSol(Math.max(0, +e.target.value || 0))} aria-label="SOL to spend" placeholder="0.0"
+              className="num w-full min-w-0 bg-transparent text-xl font-semibold tracking-tight text-ink outline-none placeholder:text-muted/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+            <span className="text-sm font-semibold text-muted">SOL</span>
           </label>
+          <div className="grid grid-cols-4 gap-1.5">{sizes.map((v) => <button key={v} onClick={() => setSol(v)} className={chip(sol === v)}>{v}</button>)}</div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-1.5">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} className={chip(pct === v)}>{v}%</button>)}</div>
+        <div className="grid grid-cols-3 gap-1.5">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} className={cn(chip(pct === v), "h-10 text-md")}>{v === 100 ? "All" : `${v}%`}</button>)}</div>
       )}
-      {s === "buy" && (
-        <div className="flex items-center gap-1.5 text-xs text-muted">
-          <span className="mr-1">Slippage</span>
-          {SLIPS.map(([v, l]) => <button key={v} onClick={() => setSlip(v)} className={cn("h-5 rounded-chip border px-1.5 font-semibold", slip === v ? "border-accent text-ink" : "border-rule hover:text-ink")}>{l}</button>)}
+      {buy && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted"><Icon.sliders className="size-3.5" />Slippage</span>
+          <div role="radiogroup" aria-label="Slippage" className="flex gap-0.5 rounded-lg bg-paper p-0.5">
+            {SLIPS.map(([v, l]) => <button key={v} role="radio" aria-checked={slip === v} onClick={() => setSlip(v)}
+              className={cn("num h-6 rounded-md px-2 text-xs font-semibold transition-colors duration-150", slip === v ? "bg-paper-5 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.08)]" : "text-muted hover:text-ink-2")}>{l}</button>)}
+          </div>
         </div>
       )}
-      <div className="min-h-16 rounded-control border border-rule p-2.5 text-sm">
-        {realSell ? <span className="text-ink-2">Sells {pct}% of the {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol} in your wallet for SOL, at the market price.</span> : error ? <span className="text-down">{error}</span> : !quote ? <span className="text-muted">Quoting…</span> : (
+
+      <div className="min-h-[5.5rem] rounded-xl border border-white/[0.06] bg-paper/60 p-3 text-sm">
+        {realSell ? <span className="text-ink-2">Sells {pct}% of the {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol} in your wallet for SOL, at the market price.</span>
+          : error ? <span className="text-down">{error}</span>
+          : !quote ? <div className="flex flex-col gap-2"><i className="h-5 w-2/3 animate-pulse rounded bg-white/[0.06]" /><i className="h-3 w-full animate-pulse rounded bg-white/[0.04]" /><i className="h-3 w-5/6 animate-pulse rounded bg-white/[0.04]" /></div>
+          : (
           <>
-            <div className="mb-1.5 flex items-baseline gap-2 text-muted">You get <b className="num text-lg font-semibold text-ink">{s === "buy" ? `${tokN(quote.outTokens)} ${symbol}` : <SolAmt v={quote.outSol} />}</b>{quote.usdIn != null && <span>≈ {usdK(s === "buy" ? quote.usdIn : quote.usdOut)}</span>}</div>
-            <div className="num grid grid-cols-[auto_1fr_auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted">
-              <span>Avg fill MC</span><b className="text-right font-semibold text-ink-2">{usdK(quote.avgMcapUsd)}</b>
-              <span>Now MC</span><b className="text-right font-semibold text-ink-2">{usdK(quote.spotMcapUsd)}</b>
-              <span>Price impact</span><b className={cn("text-right font-semibold", (quote.impactPct ?? 0) > 5 ? "text-down" : "text-ink-2")}>{quote.impactPct != null ? `${quote.impactPct.toFixed(2)}%` : "—"}</b>
-              <span>Route</span><b className="truncate text-right font-semibold text-ink-2">{quote.route?.join(" › ") || "—"}</b>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-xs font-medium text-muted">You get</span>
+              {quote.usdIn != null && <span className="num text-xs text-muted">≈ {usdK(buy ? quote.usdIn : quote.usdOut)}</span>}
+            </div>
+            <b className="num mt-0.5 mb-2.5 block truncate text-xl font-semibold tracking-tight text-ink">{buy ? <>{tokN(quote.outTokens)} <span className="text-ink-2">{symbol}</span></> : <SolAmt v={quote.outSol} />}</b>
+            <div className="num grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/[0.06] pt-2.5 text-xs">
+              {stat("Avg fill MC", usdK(quote.avgMcapUsd))}
+              {stat("Now MC", usdK(quote.spotMcapUsd))}
+              {stat("Impact", quote.impactPct != null ? `${quote.impactPct.toFixed(2)}%` : "—", (quote.impactPct ?? 0) > 5 ? "text-down" : (quote.impactPct ?? 0) > 2 ? "text-warn" : "text-ink-2")}
+              {stat("Route", quote.route?.join(" › ") || "—")}
+              {!paperOn && stat("Blix fee", buy ? `${+(sol * FEE).toFixed(5)} SOL` : `${+(FEE * 100).toFixed(2)}%`)}
             </div>
           </>
         )}
       </div>
-      <button onClick={submit} disabled={busy || (!quote && !realSell)}
-        className={cn("h-10 rounded-control text-md font-bold text-on-fill transition-transform active:scale-[0.99] disabled:opacity-45", s === "buy" ? "bg-up" : "bg-down")}>
-        {busy ? "Placing…" : `${paperOn ? "Paper " : ""}${s === "buy" ? `${paperOn ? "buy" : "Buy"} ${sol} SOL of $${symbol}` : `${paperOn ? "sell" : "Sell"} ${pct}%`}`}
+      {/* Paper fills at once (the server prices it itself), so it never waits for the preview; real money does. */}
+      <button onClick={submit} disabled={busy || (!quote && !realSell && !paperOn)}
+        className={cn("group relative h-12 overflow-hidden rounded-xl text-md font-bold text-on-fill transition-[transform,filter] duration-150 hover:brightness-110 active:scale-[0.985] disabled:opacity-45 disabled:hover:brightness-100",
+          buy ? "bg-gradient-to-b from-up to-[color-mix(in_oklch,var(--color-up)_82%,black)] shadow-[0_8px_24px_-10px_var(--color-up),inset_0_1px_0_oklch(100%_0_0/0.25)]"
+            : "bg-gradient-to-b from-down to-[color-mix(in_oklch,var(--color-down)_82%,black)] shadow-[0_8px_24px_-10px_var(--color-down),inset_0_1px_0_oklch(100%_0_0/0.25)]")}>
+        <span className="relative flex items-center justify-center gap-2">
+          {busy ? <><i className="size-4 animate-spin rounded-full border-2 border-on-fill/30 border-t-on-fill" />Placing…</>
+            : <span>{buy ? <>Buy <span className="num">{sol}</span> SOL of ${symbol}</> : <>Sell {pct === 100 ? "all" : `${pct}%`} of ${symbol}</>}</span>}
+          {paperOn && !busy && <span className="rounded-[5px] bg-black/15 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] uppercase">Paper</span>}
+        </span>
       </button>
     </div>
   );
@@ -140,8 +204,10 @@ export function TradePanel({ mint, symbol, r, onDone }: { mint: string; symbol: 
 
 // Your position in this coin (worked out in ./position.ts): the paper one while Paper is on, the real
 // wallet's while it is off. Average buy and sell are market caps per token, the chart's dashed lines.
-export function Position({ pos }: { pos: Pos }) {
+export function Position({ pos, mint, symbol, solUsd }: { pos: Pos; mint: string; symbol: string; solUsd?: number | null }) {
   const me = useMe((st) => st.me);
+  // The live PnL card of this position (./PnlShare.tsx).
+  const pnlCard = usePositionCard(pos, mint, symbol, solUsd);
   const { paper: paperOn, has, bought, sold, holding, pnl, entry, exit, mcapNow } = pos;
   const cell = (label: ReactNode, value: ReactNode, cls = "") => (
     <div className="flex min-w-0 flex-col gap-0.5"><small className="flex items-center gap-1 text-xs whitespace-nowrap text-muted">{label}</small><b className={cn("num text-md font-semibold text-ink", cls)}>{value}</b></div>
@@ -150,10 +216,13 @@ export function Position({ pos }: { pos: Pos }) {
   const move = entry && mcapNow ? (mcapNow / entry - 1) * 100 : null;
   return (
     <div className={card}>
-      <H>Your position {paperOn ? <PaperTag /> : <RealTag />}</H>
+      <H>Your position {paperOn ? <PaperTag /> : <RealTag />}
+        <button onClick={pnlCard.open} title="Your live PnL card, to save or share" className="ml-auto flex h-6 items-center gap-1 rounded-full bg-ink px-2.5 text-xs font-semibold tracking-normal text-on-fill normal-case hover:bg-focus"><Icon.image className="size-3" />Share PnL</button>
+      </H>
+      {pnlCard.dialog}
       <div className="grid grid-cols-4 gap-1.5">
         {cell("Bought", <SolAmt v={bought} />)}{cell("Sold", <SolAmt v={sold} />)}{cell("Holding", holding == null ? "—" : <SolAmt v={holding} />)}
-        {cell("PnL", pnl == null ? "—" : <><SolAmt v={pnl} signed />{bought ? <span className="text-xs font-normal"> {Math.round((pnl / bought) * 100)}%</span> : null}</>, pnl == null ? "" : pnl >= 0 ? "text-up" : "text-down")}
+        <button onClick={pnlCard.open} title="Open your PnL card" className="min-w-0 text-left hover:opacity-80">{cell("PnL", pnl == null ? "—" : <><SolAmt v={pnl} signed />{bought ? <span className="text-xs font-normal"> {Math.round((pnl / bought) * 100)}%</span> : null}</>, pnl == null ? "" : pnl >= 0 ? "text-up" : "text-down")}</button>
       </div>
       {has && (
         <Tip tip="Market caps. Averages are per token: all the SOL paid (or got) over all the tokens bought (or sold).">
@@ -225,7 +294,7 @@ export function Addresses({ r, c }: { r: TokenDetail; c: CoinData | null }) {
         className="flex min-w-0 flex-1 items-center gap-1.5 rounded-control border border-rule bg-paper-3 px-2 py-1 text-ink-2 hover:border-rule-2 hover:text-ink">
         <span className="font-outlier text-xs">{shortAddr(a)}</span><Icon.copy className="ml-auto size-3 text-muted" />
       </button>
-      <a href={`https://solscan.io/${kind}/${a}`} target="_blank" rel="noreferrer" aria-label="Open on Solscan" className="grid size-7 place-items-center rounded-chip text-muted hover:bg-paper-4 hover:text-ink"><CIcon.external className="size-3.5" /></a>
+      <a href={`https://solscan.io/${kind}/${a}`} target="_blank" rel="noreferrer" aria-label="Open on Solscan" title="Open on Solscan" className="grid size-7 place-items-center rounded-chip text-muted hover:bg-paper-4 hover:text-ink"><SiteLogo site="solscan" className="size-4" /></a>
     </div>
   );
   return <div className={cn(card, "flex flex-col gap-1.5")}>{row("CA", t.mint, "token")}{dev && row("DA", dev, "account")}</div>;
@@ -233,13 +302,18 @@ export function Addresses({ r, c }: { r: TokenDetail; c: CoinData | null }) {
 
 export function Links({ r }: { r: TokenDetail }) {
   const t = r.token;
-  const list: [string, string][] = [
-    ["DexScreener", `https://dexscreener.com/solana/${t.pair || t.mint}`], ["pump.fun", `https://pump.fun/coin/${t.mint}`], ["RugCheck", `https://rugcheck.xyz/tokens/${t.mint}`],
-    ["GMGN", `https://gmgn.ai/sol/token/${t.mint}`], ["Axiom", `https://axiom.trade/meme/${t.pair || t.mint}`], ["Solscan", `https://solscan.io/token/${t.mint}`],
+  const pad = padOf({ mint: t.mint, pool: (t as { pool?: string | null }).pool, dex: (t as { dex?: string | null }).dex });
+  const list: [string, string, Site][] = [
+    ["DexScreener", `https://dexscreener.com/solana/${t.pair || t.mint}`, "dexscreener"],
+    ...(PADS[pad] ? [[PADS[pad].name, PADS[pad].url(t.mint), PADS[pad].logo] as [string, string, Site]] : []),
+    ["GeckoTerminal", `https://www.geckoterminal.com/solana/pools/${t.pair || t.mint}`, "geckoterminal"], ["Birdeye", `https://birdeye.so/token/${t.mint}?chain=solana`, "birdeye"],
+    ["RugCheck", `https://rugcheck.xyz/tokens/${t.mint}`, "rugcheck"], ["Bubblemaps", `https://app.bubblemaps.io/sol/token/${t.mint}`, "bubblemaps"],
+    ["GMGN", `https://gmgn.ai/sol/token/${t.mint}`, "gmgn"], ["Axiom", `https://axiom.trade/meme/${t.pair || t.mint}`, "axiom"], ["Photon", `https://photon-sol.tinyastro.io/en/lp/${t.pair || t.mint}`, "photon"],
+    ["Jupiter", `https://jup.ag/swap/SOL-${t.mint}`, "jupiter"], ["Solscan", `https://solscan.io/token/${t.mint}`, "solscan"],
   ];
   return (
-    <div className={cn(card, "flex flex-wrap gap-x-3 gap-y-1 text-sm")}>
-      {list.map(([l, href]) => <a key={l} href={href} target="_blank" rel="noreferrer" className="text-ink-2 hover:text-accent">{l}</a>)}
+    <div className={cn(card, "flex flex-wrap gap-1.5 text-sm")}>
+      {list.map(([l, href, logo]) => <a key={l} href={href} target="_blank" rel="noopener noreferrer" title={`Open on ${l}`} className="flex h-7 items-center gap-1.5 rounded-full border border-rule-2 bg-paper-3/60 px-2.5 text-xs font-semibold text-ink-2 transition-colors hover:border-muted hover:text-ink"><SiteLogo site={logo} className="size-4" />{l}</a>)}
     </div>
   );
 }

@@ -4,7 +4,7 @@
 //   fresh copy at the edge  -> served from there
 //   otherwise               -> asked from the PC (4 s limit), kept at the edge, a few views also kept in KV
 //   PC not answering        -> the last copy, however old, marked `x-blix-stale: <seconds>`
-// Anything that is not a visitor's read (the owner with the access key, any write) goes straight to the PC.
+// Anything that is not a visitor's read (a member's request, any write) goes straight to the server.
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
 const API = [
   // [path, seconds a copy stays fresh, seconds between KV snapshots (0 = none), query params kept]
@@ -20,11 +20,10 @@ const API = [
 ];
 const STATIC_EXT = /\.(html|js|css|svg|png|jpg|webp|ico|woff2|json|txt)$/;
 
-// Is this a visitor's read? The owner's browser carries the access key (cookie, or ?key= the first time).
-export function isVisitorRead(method, url, cookie) {
-  if (method !== "GET" && method !== "HEAD") return false;
-  if (url.searchParams.has("key")) return false;
-  return !/(?:^|;\s*)blix_key=/.test(cookie || "");
+// Is this a visitor's read? Everything someone not signed in (no member session, index.js) does is a read; a write
+// is refused there.
+export function isVisitorRead(method) {
+  return method === "GET" || method === "HEAD";
 }
 
 // How a visitor's read is kept: { key, ttl, snap } or null when it must not be kept at all.

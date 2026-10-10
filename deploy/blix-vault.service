@@ -1,0 +1,32 @@
+[Unit]
+Description=Blix wallet signing service (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=blix-vault
+Group=blix-vault
+WorkingDirectory=/opt/blix-live-vault
+ExecStart=/usr/bin/node --no-warnings /opt/blix-live-vault/server/server.js
+Environment=BLIX_VAULT_HOME=/var/lib/blix-vault/keys
+Environment=BLIX_VAULT_DATA=/var/lib/blix-vault/data
+StateDirectory=blix-vault
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -47,7 +47,9 @@ export function themesFor(t) {
 let shared = { t: 0, v: null };
 export function computeNarratives(opts = {}) {
   const plain = !opts.launches?.length && opts.recentMin == null && opts.baseMin == null;
-  if (plain && shared.v && Date.now() - shared.t < 20_000) return shared.v;
+  // Six hours of coins, every theme's pattern run over each: ~1-2 s of work that blocked the radar. Every
+  // AI read asks for it; the picture moves over minutes, so one build serves two minutes.
+  if (plain && shared.v && Date.now() - shared.t < 120_000) return shared.v;
   const v = buildNarratives(opts);
   if (plain) shared = { t: Date.now(), v };
   return v;

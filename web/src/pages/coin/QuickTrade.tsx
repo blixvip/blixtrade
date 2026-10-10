@@ -4,32 +4,56 @@
 // Drag it by its title bar. Whether it is open, where it sits and its presets are kept in this browser.
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from "react";
 import { create } from "zustand";
-import { SolanaLogo } from "@/components/brand";
 import { Tip } from "@/components/ui/tooltip";
 import { post } from "@/lib/api";
 import { tokN, usdK } from "@/lib/coin";
-import { useTrade } from "@/lib/mode";
+import { setPaper, useTrade } from "@/lib/mode";
+import { openExchange } from "@/lib/modals";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, SolAmt } from "./parts";
+import { usePic } from "@/lib/pics";
 import type { Pos } from "./position";
+import { usePositionCard } from "./PnlShare";
 
-export const useQuick = create<{ open: boolean }>(() => ({ open: store.get("qt:open", false) }));
-export const toggleQuick = () => { const open = !useQuick.getState().open; store.set("qt:open", open); useQuick.setState({ open }); };
+import { useQuick, toggleQuick } from "@/lib/quick";
 
 const SELLS = [25, 50, 75, 100];
 type At = { x: number; y: number };
+// Axiom's P1 / P2 / P3: three sets of presets, one picked at a time, each with its own buy sizes, sell shares and
+// slippage. Empty buys: the paper desk's sizes (below). The first set starts from what the panel kept before.
+type Preset = { buys: number[]; sells: number[]; slip: number };
+const SLIP_DEFAULT = 300;
+const loadPresets = (): Preset[] => {
+  const kept = store.get<Preset[] | null>("qt:presets", null);
+  if (Array.isArray(kept) && kept.length === 3) return kept;
+  const first: Preset = { buys: store.get("qt:buys", []), sells: store.get("qt:sells", SELLS), slip: store.get("trade:slip", SLIP_DEFAULT) };
+  return [first, { buys: [], sells: SELLS, slip: 1000 }, { buys: [], sells: SELLS, slip: 2500 }];
+};
+const slipTxt = (bps: number) => `${+(bps / 100).toFixed(2)}%`;
+// One store for every copy of the panel (the docked one stays mounted while the floating one is out), so an edit
+// or a pick in one is the same in the other.
+const usePresets = create<{ list: Preset[]; pi: number }>(() => ({ list: loadPresets(), pi: Math.min(2, Math.max(0, store.get("qt:preset", 0))) }));
+const pickPreset = (pi: number) => { store.set("qt:preset", pi); usePresets.setState({ pi }); };
+const savePreset = (next: Preset) => { const list = usePresets.getState().list.map((p, i) => (i === usePresets.getState().pi ? next : p)); store.set("qt:presets", list); usePresets.setState({ list }); };
+// A preset field's text is good: a buy above 0 SOL (at most 1000), a sell 1-100 %, slippage 0.1-50 %.
+const fieldOk = (i: number, text: string) => {
+  const v = Number(text);
+  if (!text.trim() || !isFinite(v)) return false;
+  return i < 4 ? v > 0 && v <= 1000 : i < 8 ? v >= 1 && v <= 100 : v >= 0.1 && v <= 50;
+};
 
 // `docked`: the same panel sitting in the coin page's right column, always there; its pop-out button floats it
 // (and the docked one steps aside until the floating one is closed).
-export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false }: { mint: string; symbol: string; sizes: number[]; pos: Pos; onDone: () => void; docked?: boolean }) {
+export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, away = false }: { mint: string; symbol: string; sizes: number[]; pos: Pos; onDone: () => void; docked?: boolean; away?: boolean }) {
   const open = useQuick((s) => s.open);
   const paperOn = useTrade((s) => s.paper), wallet = useTrade((s) => s.wallet), me = useMe((s) => s.me);
-  const [buys, setBuys] = useState<number[]>(() => store.get("qt:buys", []));
-  const [sells, setSells] = useState<number[]>(() => store.get("qt:sells", SELLS));
-  const [edit, setEdit] = useState<string[] | null>(null);     // the eight preset fields while editing
+  const presets = usePresets((s) => s.list), pi = usePresets((s) => s.pi);
+  const pick = (i: number) => { pickPreset(i); setEdit(null); };
+  const { buys, sells, slip } = presets[pi];
+  const [edit, setEdit] = useState<string[] | null>(null);     // the nine preset fields while editing (4 buys, 4 sells, slippage %)
   const [busy, setBusy] = useState<string | null>(null);
   const [at, setAt] = useState<At | null>(() => store.get<At | null>("qt:at", null));
   const box = useRef<HTMLDivElement>(null);
@@ -52,6 +76,9 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false }:
     addEventListener("resize", fit);
     return () => removeEventListener("resize", fit);
   }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The live PnL card (./PnlShare.tsx): the header's card icon and the PnL figure open it. (A hook: above the
+  // early return below, so the panel calls the same hooks whether it is showing or not.)
+  const pnlCard = usePositionCard(pos, mint, symbol);
   if (docked ? open : !open) return null;
 
   const down = (e: PE<HTMLDivElement>) => {
@@ -69,7 +96,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false }:
   const go = async (key: string, buy: boolean, v: number) => {
     if (busy) return;
     setBusy(key);
-    const slippageBps = store.get("trade:slip", 300);
+    const slippageBps = slip;
     const ok = await trade(buy ? { side: "buy", mint, symbol, sol: v, slippageBps } : { side: "sell", mint, symbol, pct: v, slippageBps },
       // Paper: a buy opens a row at the live quote; a sell takes the same share of every open row.
       async () => {
@@ -79,81 +106,149 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false }:
     setBusy(null);
     if (ok) onDone();
   };
+  // Saved only when every field is good; a bad one stays open, outlined red, with what it takes in its tooltip.
   const save = () => {
-    if (!edit) return;
+    if (!edit || !edit.every((x, i) => fieldOk(i, x))) return;
     const n = edit.map((x) => Number(x));
-    const b = n.slice(0, 4), s = n.slice(4).map((x) => Math.min(100, Math.round(x)));
-    if (b.every((x) => x > 0)) { setBuys(b); store.set("qt:buys", b); }
-    if (s.every((x) => x > 0)) { setSells(s); store.set("qt:sells", s); }
+    savePreset({ buys: n.slice(0, 4).sort((x, y) => x - y), sells: n.slice(4, 8).map((x) => Math.round(x)), slip: Math.round(n[8] * 100) });
     setEdit(null);
   };
 
   const cash = paperOn ? wallet?.cash ?? null : me?.signedIn ? me.wallet?.sol ?? 0 : null;
   const pnlPct = pos.pnl != null && pos.bought ? (pos.pnl / pos.bought) * 100 : null;
   const field = (i: number, suffix: ReactNode) => (
-    <label key={i} className="flex h-8 min-w-0 items-center gap-0.5 rounded-control border border-accent/60 bg-paper-3 px-1.5 focus-within:border-accent">
-      <input value={edit![i]} onChange={(e) => setEdit((x) => x && x.map((y, j) => (j === i ? e.target.value : y)))} onKeyDown={(e) => e.key === "Enter" && save()}
-        inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in SOL` : `Sell preset ${i - 3} in percent`}
+    <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? "More than 0 SOL" : i < 8 ? "1 to 100 %" : "0.1 to 50 %"}
+      className={cn("flex h-10 min-w-0 items-center gap-0.5 rounded-lg border bg-paper px-1.5 transition-colors", fieldOk(i, edit![i]) ? "border-white/15 focus-within:border-white/35" : "border-down/70")}>
+      <input value={edit![i]} onChange={(e) => setEdit((x) => x && x.map((y, j) => (j === i ? e.target.value : y)))}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") { e.stopPropagation(); setEdit(null); } }}
+        inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in SOL` : i < 8 ? `Sell preset ${i - 3} in percent` : "Slippage in percent"}
         className="num w-full min-w-0 bg-transparent text-center text-sm font-semibold text-ink outline-none" />
       <span className="text-[0.625rem] text-muted">{suffix}</span>
     </label>
   );
-  const row = (label: string, right: ReactNode) => (
-    <div className="flex items-baseline justify-between gap-2 text-xs"><span className="label">{label}</span><span className="num truncate text-muted">{right}</span></div>
+  // Buttons: calm dark tiles, the figure in its side's colour (green buys, red sells); hovering lights the tile in
+  // that colour. One that can't trade right now (not enough SOL, nothing held) stays dim; a buy short of SOL opens
+  // Deposit instead (live), a sell with nothing held does nothing.
+  const btn = (side: "buy" | "sell", can: boolean) => cn("num group relative inline-flex h-10 min-w-0 items-center justify-center gap-1 overflow-hidden rounded-lg border border-white/[0.06] bg-paper text-[0.9375rem] leading-none font-semibold",
+    "transition-[background-color,border-color,box-shadow,transform,color] duration-150 active:scale-[0.96]",
+    side === "buy" ? "text-up" : "text-down",
+    can ? (side === "buy" ? "hover:border-up/45 hover:bg-up/[0.1] hover:shadow-[0_0_16px_-6px_var(--color-up)]" : "hover:border-down/45 hover:bg-down/[0.1] hover:shadow-[0_0_16px_-6px_var(--color-down)]")
+      : "cursor-default opacity-40 active:scale-100");
+  const broke = !paperOn && cash != null && cash < Math.min(...buyP);
+  const row = (label: string, tone: string, right: ReactNode) => (
+    <div className="flex items-center justify-between gap-2 px-0.5 text-xs">
+      <span className={cn("font-semibold", tone)}>{label}</span>
+      <span className="num truncate text-muted">{right}</span>
+    </div>
   );
+  const spin = <i className="size-3.5 animate-spin rounded-full border-2 border-current/25 border-t-current" />;
   return (
     <div ref={box} role={docked ? "region" : "dialog"} aria-label="Instant trade" style={docked ? undefined : { left: at?.x ?? -9999, top: at?.y ?? 0 }}
-      className={docked ? "overflow-hidden rounded-card border border-rule bg-paper-2" : "fixed z-30 w-[min(300px,calc(100vw-16px))] overflow-hidden rounded-card border border-rule-2 bg-paper-2/95 shadow-sheet backdrop-blur-md"}>
+      className={cn("overflow-hidden rounded-2xl border border-white/[0.07] bg-paper-2",
+        docked ? "" : "fixed z-30 w-[min(312px,calc(100vw-16px))] bg-paper-2/90 shadow-[0_24px_60px_-16px_oklch(0%_0_0/0.8),inset_0_1px_0_oklch(100%_0_0/0.05)] backdrop-blur-xl")}>
       <div onPointerDown={docked ? undefined : down} onPointerMove={docked ? undefined : move} onPointerUp={docked ? undefined : up} onPointerCancel={docked ? undefined : up}
-        className={cn("flex h-9 items-center gap-2 border-b border-rule px-3 select-none", !docked && "cursor-grab touch-none active:cursor-grabbing")}>
-        <Icon.bolt className="size-3.5 text-accent" />
-        <b className="text-sm font-semibold text-ink">Quick buy / sell</b>
-        <span className={cn("rounded-chip border px-1 text-[0.625rem] font-bold", paperOn ? "border-warn/50 text-warn" : "border-up/50 text-up")}>{paperOn ? "PAPER" : "REAL"}</span>
-        <span className="ml-auto flex items-center gap-0.5">
+        className={cn("flex h-11 items-center gap-2 border-b border-white/[0.05] pr-2 pl-3.5 select-none", !docked && "cursor-grab touch-none active:cursor-grabbing")}>
+        <Icon.bolt className="size-4 shrink-0 text-ink-2" />
+        {away ? (
+          <a href={`#/coin/${mint}`} title={`Open ${symbol}`} className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-ink hover:text-accent">
+            <CoinPic mint={mint} symbol={symbol} className="size-5" /><span className="truncate">{symbol}</span>
+            {pos.mcapNow != null && <span className="num text-xs font-medium text-muted">{usdK(pos.mcapNow)}</span>}
+          </a>
+        ) : <b className="text-sm font-semibold tracking-tight text-ink">Quick trade</b>}
+        <span className={cn("flex items-center gap-1 rounded-[5px] px-1.5 py-px text-[10px] font-bold tracking-[0.08em]",
+          paperOn ? "bg-info/15 text-info shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-info)_25%,transparent)]" : "bg-up/12 text-up shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-up)_25%,transparent)]")}>
+          {!paperOn && <i className="size-1.5 rounded-full bg-up motion-safe:animate-pulse" />}{paperOn ? "PAPER" : "LIVE"}</span>
+        <span className="ml-auto flex items-center">
+          <Tip tip="PnL card: your live result as a picture to save or share">
+            <button onClick={pnlCard.open} aria-label="PnL card" className="grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-white/[0.07] hover:text-ink"><Icon.image className="size-3.5" /></button>
+          </Tip>
           <Tip tip={edit ? "Save presets" : "Edit presets"}>
-            <button onClick={() => (edit ? save() : setEdit([...buyP, ...sellP].map(String)))} aria-label={edit ? "Save presets" : "Edit presets"}
-              className={cn("grid size-6 place-items-center rounded-chip hover:bg-paper-4", edit ? "text-accent" : "text-muted hover:text-ink")}>
+            <button onClick={() => (edit ? save() : setEdit([...buyP, ...sellP, slip / 100].map(String)))} aria-label={edit ? "Save presets" : "Edit presets"}
+              disabled={edit != null && !edit.every((x, i) => fieldOk(i, x))}
+              className={cn("grid size-7 place-items-center rounded-lg transition-colors hover:bg-white/[0.07] disabled:opacity-40", edit ? "bg-up/15 text-up" : "text-muted hover:text-ink")}>
               {edit ? <CIcon.check className="size-3.5" /> : <CIcon.pencil className="size-3.5" />}
             </button>
           </Tip>
-          <Tip tip={docked ? "Pop out: float this panel over the chart" : "Dock it back in the side column"}>
-            <button onClick={toggleQuick} aria-label={docked ? "Pop out quick trade" : "Dock quick trade"} className="grid size-6 place-items-center rounded-chip text-muted hover:bg-paper-4 hover:text-ink">
-              {docked ? <CIcon.window className="size-3.5" /> : <Icon.x className="size-3.5" />}</button>
+          <Tip tip={docked ? "Pop out: float this panel over the chart (it closes when you leave the coin)" : away ? "Close" : "Dock it back in the side column"}>
+            <button onClick={toggleQuick} aria-label={docked ? "Pop out quick trade" : away ? "Close quick trade" : "Dock quick trade"} className="grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-white/[0.07] hover:text-ink">
+              {docked ? <CIcon.window className="size-3.5" /> : <Icon.close className="size-3.5" />}</button>
           </Tip>
         </span>
       </div>
 
-      <div className="flex flex-col gap-2 p-3">
-        {row("Buy", cash == null ? (paperOn ? "" : "not signed in") : <SolAmt v={cash} />)}
-        <div className="grid grid-cols-4 gap-1.5">
-          {edit ? buyP.map((_, i) => field(i, "SOL")) : buyP.map((v, i) => (
-            <button key={i} disabled={busy != null} onClick={() => go(`b${i}`, true, v)}
-              className="num inline-flex h-8 min-w-0 items-center justify-center gap-1 rounded-control border border-up/40 bg-up/10 text-sm font-semibold text-up transition-colors hover:bg-up/20 active:scale-[0.97] disabled:opacity-50">
-              {busy === `b${i}` ? "…" : <><SolanaLogo className="w-[0.85em]" />{v}</>}
-            </button>
-          ))}
+      <div className="flex flex-col gap-3 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div role="tablist" aria-label="Preset set" className="flex items-center gap-0.5 rounded-lg bg-paper p-0.5">
+            {presets.map((_, i) => (
+              <button key={i} role="tab" aria-selected={pi === i} onClick={() => pick(i)}
+                className={cn("h-6 rounded-md px-2.5 text-xs font-semibold transition-colors duration-150", pi === i ? "bg-paper-5 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.08)]" : "text-muted hover:text-ink-2")}>P{i + 1}</button>
+            ))}
+          </div>
+          <span className="flex items-center gap-1.5 text-xs text-muted">
+            <Icon.sliders className="size-3.5" />Slippage
+            {edit ? <span className="w-16">{field(8, "%")}</span> : <b className="num font-semibold text-ink-2">{slipTxt(slip)}</b>}
+          </span>
         </div>
-        {row("Sell", pos.canSell ? (pos.tokens ? `${tokN(pos.tokens)} ${symbol}` : <SolAmt v={pos.holding} />) : "nothing held")}
-        <div className="grid grid-cols-4 gap-1.5">
-          {edit ? sellP.map((_, i) => field(i + 4, "%")) : sellP.map((v, i) => (
-            <button key={i} disabled={busy != null || !pos.canSell} onClick={() => go(`s${i}`, false, v)}
-              className="num h-8 min-w-0 rounded-control border border-down/40 bg-down/10 text-sm font-semibold text-down transition-colors hover:bg-down/20 active:scale-[0.97] disabled:opacity-40">
-              {busy === `s${i}` ? "…" : `${v}%`}
-            </button>
-          ))}
+
+        <div className="flex flex-col gap-1.5">
+          {row("Buy", "text-up", cash == null ? (paperOn ? "" : "Not signed in") : <SolAmt v={cash} />)}
+          <div className="grid grid-cols-4 gap-1.5">
+            {edit ? buyP.map((_, i) => field(i, "SOL")) : buyP.map((v, i) => {
+              const short = cash != null && v > cash;
+              return (
+                <button key={i} aria-disabled={short || undefined} title={short ? (paperOn ? `Only ${+cash!.toFixed(3)} SOL to spend` : "Not enough SOL: deposit to buy") : `Buy ${v} SOL of ${symbol} · ${slipTxt(slip)} slippage`}
+                  onClick={() => { if (busy) return; if (short) { if (!paperOn) openExchange("deposit"); return; } void go(`b${i}`, true, v); }}
+                  className={btn("buy", !short)}>
+                  {busy === `b${i}` ? spin : v}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          {row("Sell", "text-down", pos.canSell ? (pos.tokens ? `${tokN(pos.tokens)} ${symbol}` : <SolAmt v={pos.holding} />) : "Nothing held")}
+          <div className="grid grid-cols-4 gap-1.5">
+            {edit ? sellP.map((_, i) => field(i + 4, "%")) : sellP.map((v, i) => (
+              <button key={i} aria-disabled={!pos.canSell || undefined} title={pos.canSell ? `Sell ${v}% of your ${symbol} · ${slipTxt(slip)} slippage` : "Buy first, then sell from here"}
+                onClick={() => { if (!busy && pos.canSell) void go(`s${i}`, false, v); }}
+                className={btn("sell", pos.canSell)}>
+                {busy === `s${i}` ? spin : `${v}%`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="num flex items-center gap-x-3 gap-y-1 border-t border-rule px-3 py-2 text-xs text-muted">
+      {pnlCard.dialog}
+      <div className="num flex min-h-10 items-center gap-x-3 gap-y-1 border-t border-white/[0.05] px-3.5 py-2 text-xs text-muted">
         {pos.has ? (
           <>
             <span>Avg buy <b className="font-semibold text-ink-2">{usdK(pos.entry)}</b></span>
             {pos.exit != null && <span>Avg sell <b className="font-semibold text-ink-2">{usdK(pos.exit)}</b></span>}
-            <span className="ml-auto">PnL <b className={cn("font-semibold", (pos.pnl ?? 0) >= 0 ? "text-up" : "text-down")}>{pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}</b>
-              {pnlPct != null && <span className={(pos.pnl ?? 0) >= 0 ? "text-up" : "text-down"}> {pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}</span>
+            <button onClick={pnlCard.open} title="Open your PnL card"
+              className={cn("ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold transition-colors", (pos.pnl ?? 0) >= 0 ? "bg-up/10 text-up hover:bg-up/15" : "bg-down/10 text-down hover:bg-down/15")}>
+              {pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}
+              {pnlPct != null && <span className="opacity-80">{pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}
+            </button>
           </>
-        ) : <span>One click buys or sells at the live quote{paperOn ? " with fake SOL" : ""}.</span>}
+        ) : broke ? (
+          <span className="flex w-full items-center gap-1.5"><span className="mr-auto">No SOL yet</span>
+            <button onClick={() => setPaper(true)} className="h-7 rounded-full px-2.5 font-semibold text-info transition-colors hover:bg-info/10">Try paper</button>
+            <button onClick={() => openExchange("deposit")} className="h-7 rounded-full bg-ink px-3 font-semibold text-paper transition-transform duration-100 hover:bg-white active:scale-[0.97]">Deposit</button></span>
+        ) : <span>One click trades at the live quote{paperOn ? " with fake SOL" : ""}.</span>}
       </div>
     </div>
   );
 }
+
+function CoinPic({ mint, symbol, className }: { mint: string; symbol: string; className?: string }) {
+  const pic = usePic(mint);
+  return (
+    <span className={cn("relative grid shrink-0 place-items-center overflow-hidden rounded-full bg-paper-4 text-[0.5rem] font-bold text-muted uppercase", className)}>
+      {symbol.slice(0, 2)}
+      {pic.src && <img key={pic.key} src={pic.src} alt="" className={cn("absolute inset-0 size-full object-cover", !pic.ok && "invisible")} onLoad={pic.onLoad} onError={pic.onError} />}
+    </span>
+  );
+}
+

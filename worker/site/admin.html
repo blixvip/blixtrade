@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin · BLIX</title><meta name="robots" content="noindex"><meta name="theme-color" content="#050608">
-<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml">
 <link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 @font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}
@@ -33,7 +33,7 @@ button,input{font:inherit;color:inherit}
 .banner{display:none;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:14px;border:1px solid rgba(255,176,32,.3);background:var(--amber-bg);color:#ffe2a8;margin-bottom:16px;font-size:13.5px}
 .banner.show{display:flex}.banner b{color:#fff}
 /* kpis */
-.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:18px}
 .kpi{padding:16px 18px;min-width:0}
 .kpi .l{color:var(--mute);font-size:12.5px;display:flex;align-items:center;gap:6px}
@@ -63,7 +63,7 @@ svg{display:block;width:100%}
 .chip.on{border-color:#3a414d;color:var(--text);background:#141820}
 .chip em{font-style:normal;color:var(--dim);margin-left:4px;font-family:var(--mono);font-size:11px}
 .tbl{overflow-x:auto;margin:0 -18px;padding:0 18px}
-table{width:100%;border-collapse:collapse;min-width:900px}
+table{width:100%;border-collapse:collapse;min-width:1080px}
 th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap;user-select:none}
 th.s{cursor:pointer}th.s:hover{color:var(--soft)}th.on{color:var(--text)}
 td{padding:10px 10px;border-bottom:1px solid #101318;font-size:13.5px;color:var(--soft);white-space:nowrap;vertical-align:middle}
@@ -84,6 +84,19 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
 .pill.off{background:var(--red-bg);color:var(--red)}.pill.off:hover{background:var(--green-bg);color:var(--green)}
 .pill.na{background:#141820;color:var(--dim);cursor:default}
 .on-now{color:var(--green)}
+td small{display:block;color:var(--dim);font-size:12px;margin-top:2px;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+tr.person{cursor:pointer}tr.person.open{background:#0e1218}tr.person.open td{border-bottom-color:transparent}
+.sol{font-family:var(--mono);font-size:12.5px;color:var(--mute)}.sol.pos{color:var(--text)}
+.up{color:var(--green)}.down{color:var(--red)}
+tr.detail td{background:#0b0e13;white-space:normal;padding:4px 14px 18px}
+.dgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}
+.dgrid h3{font-size:11.5px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 8px}
+.dgrid div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #12161c;font-size:13px}
+.dgrid div span{color:var(--mute);flex:none}.dgrid div b{font-weight:500;color:var(--text);text-align:right;min-width:0;overflow-wrap:anywhere}
+.dgrid div b small{color:var(--dim);font-weight:400}.dgrid a{color:var(--blue);text-decoration:none;font-family:var(--mono);font-size:12px}.dgrid a:hover{text-decoration:underline}
+.dgrid p{font-size:13px}.mini{list-style:none;display:grid;gap:2px}.mini li{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--soft);padding:3px 0}
+.mini code{font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mini time{color:var(--dim);font-family:var(--mono);font-size:11.5px;flex:none}
+@media (max-width:900px){.dgrid{grid-template-columns:1fr}}
 .empty{color:var(--dim);padding:18px 0;text-align:center;font-size:13px}
 /* feed */
 .feed{display:grid;grid-template-columns:minmax(0,1fr);max-height:560px;overflow-y:auto;margin:0 -8px;padding:0 8px}
@@ -104,6 +117,7 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
 .row b{font:500 12px var(--mono);color:var(--mute)}
 .note{color:var(--dim);font-size:12px;margin-top:10px}
 .foot{color:var(--dim);font-size:12px;margin-top:18px;text-align:center}
+@media (max-width:1300px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:1100px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.cols{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi .v{font-size:24px}.bd{grid-template-columns:minmax(0,1fr)}.search{width:100%}.legend{margin-left:0}.brand span{display:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -125,6 +139,7 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
     <div class="card kpi"><div class="l">Visitors <span class="d" id="k-vi-d"></span></div><div class="v" id="k-vi">–</div><div class="s" id="k-vi-s"></div></div>
     <div class="card kpi"><div class="l">Visitor → sign-up</div><div class="v" id="k-cv">–</div><div class="s" id="k-cv-s"></div></div>
     <div class="card kpi"><div class="l">Members active</div><div class="v" id="k-ac">–</div><div class="s" id="k-ac-s"></div></div>
+    <div class="card kpi"><div class="l">Real SOL in member wallets</div><div class="v" id="k-sol">–</div><div class="s" id="k-sol-s"></div></div>
   </div>
 
   <div class="card chart">
@@ -137,8 +152,8 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
     <div class="head"><h2>People</h2><span class="n" id="ppl-n"></span><div class="grow"></div>
       <div class="tools"><div class="chips" id="chips"></div><input class="search" id="q" type="search" placeholder="Search name, email, place…"></div></div>
     <div class="tbl"><table><thead><tr>
-      <th class="s" data-k="name">Person</th><th>Access</th><th class="s on" data-k="created">Joined ↓</th><th class="s" data-k="seen">Last seen</th>
-      <th class="s" data-k="logins">Logins</th><th class="s" data-k="views">Page views</th><th>Location</th><th>Came from</th></tr></thead>
+      <th class="s" data-k="name">Person</th><th>Access</th><th class="s on" data-k="created">Joined ↓</th><th class="s" data-k="login">Last login</th><th class="s" data-k="seen">Last seen</th>
+      <th class="s" data-k="sol">Wallet</th><th class="s" data-k="paper">Paper P&amp;L</th><th class="s" data-k="views">Views</th><th>Location · source</th></tr></thead>
       <tbody id="ppl"></tbody></table></div>
   </div>
 
@@ -167,6 +182,8 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
   var JUNK = /\.(php\d?|aspx?|jsp|cgi|env|git|sql|bak|old|zip|tar|gz|rar|7z|ini|ya?ml|log|sh|py|rb|pl|swp|conf|config|db|sqlite|ds_store)(\/|$)|^\/(wp-|wordpress|\.|cgi-bin|phpmyadmin|pma|myadmin|vendor\/|xmlrpc|owa|ecp|autodiscover|actuator|solr|boaform|hudson|jenkins|manager\/|druid|console|HNAP1|setup|admin\/|administrator|backup|bk\/|old\/|new\/|test\/|tmp\/|server-status|telescope|_ignition|api\/v1\/pods|remote\/|sitemap\.xml\.gz)/i;
   var OWN = /(^|\.)blixvip\.com$|^accounts\.google\.|^localhost/i;
   var S = { ev: [], seen: {}, acc: {}, owners: {}, pending: [], health: { db: true }, range: 7, mine: false, bots: false, chip: "all", q: "", sort: "created", desc: true, since: 0, lastOk: 0, stale: false, firstLoad: true, fresh: 0, botVis: {}, ownerVis: {} };
+  // #open=<email> opens that person's details (a link you can keep).
+  try { var h0 = decodeURIComponent(location.hash.replace(/^#open=/, "")); if (h0 && h0 !== location.hash) S.open = h0.toLowerCase(); } catch (e) {}
   try { var r0 = +localStorage.getItem("blixadm:range"); if ([1, 7, 30].indexOf(r0) >= 0) S.range = r0; S.mine = localStorage.getItem("blixadm:mine") === "1"; } catch (e) {}
 
   var regionName = (function () { try { var n = new Intl.DisplayNames(["en"], { type: "region" }); return function (c) { try { return n.of(c); } catch (e) { return c; } }; } catch (e) { return function (c) { return c; }; } })();
@@ -283,6 +300,9 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
     var act = realMembers().filter(function (a) { return a.last_seen >= b.from; });
     $("k-ac").textContent = fmt(act.length);
     $("k-ac-s").textContent = "members seen · " + label;
+    var ws = realMembers().map(function (a) { return vmOf(a.email); }), funded = ws.filter(function (v) { return v.sol > 0; }), tot = funded.reduce(function (t, v) { return t + v.sol; }, 0), haveW = ws.filter(function (v) { return v.wallet; }).length;
+    $("k-sol").textContent = S.vm ? (tot >= 100 ? tot.toFixed(0) : tot.toFixed(tot ? 3 : 0)) : "–";
+    $("k-sol-s").textContent = S.vm ? funded.length + " funded · " + haveW + " wallet" + (haveW === 1 ? "" : "s") + (tot ? " · " + usd(tot) : "") : "server not reachable";
     // Online: anyone (not a bot) with activity in the last 5 minutes.
     var cut = Date.now() - 5 * 60000, on = {}, people = [];
     members().forEach(function (a) { if (a.last_seen > cut && (S.mine || !S.owners[a.email])) { on["m:" + a.email] = 1; people.push(a); } });
@@ -324,52 +344,94 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
   });
   $("chart").addEventListener("mouseleave", function () { $("tip").style.display = "none"; });
 
-  // Per person: page views, the visitor ids they used, and where they first came from (the account's own
-  // referrer unless it is the Google sign-in hop, else their earliest outside referrer before signing up).
+  // Per person: page views, the visitor ids (address + browser) they used, last login, the pages, places and
+  // devices seen, and where they first came from (the account's own referrer unless it is the Google sign-in
+  // hop, else their earliest outside referrer before signing up).
   function personStats() {
     var by = {}, visTo = {};
-    members().forEach(function (a) { by[a.email] = { views: 0, src: source(a.referrer), first: Infinity, lastPath: null, lastT: 0 }; if (a.visitor) visTo[a.visitor] = a.email; });
+    members().forEach(function (a) { by[a.email] = { views: 0, src: source(a.referrer), first: Infinity, lastPath: null, lastT: 0, lastLogin: 0, pages: [], places: {}, devices: {}, logins: [] }; if (a.visitor) visTo[a.visitor] = a.email; });
     S.ev.forEach(function (e) { if (e.email && by[e.email] && e.visitor && !visTo[e.visitor]) visTo[e.visitor] = e.email; });
     S.ev.forEach(function (e) {
       var em = e.email || (e.visitor && visTo[e.visitor]); if (!em || !by[em]) return;
       var p = by[em];
-      if (e.kind === "view" && !isBot(e)) { p.views++; if (e.t > p.lastT) { p.lastT = e.t; p.lastPath = e.path; } }
+      if ((e.kind === "login" || e.kind === "signup") && e.email === em) { p.lastLogin = Math.max(p.lastLogin, e.t); p.logins.push(e); }
+      if (e.kind === "view" && !isBot(e)) {
+        p.views++; p.pages.push(e);
+        if (e.t > p.lastT) { p.lastT = e.t; p.lastPath = e.path; }
+        if (e.country || e.city) p.places[place(e.country, e.city)] = Math.max(p.places[place(e.country, e.city)] || 0, e.t);
+        if (e.device) p.devices[e.device] = (p.devices[e.device] || 0) + 1;
+      }
       var s = source(e.referrer); if (s && e.t < p.first && (!S.acc[em] || e.t <= S.acc[em].created + 60000)) { p.first = e.t; p.firstSrc = s; }
     });
     Object.keys(by).forEach(function (k) { var p = by[k]; p.src = p.src || p.firstSrc || null; });
     return by;
   }
+  function vmOf(email) { return (S.vm && S.vm.members && S.vm.members[email]) || {}; }
+  function sol(n, d) { return n == null ? "–" : (Math.abs(n) >= 100 ? n.toFixed(1) : n.toFixed(d == null ? 3 : d)).replace(/\.?0+$/, "") + " SOL"; }
+  function usd(n) { var px = S.vm && S.vm.solUsd; return n == null || !px ? "" : "$" + (n * px).toLocaleString(undefined, { maximumFractionDigits: n * px < 10 ? 2 : 0 }); }
+  function short(addr) { return addr ? addr.slice(0, 4) + "…" + addr.slice(-4) : ""; }
 
   function renderPeople(b) {
     var cut = Date.now() - 5 * 60000, st = personStats(), q = S.q.toLowerCase();
+    S.st = st;
     var rows = members().map(function (a) { return { a: a, held: false }; });
     S.pending.forEach(function (p) { if (!S.acc[p.email]) rows.push({ a: { email: p.email, name: p.name, picture: p.picture, created: p.t, last_seen: p.last || p.t, logins: p.logins, country: p.country, city: p.city, referrer: p.referrer, status: "member" }, held: true }); });
-    var counts = { all: 0, online: 0, new: 0, paused: 0 };
-    rows.forEach(function (r) { var a = r.a; if (S.owners[a.email] && !S.mine && S.chip !== "all") return; counts.all++; if (a.last_seen > cut) counts.online++; if (a.created >= b.from && !S.owners[a.email]) counts.new++; if (a.status === "blocked") counts.paused++; });
-    $("chips").innerHTML = [["all", "Everyone"], ["new", "New"], ["online", "Online"], ["paused", "Paused"]].map(function (c) { return '<button class="chip' + (S.chip === c[0] ? " on" : "") + '" data-c="' + c[0] + '">' + c[1] + "<em>" + counts[c[0]] + "</em></button>"; }).join("");
+    var counts = { all: 0, online: 0, new: 0, paused: 0, wallet: 0 };
+    rows.forEach(function (r) { var a = r.a; counts.all++; if (a.last_seen > cut) counts.online++; if (a.created >= b.from && !S.owners[a.email]) counts.new++; if (a.status === "blocked") counts.paused++; if (vmOf(a.email).sol > 0) counts.wallet++; });
+    $("chips").innerHTML = [["all", "Everyone"], ["new", "New"], ["online", "Online"], ["wallet", "Funded wallet"], ["paused", "Paused"]].map(function (c) { return '<button class="chip' + (S.chip === c[0] ? " on" : "") + '" data-c="' + c[0] + '">' + c[1] + "<em>" + counts[c[0]] + "</em></button>"; }).join("");
     rows = rows.filter(function (r) {
-      var a = r.a;
+      var a = r.a, v = vmOf(a.email);
       if (S.chip === "online" && !(a.last_seen > cut)) return false;
       if (S.chip === "new" && !(a.created >= b.from && !S.owners[a.email])) return false;
       if (S.chip === "paused" && a.status !== "blocked") return false;
-      if (q && (a.email + " " + (a.name || "") + " " + place(a.country, a.city)).toLowerCase().indexOf(q) < 0) return false;
+      if (S.chip === "wallet" && !(v.sol > 0)) return false;
+      if (q && (a.email + " " + (a.name || "") + " " + (v.username || "") + " " + (v.wallet || "") + " " + place(a.country, a.city)).toLowerCase().indexOf(q) < 0) return false;
       return true;
     });
-    var key = function (r) { var a = r.a, s = st[a.email] || {}; return S.sort === "name" ? (a.name || a.email).toLowerCase() : S.sort === "seen" ? a.last_seen : S.sort === "logins" ? a.logins || 0 : S.sort === "views" ? s.views || 0 : a.created; };
+    var key = function (r) {
+      var a = r.a, s = st[a.email] || {}, v = vmOf(a.email);
+      return S.sort === "name" ? (a.name || a.email).toLowerCase() : S.sort === "seen" ? a.last_seen : S.sort === "login" ? s.lastLogin || 0 : S.sort === "views" ? s.views || 0 : S.sort === "sol" ? v.sol || 0 : S.sort === "paper" ? (v.paper ? v.paper.pnl || 0 : -1e9) : a.created;
+    };
     rows.sort(function (x, y) { var p = key(x), r = key(y); return (p < r ? -1 : p > r ? 1 : 0) * (S.desc ? -1 : 1); });
     var real = realMembers().length;
-    $("ppl-n").textContent = real + " member" + (real === 1 ? "" : "s") + (S.owners && Object.keys(S.owners).length ? " + you" : "");
+    $("ppl-n").textContent = real + " member" + (real === 1 ? "" : "s") + " + you · click anyone for everything about them";
     $("ppl").innerHTML = rows.map(function (r) {
-      var a = r.a, s = st[a.email] || {}, online = a.last_seen > cut, you = S.owners[a.email];
+      var a = r.a, s = st[a.email] || {}, v = vmOf(a.email), online = a.last_seen > cut, you = S.owners[a.email], open = S.open === a.email;
       var tags = (you ? '<span class="tag you">You</span>' : "") + (r.held ? '<span class="tag held" title="Signed up while the database was paused; moves into the list automatically">Held</span>' : "") + (a.recovered ? '<span class="tag rec" title="Recovered from their sign-in after a database outage; name fills in at their next Google sign-in">Recovered</span>' : "") + (!you && a.created >= Date.now() - D ? '<span class="tag new">New</span>' : "");
       var access = r.held ? '<span class="pill na">Member</span>' : you ? '<span class="pill na">Owner</span>' : '<button class="pill ' + (a.status === "blocked" ? "off" : "on") + '" data-email="' + esc(a.email) + '" data-to="' + (a.status === "blocked" ? "member" : "blocked") + '" title="' + (a.status === "blocked" ? "Paused. Click to let them back in" : "Click to pause this account") + '">' + (a.status === "blocked" ? "Paused" : "Member") + "</button>";
-      return '<tr data-email="' + esc(a.email) + '"><td><div class="who">' + avatar(a, online) + "<div><b>" + esc(a.name || a.email.replace(/@.*/, "")) + tags + "</b><small>" + esc(a.email) + "</small></div></div></td>" +
+      var wallet = v.wallet ? '<span class="sol' + (v.sol > 0 ? " pos" : "") + '">' + sol(v.sol || 0) + '</span><small>' + esc(short(v.wallet)) + "</small>" : '<span class="m">No wallet</span>';
+      var pp = v.paper, paperCell = pp ? '<span class="' + (pp.pnl > 0 ? "up" : pp.pnl < 0 ? "down" : "") + '">' + (pp.pnl > 0 ? "+" : "") + sol(pp.pnl) + "</span><small>" + pp.trades + " trade" + (pp.trades === 1 ? "" : "s") + (pp.open ? " · " + pp.open + " open" : "") + "</small>" : '<span class="m">No trades</span>';
+      var lastLogin = s.lastLogin ? '<span title="' + esc(new Date(s.lastLogin).toString()) + '">' + ago(s.lastLogin) + "</span>" : '<span class="m" title="Before tracking began">–</span>';
+      return '<tr class="person' + (open ? " open" : "") + '" data-email="' + esc(a.email) + '"><td><div class="who">' + avatar(a, online) + "<div><b>" + esc(a.name || a.email.replace(/@.*/, "")) + tags + "</b><small>" + esc(a.email) + (v.username ? " · @" + esc(v.username) : "") + "</small></div></div></td>" +
         "<td>" + access + "</td>" +
-        '<td title="' + esc(new Date(a.created).toString()) + '">' + esc(when(a.created)) + '<br><small style="color:var(--dim)">' + ago(a.created) + "</small></td>" +
-        '<td class="' + (online ? "on-now" : "m") + '" title="' + esc(new Date(a.last_seen).toString()) + (s.lastPath ? " · last page " + esc(s.lastPath) : "") + '">' + (online ? "● Online" : ago(a.last_seen)) + "</td>" +
-        '<td class="num">' + (a.logins || 0) + '</td><td class="num">' + (s.views || 0) + "</td>" +
-        '<td class="m">' + esc(place(a.country, a.city) || "–") + '</td><td class="m">' + esc(s.src || "Direct") + "</td></tr>";
-    }).join("") || '<tr><td colspan="8"><div class="empty">' + (S.q ? "No one matches that search." : "No one here yet.") + "</div></td></tr>";
+        '<td title="' + esc(new Date(a.created).toString()) + '">' + esc(when(a.created)) + "<small>" + ago(a.created) + "</small></td>" +
+        '<td>' + lastLogin + "<small>" + (a.logins || 0) + " login" + (a.logins === 1 ? "" : "s") + "</small></td>" +
+        '<td class="' + (online ? "on-now" : "") + '" title="' + esc(new Date(a.last_seen).toString()) + '">' + (online ? "● Online" : ago(a.last_seen)) + "<small>" + (s.lastPath ? esc(s.lastPath) : "") + "</small></td>" +
+        "<td>" + wallet + "</td><td>" + paperCell + "</td>" +
+        '<td class="num">' + (s.views || 0) + "</td>" +
+        "<td>" + esc(place(a.country, a.city) || "–") + "<small>" + esc(s.src || "Direct") + "</small></td></tr>" +
+        (open ? '<tr class="detail"><td colspan="9">' + detail(a, s, v, r.held) + "</td></tr>" : "");
+    }).join("") || '<tr><td colspan="9"><div class="empty">' + (S.q ? "No one matches that search." : "No one here yet.") + "</div></td></tr>";
+  }
+
+  function kv(label, value) { return value === "" || value == null ? "" : "<div><span>" + label + "</span><b>" + value + "</b></div>"; }
+  function detail(a, s, v, held) {
+    var pp = v.paper, px = S.vm && S.vm.solUsd;
+    var places = Object.keys(s.places || {}).sort(function (x, y) { return s.places[y] - s.places[x]; });
+    var devices = Object.keys(s.devices || {}).map(function (d) { return d + " (" + s.devices[d] + ")"; }).join(", ");
+    var pages = (s.pages || []).slice().sort(function (x, y) { return y.t - x.t; }).slice(0, 14);
+    var logins = (s.logins || []).slice().sort(function (x, y) { return y.t - x.t; }).slice(0, 8);
+    var solscan = function (addr) { return '<a href="https://solscan.io/account/' + encodeURIComponent(addr) + '" target="_blank" rel="noopener noreferrer">' + esc(addr) + "</a>"; };
+    return '<div class="dgrid">' +
+      '<section><h3>Account</h3>' + kv("Name", esc(a.name || "–")) + kv("Email", esc(a.email)) + kv("Username", v.username ? "@" + esc(v.username) : "") + kv("Status", held ? "Held (database paused)" : a.status === "blocked" ? "Paused" : S.owners[a.email] ? "Owner" : "Member") +
+        kv("Joined", esc(new Date(a.created).toLocaleString())) + kv("Last login", s.lastLogin ? esc(new Date(s.lastLogin).toLocaleString()) : "–") + kv("Logins", String(a.logins || 0)) +
+        kv("Last seen", esc(new Date(a.last_seen).toLocaleString())) + kv("Came from", esc(s.src || "Direct")) + (a.recovered ? kv("Note", "Recovered after a database outage") : "") + "</section>" +
+      '<section><h3>Wallet (real SOL)</h3>' + (v.wallet ? kv("Balance", sol(v.sol || 0, 4) + (px ? ' <small>' + usd(v.sol || 0) + "</small>" : "")) + kv("Address", solscan(v.wallet)) : '<p class="m">No hosted wallet set up yet.</p>') +
+        '<h3 style="margin-top:14px">Paper desk</h3>' + (pp ? kv("Equity", sol(pp.equity) + " <small>of " + sol(pp.start, 2) + " start</small>") + kv("Cash", sol(pp.cash)) + kv("P&amp;L", '<span class="' + (pp.pnl > 0 ? "up" : pp.pnl < 0 ? "down" : "") + '">' + (pp.pnl > 0 ? "+" : "") + sol(pp.pnl) + "</span>") + kv("Realized", sol(pp.realized)) + kv("Trades", pp.trades + (pp.open ? " (" + pp.open + " open)" : "")) + kv("Volume", sol(pp.volume)) + kv("Last trade", pp.lastTrade ? esc(new Date(pp.lastTrade).toLocaleString()) : "–") : '<p class="m">Hasn\'t traded yet (10 SOL paper start).</p>') + "</section>" +
+      '<section><h3>Activity</h3>' + kv("Page views", String(s.views || 0)) + kv("Devices", esc(devices || "–")) + kv("Places", esc(places.slice(0, 4).join(" · ") || "–")) +
+        '<h3 style="margin-top:14px">Recent pages</h3><ol class="mini">' + (pages.map(function (e) { return "<li><code>" + esc(e.path) + "</code><time>" + ago(e.t) + "</time></li>"; }).join("") || '<li class="m">None in the last 30 days</li>') + "</ol>" +
+        (logins.length ? '<h3 style="margin-top:14px">Sign-ins</h3><ol class="mini">' + logins.map(function (e) { return "<li>" + (e.kind === "signup" ? "Signed up" : "Logged in") + (e.city || e.country ? " · " + esc(place(e.country, e.city)) : "") + "<time>" + ago(e.t) + "</time></li>"; }).join("") + "</ol>" : "") + "</section>" +
+      "</div>";
   }
 
   function feedRow(e) {
@@ -437,7 +499,7 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
   function load(quiet) {
     return fetch("/__admin/data" + (quiet ? "" : "?fresh=1"), { cache: "no-store", credentials: "same-origin" }).then(function (r) { if (r.status === 404) { location.href = "/login"; throw 0; } return r.json(); }).then(function (o) {
       S.owners = {}; (o.owners || []).forEach(function (e) { S.owners[e] = 1; });
-      S.health = o.health || { db: true }; S.pending = o.pending || []; S.stale = !!o.stale; S.dataAt = o.now;
+      S.health = o.health || { db: true }; S.pending = o.pending || []; S.stale = !!o.stale; S.dataAt = o.now; if (o.vm) S.vm = o.vm;
       S.ev = []; S.seen = {}; S.botVis = {}; S.ownerVis = {};
       (o.accounts || []).forEach(setAccount);
       unpack(o).forEach(addEvent);
@@ -483,7 +545,12 @@ td.m{color:var(--mute)}td.num{font-family:var(--mono);font-size:12.5px;color:var
     renderPeople(bounds());
   });
   $("ppl").addEventListener("click", function (e) {
-    var b = e.target.closest && e.target.closest("button.pill"); if (!b) return;
+    var b = e.target.closest && e.target.closest("button.pill");
+    if (!b) {
+      if (e.target.closest("a, .detail")) return;
+      var tr = e.target.closest && e.target.closest("tr.person"); if (!tr) return;
+      var em = tr.getAttribute("data-email"); S.open = S.open === em ? null : em; renderPeople(bounds()); return;
+    }
     var em = b.getAttribute("data-email"), to = b.getAttribute("data-to");
     if (to === "blocked" && !confirm("Pause " + em + "? They'll be kept out of the terminal until you let them back in.")) return;
     b.disabled = true;

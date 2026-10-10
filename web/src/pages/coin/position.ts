@@ -29,13 +29,13 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
   useEffect(() => {
     if (paper || !me?.signedIn) return;
     let alive = true;
-    fetch("/api/account/txs", { signal: AbortSignal.timeout(20_000) }).then((x) => (x.ok ? x.json() : [])).then((j: RealTx[]) => {
+    fetch("api/account/txs", { signal: AbortSignal.timeout(20_000) }).then((x) => (x.ok ? x.json() : [])).then((j: RealTx[]) => {
       if (alive) setTxs({ mint, list: j.filter((t) => t.mint === mint && t.status !== "failed" && (t.kind === "buy" || t.kind === "sell")) });
     }).catch(() => {});
     return () => { alive = false; };
   }, [paper, walletKey, mint]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const mcapNow = c?.mcUsd ?? r?.live?.mcap ?? r?.token.mcap ?? null;
+  const mcapNow = c?.mcUsd ?? r?.live?.mcap ?? r?.token?.mcap ?? null;
   const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false };
   if (paper) {
     // A partial sell splits a row: the sold part becomes a closed row with the same entry, so summing every

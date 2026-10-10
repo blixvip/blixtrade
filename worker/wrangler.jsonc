@@ -1,18 +1,40 @@
 {
-  // trade.blixvip.com: a small Worker that forwards every request to the live Blix terminal on Kai's PC.
-  // Blix opens a Cloudflare quick tunnel at startup (server/tunnel.js) and registers its current
-  // trycloudflare.com address here with the REG_KEY secret; the Worker keeps it in KV.
+  // trade.blixvip.com (and blixvip.com/trade): a small Worker that forwards every request to the live Blix
+  // terminal. Blix registers its tunnel address here with the REG_KEY secret (server/tunnel.js: the named tunnel
+  // origin.blixvip.com on the server, or a quick trycloudflare.com tunnel); the Worker keeps it in KV.
   // It also serves the public docs pages itself (site/), with images and icons from public/_pub
   // (rebuild those with `node og/render.mjs`). The Worker runs first for every request.
   "name": "blix-trade",
+  "workers_dev": false,
+  "preview_urls": false,
   "main": "index.js",
   "compatibility_date": "2026-09-01",
-  "routes": [{ "pattern": "trade.blixvip.com", "custom_domain": true }],
+  "routes": [{ "pattern": "trade.blixvip.com", "custom_domain": true }, { "pattern": "blixvip.com/*", "zone_name": "blixvip.com" }, { "pattern": "www.blixvip.com/*", "zone_name": "blixvip.com" }],
   "kv_namespaces": [{ "binding": "REG", "id": "950148872f48449692d579f4bd71339d" }],
   // Waitlist accounts + page/sign-up tracking (site/waitlist.js, site/track.js); schema in migrations/.
   "d1_databases": [{ "binding": "DB", "database_name": "blix-waitlist", "database_id": "0f208c00-af5c-45b4-8fba-a344a5d9efd6", "migrations_dir": "migrations" }],
+  // The Worker runs first for every request. (2026-10-08: ["/*", "!/_pub/*"] here, to serve /_pub without it,
+  // made "/" and other pages skip the Worker entirely: rolled back within minutes. Don't retry without a test.)
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  // Google sign-in for the waitlist (site/waitlist.js); the secret is GOOGLE_CLIENT_SECRET (wrangler secret put).
-  "vars": { "GOOGLE_CLIENT_ID": "1090647183335-d1l8tch0tbieujhqndckl6gpehitsoqi.apps.googleusercontent.com" },
+  // Google sign-in (site/waitlist.js); the secret is GOOGLE_CLIENT_SECRET (wrangler secret put). Everyone who signs
+  // in is a member; the owner's Google emails (comma-separated) run the terminal as its own (no access key).
+  "vars": {
+    "GOOGLE_CLIENT_ID": "1090647183335-d1l8tch0tbieujhqndckl6gpehitsoqi.apps.googleusercontent.com"
+  },
+  // OWNER_EMAILS (comma-separated) is a secret, not a var: this file is public. Set it before deploying this change:
+  //   npx wrangler secret put OWNER_EMAILS
+  // Sign-ins and admin key tries per address (index.js `limited`): counted across every isolate, which the in-memory
+  // counter (edge.js overLimit) is not (22 wrong admin keys in a row all got through on 2026-10-09).
+  "ratelimits": [
+    { "name": "SIGNIN_LIMIT", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
+    { "name": "API_LIMIT", "namespace_id": "4102", "simple": { "limit": 1200, "period": 60 } },
+    { "name": "ANALYTICS_LIMIT", "namespace_id": "4103", "simple": { "limit": 2, "period": 60 } }
+  ],
+  // The exact per-address count behind it (limiter.js): one Durable Object per address. SQLite-backed, as the
+  // Workers Free plan requires.
+  "durable_objects": { "bindings": [{ "name": "LIMITER", "class_name": "Limiter" }] },
+  "migrations": [{ "tag": "limiter-v1", "new_sqlite_classes": ["Limiter"] }],
+  // index.js scheduled(): sign-ups held in KV while D1 was down move into accounts (site/pending.js).
+  "triggers": { "crons": ["*/10 * * * *"] },
   "observability": { "enabled": true }
 }

@@ -17,6 +17,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { initSocial, socialRoute } from "./social.js";
+import { createHostedAccounts } from "./hosted-accounts.js";
+import { createHandles } from "./handles.js";
+import { initCreator, creatorRewards } from "./creator.js";
 
 // Same data folder as the radar (db.js), worked out here so this file can also run on its own
 // (server/accounts-server.mjs) without opening the radar's database.
@@ -35,6 +38,7 @@ try {
   `);
 } catch (e) { adb = null; console.error("[accounts] the account database could not be opened:", e.message); }
 try { if (adb) initSocial(adb, DATA); } catch (e) { console.error("[accounts] profiles could not be set up:", e.message); }
+try { if (adb) initCreator(adb); } catch (e) { console.error("[accounts] creator rewards could not be set up:", e.message); }
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const send = (res, code, body, extra = {}) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...extra }); res.end(JSON.stringify(body)); };
@@ -128,7 +132,40 @@ function sessionOf(req) {
 const onramp = () => { try { return JSON.parse(fs.readFileSync(path.join(DATA, "onramp.json"), "utf8")) || {}; } catch { return {}; } };
 
 const MINT =/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const handles = adb ? createHandles({ db: adb }) : null;
+const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf }) : null;
 const HOME = "/#/account";
+// A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
+// builds, signs and sends the create (+ the creator's first buy) from this wallet. Used by both sign-ins.
+async function launchCoin(vaultId, body) {
+  const name = String(body.name || "").trim(), symbol = String(body.symbol || "").trim().replace(/^\$/, "").toUpperCase();
+  if (!name || name.length > 32) throw fail(400, "The name is 1 to 32 characters.");
+  if (!/^[A-Z0-9]{1,10}$/.test(symbol)) throw fail(400, "The ticker is 1 to 10 letters or numbers.");
+  const img = /^data:(image\/(png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(body.image || ""));
+  if (!img) throw fail(400, "Add a picture (PNG, JPG, GIF or WebP).");
+  const bytes = Buffer.from(img[3], "base64");
+  if (bytes.length > 4.3e6) throw fail(400, "The picture is over 4 MB.");
+  const link = (v, re) => { v = String(v || "").trim(); if (!v) return ""; if (!/^https:\/\/\S{3,200}$/.test(v) || (re && !re.test(v))) throw fail(400, `That is not a working link: ${v.slice(0, 60)}`); return v; };
+  const fd = new FormData();
+  fd.append("file", new Blob([bytes], { type: img[1] }), `coin.${img[2] === "jpeg" ? "jpg" : img[2]}`);
+  fd.append("name", name); fd.append("symbol", symbol); fd.append("description", String(body.description || "").trim().slice(0, 500));
+  fd.append("twitter", link(body.twitter, /^https:\/\/(x|twitter)\.com\//)); fd.append("telegram", link(body.telegram, /^https:\/\/t\.me\//)); fd.append("website", link(body.website));
+  fd.append("showName", "true");
+  let meta;
+  try {
+    const r = await fetch("https://pump.fun/api/ipfs", { method: "POST", body: fd, signal: AbortSignal.timeout(45_000) });
+    meta = await r.json().catch(() => null);
+    if (!r.ok || !meta?.metadataUri) throw new Error(`HTTP ${r.status}`);
+  } catch (e) { throw fail(502, `The picture could not be uploaded to IPFS (${e.message}). Try again.`); }
+  const out = await vault(`/users/${vaultId}/launch`, { name, symbol, uri: meta.metadataUri, sol: +body.sol || 0, slippageBps: body.slippageBps });
+  return { ...out, uri: meta.metadataUri, image: meta.metadata?.image || null };
+}
+
+// Creator rewards: what the vault says can be claimed now, plus the history and coins (creator.js).
+async function rewardsFor(vaultId) {
+  const [due, txs] = await Promise.all([vault(`/users/${vaultId}/rewards`), vault(`/users/${vaultId}/txs`).catch(() => [])]);
+  return creatorRewards(due, txs);
+}
 
 async function route(req, res, url) {
   const p = url.pathname, m = req.method, g = google();
@@ -190,31 +227,9 @@ async function route(req, res, url) {
     if (!MINT.test(String(body.mint || ""))) throw fail(400, "That is not a coin's contract address.");
     return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "sell", mint: body.mint, pct: body.pct, slippageBps: body.slippageBps }));
   }
-  // A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
-  // builds, signs and sends the create (+ the creator's first buy) from this person's wallet.
-  if (p === "/api/account/launch" && m === "POST") {
-    const name = String(body.name || "").trim(), symbol = String(body.symbol || "").trim().replace(/^\$/, "").toUpperCase();
-    if (!name || name.length > 32) throw fail(400, "The name is 1 to 32 characters.");
-    if (!/^[A-Z0-9]{1,10}$/.test(symbol)) throw fail(400, "The ticker is 1 to 10 letters or numbers.");
-    const img = /^data:(image\/(png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(body.image || ""));
-    if (!img) throw fail(400, "Add a picture (PNG, JPG, GIF or WebP).");
-    const bytes = Buffer.from(img[3], "base64");
-    if (bytes.length > 4.3e6) throw fail(400, "The picture is over 4 MB.");
-    const link = (v, re) => { v = String(v || "").trim(); if (!v) return ""; if (!/^https:\/\/\S{3,200}$/.test(v) || (re && !re.test(v))) throw fail(400, `That is not a working link: ${v.slice(0, 60)}`); return v; };
-    const fd = new FormData();
-    fd.append("file", new Blob([bytes], { type: img[1] }), `coin.${img[2] === "jpeg" ? "jpg" : img[2]}`);
-    fd.append("name", name); fd.append("symbol", symbol); fd.append("description", String(body.description || "").trim().slice(0, 500));
-    fd.append("twitter", link(body.twitter, /^https:\/\/(x|twitter)\.com\//)); fd.append("telegram", link(body.telegram, /^https:\/\/t\.me\//)); fd.append("website", link(body.website));
-    fd.append("showName", "true");
-    let meta;
-    try {
-      const r = await fetch("https://pump.fun/api/ipfs", { method: "POST", body: fd, signal: AbortSignal.timeout(45_000) });
-      meta = await r.json().catch(() => null);
-      if (!r.ok || !meta?.metadataUri) throw new Error(`HTTP ${r.status}`);
-    } catch (e) { throw fail(502, `The picture could not be uploaded to IPFS (${e.message}). Try again.`); }
-    const out = await vault(`/users/${me.vault_id}/launch`, { name, symbol, uri: meta.metadataUri, sol: +body.sol || 0, slippageBps: body.slippageBps });
-    return send(res, 200, { ...out, uri: meta.metadataUri, image: meta.metadata?.image || null });
-  }
+  if (p === "/api/account/launch" && m === "POST") return send(res, 200, await launchCoin(me.vault_id, body));
+  if (p === "/api/account/rewards" && m === "GET") return send(res, 200, await rewardsFor(me.vault_id));
+  if (p === "/api/account/claim" && m === "POST") return send(res, 200, await vault(`/users/${me.vault_id}/claim`, {}));
   // Paying by card: Stripe's own hosted page takes the payment and sends the SOL to this person's wallet.
   if (p === "/api/account/onramp" && m === "POST") {
     const key = onramp().stripeSecret;
@@ -237,8 +252,12 @@ async function route(req, res, url) {
 
 // Returns true when the request was an account request (answered here), false to let server.js carry on.
 export async function handle(req, res, url) {
+  // Handles and invites (server/handles.js): the Worker's edge calls, and a member's own handle.
+  if (url.pathname.startsWith("/api/edge/")) return req.edgeCall && handles ? handles.edge(req, res, url) : false;
   if (!url.pathname.startsWith("/api/account/")) return false;
+  if (url.pathname === "/api/account/handle" && req.walletMember && handles) return handles.member(req, res, url);
   try {
+    if (req.liveWallets && hosted) return await hosted(req, res, url);
     if (!LOCAL.test(String(req.headers.host || "")) && !onPublic(req, google())) throw fail(403, "Accounts and wallets are only available on the PC that runs Blix.");
     // A page on another site must not be able to drive an account: if a page made the request, it must be ours.
     const origin = String(req.headers.origin || "").replace(/^https?:\/\//, "");

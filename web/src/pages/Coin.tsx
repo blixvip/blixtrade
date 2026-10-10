@@ -2,17 +2,25 @@
 // the candle chart with the dev's, snipers', bundles' and followed wallets' trades marked and your average
 // buy and sell drawn across it, tabs under it, a trading column on the right, and the floating instant trade
 // panel (one-click presets). main.tsx loads this lazily; keep the export and the prop.
-// Data: /api/token/<mint> every 15 s, /api/coin/<mint> every 2 s, /api/coin/<mint>/trades every 1.5 s.
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import { usePoll, type CoinData, type TokenDetail, type Trades } from "@/lib/coin";
-import { CoinChart, type ChartEvent, type Level, type Mark } from "./coin/Chart";
-import { CoinHeader } from "./coin/Header";
+// Data: /api/token/<mint> every 15 s, /api/coin/<mint> every 3 s, /api/coin/<mint>/trades every 8 s (4 s without the stream), and from
+// the stream, every trade the moment the radar reads it from the chain (`ctrade`) and the holder figures each
+// time the chain changes them (`cholders`).
+import { cn } from "@/lib/utils";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadPaperSizes } from "@/lib/mode";
+import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
+import { onCoinRows, useCoinHolders, usePulse } from "@/lib/pulse";
+import type { ChartEvent, ChartPeople, Level, Mark } from "./coin/Chart";
+import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
 import { QuickTrade } from "./coin/QuickTrade";
+import { setQuickCoin } from "@/lib/quick";
 import { Addresses, Flow, Info, Links, Position, TradePanel } from "./coin/Side";
-import { CoinTabs } from "./coin/Tabs";
+import { CoinTabs, SideTrades } from "./coin/Tabs";
 import { Empty } from "./coin/parts";
+import { ReplayBar } from "./coin/Replay";
+import { useReplay } from "@/lib/replay";
+import { BrandLoader, EmptyState } from "@/components/page";
 
 // DexScreener order types, as the chart's pills say them.
 const ORDER: Record<string, [string, string]> = {
@@ -22,18 +30,81 @@ const ORDER: Record<string, [string, string]> = {
   trendingBarAd: ["AD", "DexScreener trending bar ad paid"],
 };
 
+// The chart is its own file with the charting library (~70 KB gz): the header, trades and trade panel draw while
+// it arrives (index.html asks for it with the page, lib/coin.ts on hover). The space it takes is held meanwhile.
+const CoinChart = lazy(() => import("./coin/Chart").then((m) => ({ default: m.CoinChart })));
+const ChartSpace = () => <div className="flex flex-col gap-1.5 p-2.5" aria-hidden><div className="h-7" /><div className="h-[clamp(340px,52vh,760px)]" /></div>;
+
 const MIGRATE_MC_SOL = 410.9;   // pump.fun market cap at migration, in SOL (see the levels below)
+
+const NO_INFO: CoinData["info"] = { holders: null, top10: null, devPct: null, snipers: null, bundle: null, insiders: null, lpLocked: null, safety: null, traders: null, source: null, checked: null };
 
 export function Coin({ mint }: { mint: string }) {
   const token = usePoll<TokenDetail>(`token/${mint}`, 15_000);
-  const coin = usePoll<CoinData>(`coin/${mint}`, 2_000);
-  const trades = usePoll<Trades>(`coin/${mint}/trades?limit=150`, 1_500);
+  // Every trade arrives on the stream the moment the radar reads it (ctrade, below); these reads fill in the rest.
+  const coinPolled = usePoll<CoinData>(`coin/${mint}`, 3_000);
+  // With the stream connected the pushed rows are the live list and this read only fills in what Jupiter indexed.
+  const streaming = usePulse((s) => s.connected);
+  const polled = usePoll<Trades>(`coin/${mint}/trades?limit=150`, streaming ? 8_000 : 4_000);
+  // Trades pushed by the stream as the radar reads them, newest first, applied once a frame.
+  const [pushed, setPushed] = useState<{ mint: string; rows: Trade[] }>({ mint, rows: [] });
+  // A replay jump (lib/replay.ts) starts the pushed list over: rows from after the new moment must go.
+  const replayEpoch = useReplay((st) => (st.mint === mint ? st.epoch : 0));
+  useEffect(() => {
+    setPushed({ mint, rows: [] });
+    let raf = 0, wait: Trade[] = [];
+    const un = onCoinRows(mint, (rows) => {
+      wait.push(...rows);
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; const add = wait.reverse(); wait = []; setPushed((s) => ({ mint, rows: [...add, ...(s.mint === mint ? s.rows : [])].slice(0, 300) })); });
+    });
+    return () => { un(); cancelAnimationFrame(raf); };
+  }, [mint, replayEpoch]);
+  // The list: the polled rows (a transaction Jupiter has indexed shows as it lists it, every leg exact), and the
+  // pushed rows of transactions not in it yet. Same rule as the server's coinTrades.
+  const trades = useMemo(() => {
+    const p = polled.data;
+    const rows = pushed.mint === mint ? pushed.rows : [];
+    if (!rows.length) return polled;
+    const seen = new Set((p?.trades || []).map((x) => x.tx).filter(Boolean));
+    const newest = (p?.trades || []).reduce((m, x) => Math.max(m, x.t), 0);
+    const fresh = rows.filter((x) => (x.tx ? !seen.has(x.tx) : x.t > newest));
+    const list = [...fresh, ...(p?.trades || [])].sort((a, b) => b.t - a.t).slice(0, 150);
+    return { ...polled, data: { mint, source: p?.source ?? "live", note: p?.note, ...p, trades: list } as Trades };
+  }, [polled, pushed, mint]);
+  // Holder figures from the chain the moment they change, over the polled ones.
+  // (Not in a replay: the chain's holder figures are today's, the replay's come from its own ledger.)
+  const liveHolders = useCoinHolders(mint), liveH = replayEpoch ? null : liveHolders;
+  const coin = useMemo(() => {
+    // A partial answer (no `info`: a coin the server could not read yet) must not take the page down.
+    const raw = coinPolled.data, d = raw && !raw.info ? { ...raw, info: NO_INFO } : raw;
+    if (!d || !liveH || liveH.holders == null) return d === raw ? coinPolled : { ...coinPolled, data: d };
+    return { ...coinPolled, data: { ...d, info: { ...d.info, holders: liveH.holders, top10: liveH.top10 ?? d.info.top10, devPct: liveH.devPct ?? d.info.devPct, source: liveH.source ?? d.info.source } } };
+  }, [coinPolled, liveH]);
   // Trades of $1,000+ over the whole history, for the chart's big-trade bubbles.
   const big = usePoll<Trades>(`coin/${mint}/big`, 60_000);
+  // Faces on the chart: pump.fun accounts and Fomo traders who traded or called this coin.
+  const people = usePoll<ChartPeople>(`coin/${mint}/people`, 5_000);
+  // A replay starting or jumping (lib/replay.ts): every read answered as of the new moment at once, not on its next turn.
+  useEffect(() => { if (replayEpoch) { token.refresh(); coinPolled.refresh(); polled.refresh(); big.refresh(); people.refresh(); } }, [replayEpoch]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // More of the replayed day arrived (Fomo's history, who made the older trades): the figures built from it again.
+  const replayRev = useReplay((st) => (st.mint === mint ? st.rev : 0));
+  useEffect(() => { if (replayRev) { coinPolled.refresh(); polled.refresh(); people.refresh(); } }, [replayRev]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [sizes, setSizes] = useState<number[]>([0.1, 0.25, 0.5, 1]);
-  useEffect(() => { api<{ sizes?: number[] }>("paper").then((d) => d.sizes?.length && setSizes(d.sizes)).catch(() => {}); }, []);
+  useEffect(() => { loadPaperSizes().then((s) => s && setSizes(s)); }, []);
   useEffect(() => { window.scrollTo(0, 0); }, [mint]);
   const pos = usePosition(mint, token.data, coin.data);
+  // The floating quick trade window keeps this coin when you move on to Pulse or any other page.
+  const sym = token.data?.token?.symbol;
+  useEffect(() => { if (sym) setQuickCoin({ mint, symbol: sym }); }, [mint, sym]);
+  // The live trades go beside the chart when the main column has room for both (a chart under ~720 px is cramped).
+  const [wide, setWide] = useState(false);
+  const ro = useRef<ResizeObserver | null>(null);
+  const mainRef = useCallback((el: HTMLElement | null) => {
+    ro.current?.disconnect(); ro.current = null;
+    if (!el) return;
+    ro.current = new ResizeObserver(([e]) => setWide(e.contentRect.width >= 1410));
+    ro.current.observe(el);
+  }, []);
 
   // Every tagged trade becomes a chart icon: the server's ring of them (from before the page opened) plus
   // each one seen in the trade list while it is open (bonded coins' pool trades too). Kept, not just the last 150.
@@ -65,11 +136,17 @@ export function Coin({ mint }: { mint: string }) {
     return out;
   }, [paid]);
 
-  const r = token.data;
+  // An answer without the token (an edge error body, a coin not yet known) shows as still loading, not a crash.
+  const r = token.data?.token ? token.data : null;
+  // An address that cannot be a coin (a typo, a broken link) says so, with no pump.fun link or retry that cannot help.
+  const validMint = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint);
+  if (!r && !validMint) {
+    return <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><div><EmptyState icon="search" title="That isn't a coin address" hint="Solana coin addresses are 32 to 44 letters and numbers. Check the link or paste the address again." action={{ label: "Go to Discover", onClick: () => { location.hash = "#/coins"; } }} /></div></div>;
+  }
   if (!r) {
     return token.error
-      ? <div className="p-3"><div className="surface"><Empty title="Couldn't load this coin" text={token.error} /></div></div>
-      : <div className="p-3"><div className="surface h-24 animate-pulse" /></div>;
+      ? <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><div><EmptyState icon="search" title="Couldn't load this coin" hint="Blix hasn’t indexed this token yet, or its market data is unavailable." action={{ label: location.hash.endsWith('/feed') ? "Back to Feed" : "Go back", onClick: () => { if (location.hash.endsWith('/feed')) location.hash = '#/feed'; else if (history.length > 1) history.back(); else location.hash = '#/coins'; } }} /><a href={`https://pump.fun/coin/${encodeURIComponent(mint)}`} target="_blank" rel="noopener noreferrer" className="mt-4 block text-center text-info underline">Open source page on pump.fun</a><button onClick={token.refresh} className="mx-auto mt-3 block text-sm text-muted hover:text-ink">Try again</button></div></div>
+      : <div className="grid h-[calc(100dvh-140px)] place-items-center p-3"><BrandLoader label="Loading coin" /></div>;
   }
   const c = coin.data;
   const symbol = r.token.symbol || "?";
@@ -77,6 +154,8 @@ export function Coin({ mint }: { mint: string }) {
   // Its real launch time when Jupiter knows it: a coin Blix only found today can be weeks old (and quiet).
   const born = c?.created ? (typeof c.created === "number" ? c.created : Date.parse(String(c.created))) : NaN;
   const age = Date.now() - (Number.isFinite(born) ? born : r.token.first_seen || Date.now());
+  // When a pump.fun coin moved to its pool: its PumpSwap pair is made at migration.
+  const migratedAt = r.token.graduated && r.token.pair_created && (r.token.dex === "pumpswap" || mint.endsWith("pump")) ? r.token.pair_created : null;
   const defaultTf = !r.token.graduated && age < 30 * 60_000 ? 1 : !r.token.graduated && age < 3 * 3600e3 ? 15 : 60;
   const refresh = () => { token.refresh(); coin.refresh(); };
   const levels: Level[] = pos.has ? [{ price: pos.entry || 0, buy: true, title: "Avg buy" }, { price: pos.exit || 0, buy: false, title: "Avg sell" }] : [];
@@ -91,19 +170,28 @@ export function Coin({ mint }: { mint: string }) {
   if (f?.quarantine || f?.illiquid) warn.push([true, `The price shown cannot be traded at: ${f.exitWhy || f.quarantine}.`]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2.5 p-3 max-md:pb-20">
-      <CoinHeader r={r} c={c} sizes={sizes} onPaper={refresh} />
-      {warn.map(([bad, text]) => <p key={text} className={bad ? "rounded-control border border-down/50 bg-down/10 px-3 py-2 text-sm text-ink-2" : "rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-sm text-ink-2"}>{text}</p>)}
-      <div className="grid items-start gap-2.5 grid-cols-[minmax(0,1fr)_340px] max-xl:grid-cols-[minmax(0,1fr)_300px] max-lg:grid-cols-1">
-        <section className="surface min-w-0 overflow-hidden">
-          <CoinChart mint={mint} marks={marks} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} />
-          <CoinTabs mint={mint} r={r} c={c} trades={trades.data} onPaper={refresh} />
+    <div className="flex min-w-0 flex-col p-3 max-md:pb-20">
+      {/* The header, chart and tabs on the left; the live trades (wide) run down beside both, the trade column from the top of the page. */}
+      <div ref={mainRef} className={cn("grid items-start gap-2.5 lg:grid-rows-[auto_1fr] grid-cols-[minmax(0,1fr)_340px] max-xl:grid-cols-[minmax(0,1fr)_300px] max-lg:grid-cols-1", wide && "grid-cols-[minmax(0,1fr)_auto_340px]")}>
+        <div className="flex min-w-0 flex-col gap-2.5 lg:col-start-1 lg:row-start-1">
+          <CoinHeader r={r} c={c} sizes={sizes} onPaper={refresh} />
+          {warn.map(([bad, text]) => <p key={text} className={bad ? "rounded-control border border-down/50 bg-down/10 px-3 py-2 text-sm text-ink-2" : "rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-sm text-ink-2"}>{text}</p>)}
+          <section className="surface min-w-0 overflow-hidden">
+            <ReplayBar mint={mint} symbol={symbol} onTick={() => { refresh(); polled.refresh(); big.refresh(); people.refresh(); }} />
+            <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
+          </section>
+        </div>
+        {wide && <div className="surface col-start-2 row-span-2 row-start-1 flex self-stretch overflow-hidden [&>div]:border-l-0"><SideTrades trades={trades.data} /></div>}
+        <section className="surface min-w-0 overflow-hidden lg:col-start-1 lg:row-start-2">
+          <CoinTabs mint={mint} r={r} c={c} trades={trades.data} onPaper={refresh} sideTrades={wide} end={<InstantButton />} />
         </section>
-        <aside className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static">
+        {/* The trade column scrolls on its own (screen height less the top bar, status bar and margins), so its lower
+            cards are reachable without scrolling the chart and the holders away. */}
+        <aside className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static lg:max-h-[calc(100dvh-6.75rem)] lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin] lg:[&>*]:shrink-0 lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
           <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} />
           <Flow c={c} />
-          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} />
-          <Position pos={pos} />
+          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} />
+          <Position pos={pos} mint={mint} symbol={symbol} solUsd={c?.solUsd} />
           <Info r={r} c={c} />
           <Addresses r={r} c={c} />
           <Links r={r} />

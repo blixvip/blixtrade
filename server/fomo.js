@@ -134,7 +134,14 @@ export function coinFlow(mint) {
 }
 
 // Fomo traders the radar has watched, ranked by realized profit on the trades it saw.
+// A week of Fomo trades, re-ranked: ~0.4 s, asked for by the overview and the auto-follow every 2 minutes.
+// The ranking moves slowly, so one reading of the top 50 serves for 5 minutes.
+let topCache = { t: 0, v: [] };
 export function topTraders(limit = 25) {
+  if (now() - topCache.t > 5 * 60_000) topCache = { t: now(), v: rankTraders(50) };
+  return topCache.v.slice(0, limit);
+}
+function rankTraders(limit) {
   const rows = db.prepare("SELECT wallet, mint, side, tokens, usd FROM fomo_flow WHERE t > ? ORDER BY t").all(now() - 7 * 24 * 60 * MIN);
   const by = new Map();
   for (const r of rows) {

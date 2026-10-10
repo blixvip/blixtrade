@@ -1,6 +1,7 @@
 // Keeps the radar running: restarts it if it exits, backing off if it keeps crashing.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startWebApp } from "../server/webapp.js";
@@ -43,7 +44,10 @@ async function run() {
   // A project-local Windows runtime lets Blix receive Node fixes without changing other apps.
   const localNode = path.join(ROOT, "data", "runtime", "node.exe");
   const runtime = process.env.BLIX_NODE || (process.platform === "win32" && fs.existsSync(localNode) ? localNode : process.execPath);
-  const child = spawn(runtime, ["--no-warnings", "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
+  // The radar sits at ~2.3 GB on the VM and died of "heap out of memory" there on 2026-10-09 (report in data/reports);
+  // on a machine with room (the VM has 24 GB) it gets an 8 GB heap instead of Node's ~4.5 GB default.
+  const heap = os.totalmem() > 16e9 ? ["--max-old-space-size=8192"] : [];
+  const child = spawn(runtime, ["--no-warnings", ...heap, "--report-on-fatalerror", "--report-compact", `--report-directory=${reports}`, path.join(ROOT, "server", "server.js")], {
     cwd: ROOT, windowsHide: true, stdio: ["ignore", log, log], env: { ...process.env, BLIX_WEB_EXTERNAL: "1" },
   });
   // A radar that is running but no longer answers is as down as one that crashed, and would otherwise stay
@@ -66,3 +70,24 @@ async function run() {
   });
 }
 run();
+
+// Blix Vault (C:\codelix-vault, beside this folder) signs real trades. Real buy and sell buttons need it,
+// so it is kept running here too: started if nothing answers on its port, restarted if it exits.
+const VAULT = path.join(ROOT, "..", "blix-vault");
+const vaultUp = () => fetch("http://127.0.0.1:4470/", { signal: AbortSignal.timeout(3000) }).then(() => true).catch(() => false);
+let vaultDelay = 2000;
+async function runVault() {
+  if (!fs.existsSync(path.join(VAULT, "server", "server.js"))) return;
+  if (await vaultUp()) return setTimeout(runVault, 30_000);
+  const vlog = fs.openSync(path.join(ROOT, "data", "vault.log"), "a");
+  const started = Date.now();
+  const child = spawn(process.execPath, ["--no-warnings", path.join(VAULT, "server", "server.js")], { cwd: VAULT, windowsHide: true, stdio: ["ignore", vlog, vlog] });
+  child.on("exit", (code) => {
+    fs.closeSync(vlog);
+    fs.appendFileSync(logFile, `[supervisor] vault exited with ${code} at ${new Date().toISOString()}
+`);
+    vaultDelay = Date.now() - started > 60_000 ? 2000 : Math.min(vaultDelay * 2, 60_000);
+    setTimeout(runVault, vaultDelay);
+  });
+}
+runVault();

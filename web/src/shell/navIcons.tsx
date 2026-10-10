@@ -1,10 +1,11 @@
 import type { ReactNode, SVGProps } from "react";
+import { cn } from "@/lib/utils";
 
 // The rail's icons: one two-tone set on a 24 px grid, all the same 1.8 stroke and round joins. Each has an
 // outline and a soft filled body (class "duo"); the rail lights the body up for the page you are on.
 // Shapes follow Lucide's metaphors (ISC licence) where one fits, redrawn to sit together.
-const N = (duo: ReactNode, line: ReactNode) => (p: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...p}>
+const N = (duo: ReactNode, line: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("shrink-0", className)} {...p}>
     <g className="duo" fill="currentColor" stroke="none" opacity="0.16">{duo}</g>
     {line}
   </svg>
@@ -84,6 +85,11 @@ export const NavIcon = {
       <circle cx="12" cy="12" r="3" /></>,
   ),
   // A heart with a pulse: the radar's health.
+  // A play button inside a rewind loop: the chart replay (blixvip.com/demo).
+  replay: N(
+    <circle cx="12" cy="12" r="8.25" />,
+    <><path d="M3.75 12a8.25 8.25 0 1 0 2.4-5.83" /><path d="M3.75 3.75v3.5h3.5" /><path d="M10.25 9.25v5.5l4.5-2.75z" /></>,
+  ),
   health: N(
     <path d="M12 20.25s-8.25-4.75-8.25-11A4.5 4.5 0 0 1 12 6.9a4.5 4.5 0 0 1 8.25 2.35c0 6.25-8.25 11-8.25 11z" />,
     <><path d="M12 20.25s-8.25-4.75-8.25-11A4.5 4.5 0 0 1 12 6.9a4.5 4.5 0 0 1 8.25 2.35c0 6.25-8.25 11-8.25 11z" /><path d="M6.5 12.5h2.25l1.5-2.75 2.5 5 1.5-2.25h3.25" /></>,

@@ -9,22 +9,63 @@ import { settings } from "./settings.js";
 import { setSolPrice } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
 import { startRpcStream } from "./rpc-stream.js";
+import { quotedTrade, setLocalPrice } from "./pumpquote.js";
+import { noteSlot, behindOf } from "./feedlag.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const TRADE = "bddb7fd34ee661ee";           // anchor discriminator of pump.fun's TradeEvent
 const CREATE = "1b72a94ddeeb6376";          // ... and of its CreateEvent (name, symbol, uri, mint, curve, user)
 const INITIAL_REAL_TOKENS = 793_100_000;     // tokens sold along the curve before it completes
-const PUBLIC_WS = "wss://api.mainnet-beta.solana.com";
-export const rpcWsUrl = () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : PUBLIC_WS);
+// Without a key, each (re)connection takes the next public websocket in turn: the two feeds spread over two
+// endpoints, and one that cuts us off ("data allowance" per IP per 30 s at tonight's volume, 2026-10-07)
+// is left to rest while the other carries the feed.
+// The first is preferred (publicnode trails the chain by 30-40 slots at busy hours); a reconnection soon
+// after the last one handed out means that endpoint failed, so the next one is tried, and after a minute
+// the preferred one is tried again.
+const PUBLIC_WS_POOL = ["wss://api.mainnet-beta.solana.com", "wss://solana-rpc.publicnode.com"];
+let wsLast = { i: 0, t: 0 };
+function publicWs() {
+  const t = now(), since = t - wsLast.t;
+  // Several feeds connecting together at a start share the same endpoint; a reconnection within a minute of
+  // the last handout moves on; after that, back to the preferred one.
+  const i = since < 2000 ? wsLast.i : since < 60_000 ? (wsLast.i + 1) % PUBLIC_WS_POOL.length : 0;
+  wsLast = { i, t };
+  return PUBLIC_WS_POOL[i];
+}
+export const rpcWsUrl = () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : publicWs());
+// The twin feeds: the same program's logs on the OTHER public endpoint at the same time. Each free node drops
+// notifications at random and says nothing (2026-10-09: publicnode's stream had 168 trades in one minute that
+// the journal lacked); the first copy of a transaction counts, the second is dropped (sigGate). On logs this costs
+// ~25x less of an endpoint's allowance per trade than reading whole blocks (blockworker.js). Off with a key set
+// (one paid endpoint is whole) or settings.twinFeeds = false.
+export const twinOn = () => settings.twinFeeds !== false && !settings.rpcWsUrl?.trim() && !settings.rpcUrl?.trim();
+// The endpoint the main feed is NOT on (the same node drops the same notifications, so a twin there adds nothing).
+export const twinOf = (main) => PUBLIC_WS_POOL.find((u) => u !== main) || PUBLIC_WS_POOL[1];
+// A twin stream that keeps to the other endpoint: started, and started again on the other one whenever the main
+// feed has moved onto its endpoint (checked every 10 s).
+export function startTwin(stats, mainUrl, request, onEvent) {
+  let stop = null;
+  const go = () => { stop = startRpcStream({ url: () => (stats.url = twinOf(mainUrl())), request, onStatus: ({ connected }) => { stats.connected = connected; }, onEvent: (d) => { stats.msgs++; stats.lastMsg = now(); onEvent(d); } }); };
+  go();
+  setInterval(() => { if (stats.url && mainUrl() === stats.url) { stats.moved = (stats.moved || 0) + 1; try { stop?.(); } catch {} go(); } }, 10_000).unref?.();
+}
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const now = () => Date.now();
 
+// Base-256 to base-58 a byte at a time in small integers: six times faster than the BigInt way (43 ms vs 265 ms
+// for 10K keys), and it runs for every trade decoded and every holder account read. Same output.
 export function b58(buf) {
-  let n = 0n;
-  for (const b of buf) n = n * 256n + BigInt(b);
-  let s = "";
-  while (n > 0n) { s = B58[Number(n % 58n)] + s; n /= 58n; }
-  for (const b of buf) { if (b) break; s = "1" + s; }
+  let zeros = 0;
+  while (zeros < buf.length && buf[zeros] === 0) zeros++;
+  const d = new Uint8Array(((buf.length * 138) / 100 + 1) | 0);
+  let len = 0;
+  for (let i = zeros; i < buf.length; i++) {
+    let c = buf[i];
+    for (let j = 0; j < len; j++) { c += d[j] << 8; d[j] = c % 58; c = (c / 58) | 0; }
+    while (c > 0) { d[len++] = c % 58; c = (c / 58) | 0; }
+  }
+  let s = "1".repeat(zeros);
+  for (let j = len - 1; j >= 0; j--) s += B58[d[j]];
   return s;
 }
 
@@ -35,6 +76,10 @@ let sent = 0;
 // Other parts of the radar can follow every trade as it lands (the early radar does).
 const listeners = [];
 export const onLiveTrade = (fn) => listeners.push(fn);
+// fn(mint, s, sol, buy, { user, tokens, slot, sig }) for every PumpSwap pool trade of a bonded coin (recordPoolTrade):
+// the holder ledger follows a coin into its pool on these, where the curve listeners above never look.
+const poolListeners = [];
+export const onPoolLedger = (fn) => poolListeners.push(fn);
 // Every coin created on pump.fun, straight from the chain. PumpPortal (the launch feed) drops about one
 // launch in seven (measured 2026-10-02: 18 of 129 in 150s), so the engine fills its gaps from here.
 const createListeners = [];
@@ -54,7 +99,7 @@ function onCreate(buf) {
   } catch { createStats.failed++; }
 }
 
-function onTrade(buf, slot = null) {
+function onTrade(buf, slot = null, sig = null) {
   if (buf.length < 8 + 32 + 8 + 8 + 1 + 32 + 8 + 8 + 8 + 8 + 8) return;
   let o = 8;
   const mint = b58(buf.subarray(o, o += 32));
@@ -68,6 +113,13 @@ function onTrade(buf, slot = null) {
   o += 8;                                            // real SOL reserves
   const rTok = Number(buf.readBigUInt64LE(o)) / 1e6;
   if (!vTok) return;
+  // A curve quoted in another token (USDC, a stock token, another coin): priced in pumpquote.js, as SOL-equivalents.
+  if (!vSol) {
+    const q = quotedTrade(buf, feed.solUsd);
+    if (q?.pending) return "pending";
+    if (q) recordTrade({ mint, sol: q.sol, tokens, buy, user, mcSol: q.mcSol, progress: 1 - rTok / INITIAL_REAL_TOKENS, vSol: q.vSol, vTok, feeBps: null, slot, sig });
+    return;
+  }
   const mcSol = (vSol / vTok) * 1e9;                 // 1B supply
   // Coins created with a smaller virtual SOL reserve start at a tiny market cap (a few dollars) but are real
   // coins on the same curve (same 279.9M virtual token offset, same bonding point): about a fifth of all
@@ -75,12 +127,12 @@ function onTrade(buf, slot = null) {
   // The fee it charged (protocol + creator, in basis points), so a buy or sell can be quoted exactly (quote.js).
   let feeBps = null;
   if (buf.length >= 225) { const bps = Number(buf.readBigUInt64LE(161)) + Number(buf.readBigUInt64LE(209)); if (bps > 0 && bps < 1000) feeBps = bps; }
-  recordTrade({ mint, sol, tokens, buy, user, mcSol, progress: 1 - rTok / INITIAL_REAL_TOKENS, vSol, vTok, feeBps, slot });
+  recordTrade({ mint, sol, tokens, buy, user, mcSol, progress: 1 - rTok / INITIAL_REAL_TOKENS, vSol, vTok, feeBps, slot, sig });
 }
 
 // One trade on a bonding curve, from whichever launchpad feed decoded it (pump.fun here, LaunchLab in
 // launchlab.js). `user` is null when the feed does not say who traded; `pad` names a launchpad other than pump.fun.
-export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSol, vTok, feeBps, slot, pad }) {
+export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSol, vTok, feeBps, slot, pad, sig = null }) {
   if (!(mcSol > 0) || mcSol > 5e6 || sol > 5000) return;   // a 5,000 SOL trade on a curve is a misread event
   feed.trades++;
   let s = live.get(mint);
@@ -96,18 +148,48 @@ export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSo
   // a sample every ~10s for the 1-minute change
   if (!s.hist.length || now() - s.hist[s.hist.length - 1][0] > 10_000) { s.hist.push([now(), mcSol]); if (s.hist.length > 8) s.hist.shift(); }
   dirty.add(mint);
-  // Listeners also get who traded, how many tokens and in which slot (holders.js builds balances from it).
-  for (const fn of listeners) fn(mint, s, sol, buy, { user, tokens, slot });
+  // Listeners also get who traded, how many tokens, in which slot and transaction (holders.js builds balances from it).
+  for (const fn of listeners) fn(mint, s, sol, buy, { user, tokens, slot, sig });
 }
 
-// What a row needs, in USD.
+// A bonded coin's trade in its PumpSwap pool (pumpswap.js), kept on the same per-coin stats as its curve trades
+// were: buys, sells, volume and traders carry on from the curve's figures, the market cap and the pool's depth
+// move with every trade, and the row goes out on the next 100 ms push like any curve coin's. Before this a
+// bonded coin's counts came from DexScreener (half a minute old) and its holders from RugCheck (minutes).
+export function recordPoolTrade(mint, { mcSol, sol, tokens, buy, user, slot, sig, depth }) {
+  if (!(mcSol > 0) || !(sol >= 0) || sol > 50_000) return;
+  let s = live.get(mint);
+  if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
+  s.mc = mcSol; s.ath = Math.max(s.ath, mcSol); s.last = now(); s.side = buy ? "b" : "s";
+  s.progress = 1; s.pool = true;
+  if (depth > 0) s.depth = depth;
+  buy ? s.buys++ : s.sells++;
+  s.vol += sol;
+  if (user && s.traders.size < 2000) s.traders.add(user);
+  if (!s.hist.length || now() - s.hist[s.hist.length - 1][0] > 10_000) { s.hist.push([now(), mcSol]); if (s.hist.length > 8) s.hist.shift(); }
+  dirty.add(mint);
+  for (const fn of poolListeners) fn(mint, s, sol, buy, { user, tokens, slot, sig });
+}
+
+// Liquidity (USD, both sides) of a standard pump.fun curve at a market cap, when no trade has been seen: the curve's
+// constant product is fixed (30 virtual SOL × 1.073B virtual tokens), so the virtual SOL reserve is sqrt(k × cap).
+const CURVE_K = 30 * 1.073e9;
+export function curveLiqUsd(mcapUsd, usd = feed.solUsd) {
+  const mcSol = mcapUsd / usd;
+  if (!(mcSol > 0) || !(usd > 0)) return null;
+  return 2 * Math.sqrt((CURVE_K * mcSol) / 1e9) * usd;
+}
+
+// What a row needs, in USD. `liq`: both sides of the pool, the way DexScreener and Axiom count it (on the curve
+// the virtual SOL reserve, as /api/sparks already shows it; in a PumpSwap pool its SOL side), or null when unknown.
 export function liveStats(mint) {
   const s = live.get(mint);
   if (!s) return null;
   const usd = feed.solUsd;
   const ago = s.hist.find(([t]) => now() - t <= 70_000) || s.hist[0];
+  const liq = s.pool ? (s.depth > 0 ? 2 * s.depth * usd : null) : s.vSol > 0 ? 2 * s.vSol * usd : null;
   return { mc: s.mc * usd, ath: s.ath * usd, buys: s.buys, sells: s.sells, vol: s.vol * usd, traders: s.traders.size,
-    progress: s.progress, side: s.side, last: s.last, chg1m: ago ? (s.mc / ago[1] - 1) * 100 : null };
+    progress: s.progress, side: s.side, last: s.last, chg1m: ago ? (s.mc / ago[1] - 1) * 100 : null, liq, pool: Boolean(s.pool) };
 }
 
 // Every coin still on the bonding curve that is at least `min` of the way there and traded in the last
@@ -125,30 +207,74 @@ export function drainUpdates(watched) {
   for (const m of dirty) {
     if (watched.has(m)) {
       const x = liveStats(m);
-      out.push([m, Math.round(x.mc), x.buys, x.sells, Math.round(x.vol), x.traders, +(x.progress ?? 0).toFixed(4), x.side, x.chg1m == null ? null : +x.chg1m.toFixed(1)]);
+      out.push([m, Math.round(x.mc), x.buys, x.sells, Math.round(x.vol), x.traders, +(x.progress ?? 0).toFixed(4), x.side, x.chg1m == null ? null : +x.chg1m.toFixed(1), x.liq == null ? null : Math.round(x.liq)]);
     }
   }
   dirty.clear();
   return out;
 }
 
+// A transaction can arrive on more than one feed (the program's whole log stream and an open chart's own
+// stream, chartstream.js): the first copy counts, later ones are dropped. One gate per decoder; signatures
+// are remembered for the last ~`max`-to-2×`max` transactions.
+export function sigGate(max = 100_000) {
+  let cur = new Set(), old = new Set();
+  const gate = (sig) => {
+    if (!sig) return true;
+    if (cur.has(sig) || old.has(sig)) return false;
+    cur.add(sig);
+    if (cur.size >= max) { old = cur; cur = new Set(); }
+    return true;
+  };
+  gate.has = (sig) => cur.has(sig) || old.has(sig);   // asked without counting it as heard
+  gate.forget = (sig) => { cur.delete(sig); old.delete(sig); };
+  return gate;
+}
+const firstPump = sigGate();
+// Whether a pump.fun transaction came on a live stream (journalfeed.js's sweep reads only the ones that did not).
+export const pumpHeard = (sig) => firstPump.has(sig);
+// A pump.fun coin as another curve's quote token: its live price in dollars (curve market cap on 1B tokens).
+setLocalPrice((mint) => { const s = live.get(mint); return s && s.mc > 0 && feed.solUsd > 0 && Date.now() - s.last < 10 * 60_000 ? (s.mc * feed.solUsd) / 1e9 : null; });
+export const dupes = { pump: 0 };
+// The twin feed's own figures: messages, and trades it carried first (the main feed had skipped them, or not yet).
+export const twin = { pump: { connected: false, msgs: 0, first: 0, lastMsg: 0 }, swap: { connected: false, msgs: 0, first: 0, lastMsg: 0 } };
+
+// One logs notification's value ({ signature, err, logs }). A failed transaction's logs can still carry
+// events from before it failed; nothing it says happened, so it is skipped whole.
+export function pumpLogs(v, slot = null, src = null) {
+  if (!v || v.err) return;
+  if (!firstPump(v.signature)) { dupes.pump++; return; }
+  if (src === "twin") twin.pump.first++;
+  let pending = null;
+  for (const l of v.logs || []) {
+    if (!l.startsWith("Program data: ")) continue;
+    const buf = Buffer.from(l.slice(14), "base64");
+    if (buf.length <= 8) continue;
+    const disc = buf.toString("hex", 0, 8);
+    if (disc === TRADE) { if (onTrade(buf, slot, v.signature || null) === "pending") pending = true; else if (pending !== true) pending = false; }
+    else if (disc === CREATE) onCreate(buf);
+  }
+  // A trade on a curve whose quote token has no price yet, and nothing else read from it: the transaction is left
+  // unheard, so the sweep (journalfeed.js) reads it again once the price is in.
+  if (pending === true) firstPump.forget(v.signature);
+}
+
 function connect() {
   startRpcStream({
-    url: rpcWsUrl,
+    url: () => (feed.url = rpcWsUrl()),
     request: { method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] },
+    behind: () => behindOf("pump"),   // minutes of queued logs are dropped for a fresh subscription (rpc-stream.js)
     onStatus: ({ connected, error }) => { feed.connected = connected; feed.lastError = error; if (connected) feed.lastMsg = now(); },
     onEvent: (d) => {
       feed.lastMsg = now();
-      const slot = d.params?.result?.context?.slot ?? null;
-      for (const l of d.params?.result?.value?.logs || []) {
-        if (!l.startsWith("Program data: ")) continue;
-        const buf = Buffer.from(l.slice(14), "base64");
-        if (buf.length <= 8) continue;
-        const disc = buf.toString("hex", 0, 8);
-        if (disc === TRADE) onTrade(buf, slot);
-        else if (disc === CREATE) onCreate(buf);
-      }
+      noteSlot("pump", d.params?.result?.context?.slot);
+      pumpLogs(d.params?.result?.value, d.params?.result?.context?.slot ?? null);
     },
+  });
+  if (!twinOn()) return;
+  startTwin(twin.pump, () => feed.url, { method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] }, (d) => {
+    noteSlot("pump-twin", d.params?.result?.context?.slot);
+    pumpLogs(d.params?.result?.value, d.params?.result?.context?.slot ?? null, "twin");
   });
 }
 
@@ -181,9 +307,16 @@ async function saveState() {
   if (saving || !live.size) return;
   saving = true;
   try {
-    const coins = [];
-    for (const s of live.values()) if (now() - s.last < 30 * 60_000) coins.push({ ...s, traders: [...s.traders] });
-    await fs.promises.writeFile(STATE_FILE + ".tmp", JSON.stringify({ t: now(), solUsd: feed.solUsd, coins }));
+    // Written a few coins at a time (as holders.js does): stringifying every coin and its traders in one go
+    // held the radar up on every save.
+    const coins = [], t = now();
+    let n = 0;
+    for (const s of live.values()) {
+      if (t - s.last >= 30 * 60_000) continue;
+      coins.push(JSON.stringify({ ...s, traders: [...s.traders] }));
+      if (++n % 100 === 0) await new Promise((go) => setImmediate(go));
+    }
+    await fs.promises.writeFile(STATE_FILE + ".tmp", `{"t":${t},"solUsd":${JSON.stringify(feed.solUsd)},"coins":[${coins.join(",")}]}`);
     await fs.promises.rename(STATE_FILE + ".tmp", STATE_FILE);
   } catch {} finally { saving = false; }
 }

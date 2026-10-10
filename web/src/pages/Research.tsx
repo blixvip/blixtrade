@@ -6,6 +6,7 @@ import { usePoll } from "@/lib/coin";
 import { pct, tone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
+import { LiveMc } from "@/components/Live";
 
 type J = any;
 const read = async (mint: string, symbol: string) => { try { await post(`research/${mint}`); toast(`${symbol || "Coin"} queued first for an AI read`); } catch (e) { toast((e as Error).message); } };
@@ -21,7 +22,7 @@ function CoinTable({ rows, empty, bonded }: { rows: J[]; empty: string; bonded?:
     <Scroll><table className="w-full text-md"><thead><tr><th className={th}>Coin</th><th className={th}>AI read</th><th className={thR}>MCap</th><th className={thR}>Vol 1h</th><th className={thR}>1h</th><th className={thR}>{bonded ? "Bonded" : "To bonding"}</th></tr></thead><tbody>
       {rows.length ? rows.map((t) => (
         <tr key={t.mint} className="hover:bg-paper-3/60"><td className={td}><CoinCell mint={t.mint} symbol={t.symbol} name={t.name} sub={t.research?.verdict} /></td>
-          <td className={td}><Grade r={t.research} mint={t.mint} symbol={t.symbol} /></td><td className={cn(tdR, "font-semibold")}>{money(t.mcap)}</td><td className={tdR}>{money(t.vol_h1)}</td>
+          <td className={td}><Grade r={t.research} mint={t.mint} symbol={t.symbol} /></td><td className={cn(tdR, "font-semibold")}><LiveMc mint={t.mint} value={t.mcap} fmt={money} /></td><td className={tdR}>{money(t.vol_h1)}</td>
           <td className={cn(tdR, tone(t.chg_h1))}>{pct(t.chg_h1)}</td><td className={cn(tdR, "text-muted")}>{bonded ? ago(t.bonded_at) : t.progress != null ? `${Math.round(t.progress * 100)}%` : "—"}</td></tr>))
         : <tr><td colSpan={6}><Empty>{empty}</Empty></td></tr>}
     </tbody></table></Scroll>
@@ -46,7 +47,7 @@ export function Research() {
           {d.top.length ? d.top.map((t: J) => (
             <tr key={t.mint} className="hover:bg-paper-3/60"><td className={td}><CoinCell mint={t.mint} symbol={t.symbol} name={t.name} sub={t.tag} /></td>
               <td className={td}><span className="flex items-baseline gap-1.5"><b className={cn("font-semibold", gradeTone(t.grade))}>{t.grade}</b><span className="num text-muted">{t.score}</span><span className="text-sm text-muted">{t.tier}</span></span></td>
-              <td className={cn(td, "max-w-[34rem] truncate text-ink-2")} title={t.verdict}>{t.verdict}</td><td className={tdR}>{money(t.mcap_at)}</td><td className={cn(tdR, "font-semibold")}>{money(t.mcap)}</td>
+              <td className={cn(td, "max-w-[34rem] truncate text-ink-2")} title={t.verdict}>{t.verdict}</td><td className={tdR}>{money(t.mcap_at)}</td><td className={cn(tdR, "font-semibold")}><LiveMc mint={t.mint} value={t.mcap} fmt={money} /></td>
               <td className={cn(tdR, tone(t.chg_h1))}>{pct(t.chg_h1)}</td><td className={cn(tdR, "text-muted")}>{ago(t.t)}</td></tr>))
             : <tr><td colSpan={7}><Empty>No reads yet.</Empty></td></tr>}
         </tbody></table></Scroll>

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as health from "./health.js";
+import { askFast } from "./fast.js";
 
 const MODEL = "claude-sonnet-5-5";
 // The quick, light model on the same login: used for first reads when no other fast AI is available.
@@ -110,11 +111,27 @@ export function briefProblem(text) {
   return null;
 }
 
+// Claude where this machine has a Claude login (the PC); elsewhere (the server has none, on purpose) the fast lane
+// (Groq, else Gemini) writes it, so briefs keep coming instead of failing every five minutes.
+async function briefAsk(prompt) {
+  if (!token().error) return ask(BRIEF_SYSTEM, prompt, 1800);
+  // The free models cool off for a minute at a time while the coin reads share them: wait for one rather than fail.
+  for (let i = 0; ; i++) {
+    try {
+      const r = await askFast(BRIEF_SYSTEM, prompt, 1800, { json: false });
+      return { text: String(r.text || "").trim(), model: r.model, stop: null, truncated: false };
+    } catch (e) {
+      if (!e.busy || i >= 5) throw e;
+      await new Promise((ok) => setTimeout(ok, 20_000));
+    }
+  }
+}
+
 // Never publishes a cut-off brief as if it were whole: retries once, then says it is partial.
 export async function writeBrief(data) {
   let last;
   for (let i = 0; i < 2; i++) {
-    last = await ask(BRIEF_SYSTEM, `Scanner data (JSON):\n${JSON.stringify(data)}`, 1800);
+    last = await briefAsk(`Scanner data (JSON):\n${JSON.stringify(data)}`);
     const problem = last.truncated ? "ran out of room" : briefProblem(last.text);
     if (!problem) return { ...last, status: "complete", problem: null };
     last.problem = problem;
@@ -127,5 +144,8 @@ how it is trading right now, what the safety check found, and the one thing to w
 End with one short line on risk. Only use facts from the data.`;
 
 export async function explainCoin(data) {
-  return ask(COIN_SYSTEM, `Coin data (JSON):\n${JSON.stringify(data)}`, 500);
+  const prompt = `Coin data (JSON):\n${JSON.stringify(data)}`;
+  if (!token().error) return ask(COIN_SYSTEM, prompt, 500);
+  const r = await askFast(COIN_SYSTEM, prompt, 500, { json: false });
+  return { text: String(r.text || "").trim(), model: r.model, stop: null, truncated: false };
 }

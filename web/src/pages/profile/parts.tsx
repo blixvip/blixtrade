@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/toast";
 import { shortAddr } from "@/lib/format";
 import { pictureFrom, social, type Profile } from "@/lib/social";
 import { cn } from "@/lib/utils";
+import { thumb } from "@/lib/thumb";
 import { Icon } from "@/shell/icons";
 
 export const userHref = (username: string) => `#/u/${encodeURIComponent(username)}`;
@@ -17,7 +18,7 @@ export function Avatar({ p, size = 40, className }: { p: Pick<Profile, "avatar" 
   return (
     <span style={{ width: size, height: size, fontSize: size * 0.4 }}
       className={cn("grid shrink-0 place-items-center overflow-hidden rounded-full bg-paper-4 font-semibold text-ink-2 uppercase", className)}>
-      {p.avatar ? <img src={p.avatar} alt="" referrerPolicy="no-referrer" className="size-full object-cover" /> : (p.display || p.username || "?").slice(0, 1)}
+      {p.avatar ? <img src={thumb(p.avatar, size)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="size-full object-cover" /> : (p.display || p.username || "?").slice(0, 1)}
     </span>
   );
 }

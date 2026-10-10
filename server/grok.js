@@ -63,9 +63,17 @@ let refreshing = null, cooling = 0;
 // Out of subscription credits ("spending-limit"): stop calling Grok entirely and re-check every 30 minutes.
 let blockedUntil = 0, blockedReason = null;
 export const grokBlocked = () => blockedUntil > Date.now();
+// When the 30 minutes are up, one call goes through to see whether the credits are back; every other call waits
+// on that answer as if still blocked (the research lanes run up to a dozen at once, and each of them used to hit
+// Grok, fail and count as an error at every re-check). The same until Grok's first answer after a start, when it
+// is not known yet whether the credits are there.
+let probing = false;
+const unsure = () => Boolean(usage.blockedSince) || !usage.lastOk;
+const recheckBusy = () => unsure() && probing;
 const usage = { calls: 0, errors: 0, tokens: 0, searches: 0, lastMs: null, avgMs: null, lastModel: null, lastError: null, lastErrorAt: null, lastOk: null, blockedSince: null, limits: null, tier: null, billing: null };
 
-export const grokInstalled = () => fs.existsSync(path.join(DIR, "auth.json"));
+// settings.grokOff: the owner turned Grok off for Blix; every lane then treats it as not logged in.
+export const grokInstalled = () => !settings.grokOff && fs.existsSync(path.join(DIR, "auth.json"));
 // Can this lane use Grok right now: logged in, not out of credits, and inside the daily budget.
 export const grokReady = (lane) => grokInstalled() && !grokBlocked() && !grokOver(lane);
 export const grokStatus = () => ({ installed: grokInstalled(), ...usage, coolingSecs: cooling > Date.now() ? Math.ceil((cooling - Date.now()) / 1000) : 0,
@@ -122,6 +130,7 @@ function textOf(j) {
 }
 
 async function post(model, body, retried = false, timeout = 90_000, lane = "other") {
+  if (settings.grokOff) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
   const t0 = Date.now();
   const endpoint = body.input ? "responses" : "chat/completions";
   const r = await fetch(`${BASE}/${endpoint}`, {
@@ -165,8 +174,15 @@ async function post(model, body, retried = false, timeout = 90_000, lane = "othe
 // maxSearches + low reasoning keep a searched read around 7-10s instead of 30s (it otherwise runs ~12 searches).
 let plainSearch = false;
 export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", chatEffort = null, timeout = 90_000, lane = "other", fallback = true } = {}) {
+  if (settings.grokOff) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
   if (cooling > Date.now()) throw Object.assign(new Error("Grok is cooling down after a rate limit"), { busy: true });
-  if (grokBlocked()) throw Object.assign(new Error(blockedReason), { busy: true, blocked: true });
+  if (grokBlocked() || recheckBusy()) throw Object.assign(new Error(blockedReason || "Grok is being re-checked"), { busy: true, blocked: true });
+  const probe = unsure();
+  if (probe) probing = true;
+  try { return await askGrokNow(system, prompt, { model, search, maxTokens, maxSearches, effort, chatEffort, timeout, lane, fallback }); }
+  finally { if (probe) probing = false; }
+}
+async function askGrokNow(system, prompt, { model, search, maxTokens, maxSearches, effort, chatEffort, timeout, lane, fallback }) {
   // Over the daily budget is treated like being out of credits: the caller falls back to another AI.
   const over = grokOver(lane);
   if (over) throw Object.assign(new Error(over), { busy: true, blocked: true, budget: true });
@@ -189,7 +205,7 @@ export async function askGrok(system, prompt, { model = GROK_MODELS[0], search =
     // A model the subscription doesn't have: try the next one.
     if (fallback && (e.status === 400 || e.status === 403 || e.status === 404) && /model/i.test(e.message)) {
       const next = GROK_MODELS[GROK_MODELS.indexOf(model) + 1];
-      if (next) return askGrok(system, prompt, { model: next, search, maxTokens, maxSearches, effort, chatEffort, timeout, lane });
+      if (next) return askGrokNow(system, prompt, { model: next, search, maxTokens, maxSearches, effort, chatEffort, timeout, lane, fallback });
     }
     throw e;
   }

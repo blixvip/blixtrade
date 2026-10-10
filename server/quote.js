@@ -77,8 +77,8 @@ async function jupiterQuote(mint, side, amount, slippageBps) {
 }
 
 // A rough quote from the radar's own pool figures (price and liquidity, both sides counted), for when Jupiter
-// is rate limited: a two-sided constant-product pool with a 1% fee. Only for showing in a trade panel; a fill
-// never uses it (the route passes `estimate`, paper and real trades do not).
+// is rate limited: a two-sided constant-product pool with a 1% fee. Trade panels and paper fills use it (both pass
+// `estimate`, so a paper trade never waits seconds on Jupiter); real trades never do (the vault quotes for itself).
 function poolEstimate(mint, side, amount, slippageBps) {
   const t = db.prepare("SELECT price, liquidity FROM tokens WHERE mint = ?").get(mint);
   if (!(t?.price > 0 && t?.liquidity > 0 && feed.solUsd > 0)) return null;
@@ -92,9 +92,22 @@ function poolEstimate(mint, side, amount, slippageBps) {
   return { side, inTokens: amount, outSol: out, avgSol: avg, spotSol: spot, impactPct: (avg / spot - 1) * 100, minOut: out * (1 - slippageBps / 1e4), route: ["estimate"], liquidityUsd: t.liquidity };
 }
 
+// A preview does not wait on a slow Jupiter (seen at 5 s): after 800 ms it is answered as "busy", so the pool
+// estimate goes out instead. A coin with no estimate to give waits for Jupiter as before.
+function fastQuote(mint, side, amount, slippageBps, estimate, waitMs = 800) {
+  const real = jupiterQuote(mint, side, amount, slippageBps);
+  if (!estimate) return real;
+  return Promise.race([real, new Promise((ok) => setTimeout(ok, waitMs, null))]).then((x) => {
+    if (x || !poolEstimate(mint, side, amount, slippageBps)) return real;
+    real.catch(() => {});
+    throw Object.assign(new Error("Jupiter is slow"), { status: 503 });
+  });
+}
+
 // side "buy": amount in SOL. side "sell": amount in tokens. Returns sizes in SOL / tokens plus USD views.
 // `estimate`: when Jupiter is rate limited or down, answer with poolEstimate() (src "estimate") instead of failing.
-export async function quote(mint, side, amount, { slippageBps = 300, estimate = false } = {}) {
+// `waitMs`: how long an estimate-allowed quote waits on Jupiter before taking the pool estimate (paper fills: 250).
+export async function quote(mint, side, amount, { slippageBps = 300, estimate = false, waitMs = 800 } = {}) {
   amount = Number(amount);
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw err(400, "That is not a Solana address.");
   if (!["buy", "sell"].includes(side)) throw err(400, "side must be buy or sell.");
@@ -104,7 +117,7 @@ export async function quote(mint, side, amount, { slippageBps = 300, estimate = 
   const s = live.get(mint);
   const onCurve = s && s.vSol > 0 && s.vTok > 0 && (s.progress ?? 0) < 0.995 && now() - (s.resT || 0) < CURVE_FRESH_MS;
   const q = onCurve ? { ...curveQuote(s, side, amount, slippageBps), src: "curve", route: ["pump.fun curve"], feeBps: s.feeBps ?? 125, reservesAgeMs: now() - s.resT }
-    : await jupiterQuote(mint, side, amount, slippageBps).then((x) => ({ ...x, src: "jupiter" }), (e) => {
+    : await fastQuote(mint, side, amount, slippageBps, estimate, waitMs).then((x) => ({ ...x, src: "jupiter" }), (e) => {
       const est = estimate && (e.status === 429 || e.status === 503) ? poolEstimate(mint, side, amount, slippageBps) : null;
       if (!est) throw e;
       return { ...est, src: "estimate", note: "Jupiter is busy: estimated from the pool's price and liquidity. The trade itself fills at a real quote." };

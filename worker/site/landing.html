@@ -3,32 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BLIX — AI-powered memecoin terminal</title>
-<meta name="description" content="BLIX is the AI-powered memecoin terminal on Solana. Live now.">
-<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/_pub/icon-180.png">
-<link rel="canonical" href="https://trade.blixvip.com/">
+<title>BLIX: AI Solana Memecoin Trading Terminal &amp; pump.fun Tracker</title>
+<meta name="description" content="Free AI memecoin terminal for Solana: every pump.fun launch live, AI coin ratings, narratives, Fomo and X tracking, wallet tracking and fast trading with your own Solana wallet. Paper mode to practise. Sign in with Google.">
+<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye">
+<link rel="canonical" href="https://blixvip.com/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="BLIX">
-<meta property="og:url" content="https://trade.blixvip.com/">
-<meta property="og:title" content="BLIX — AI-powered memecoin terminal">
+<meta property="og:url" content="https://blixvip.com/">
+<meta property="og:title" content="BLIX: Free AI Solana Memecoin Terminal">
 <meta property="og:description" content="AI picks, narrative tracking, live coin ratings, wallet and Twitter tracking for Solana memecoins, all from one screen.">
-<meta property="og:image" content="https://trade.blixvip.com/_pub/home/og.jpg">
+<meta property="og:image" content="https://blixvip.com/_pub/home/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@blix_vip">
 <meta name="theme-color" content="#050608">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://blixvip.com/#org","name":"Blix","url":"https://blixvip.com/","logo":"https://blixvip.com/_pub/icon-512.png","sameAs":["https://x.com/blix_vip","https://github.com/blixvip"]},{"@type":"WebSite","@id":"https://blixvip.com/#site","url":"https://blixvip.com/","name":"BLIX","alternateName":["Blix","Blix VIP","blixvip"],"publisher":{"@id":"https://blixvip.com/#org"},"inLanguage":"en"},{"@type":"WebApplication","@id":"https://blixvip.com/#app","name":"BLIX","url":"https://blixvip.com/","applicationCategory":"FinanceApplication","operatingSystem":"Web","description":"Free AI memecoin terminal for Solana: every pump.fun launch live, AI coin ratings, narratives, Fomo and X tracking, wallet tracking and paper trading.","image":"https://blixvip.com/_pub/home/og.jpg","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"publisher":{"@id":"https://blixvip.com/#org"}}]}</script>
+<meta name="twitter:image" content="https://blixvip.com/_pub/home/og.jpg">
+<link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+  @font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}
   :root {
     --bg: #050608;
     --tile: #0c0e12;
     --tile-edge: #15181e;
     --text: #f4f6fa;
-    --muted: #8a92a3;
+    --muted: #aeb4bf;
     --accent: #d9dce2;
     --accent-2: #aeb4bf;
     --green: #22d38a;
@@ -117,6 +118,7 @@
     box-shadow: 0 4px 14px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.35);
     position: relative;
   }
+  .chip .av img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
   .chip .av::after {
     content: ""; position: absolute; right: -2px; bottom: -2px;
     width: 14px; height: 14px; border-radius: 50%;
@@ -147,7 +149,8 @@
   nav > * { pointer-events: auto; }
   .brand { display: flex; align-items: center; gap: 10px; position: relative; z-index: 2; }
   .brand img { height: 44px; width: auto; }
-  .brand .word { height: 58px; margin-left: -14px; }
+  .brand .mark { border-radius: 11px; }
+  .brand .word { height: 58px; }
   .nav-r { display: flex; align-items: center; gap: 14px; position: relative; z-index: 2; }
   .icon-btn {
     width: 42px; height: 42px; display: grid; place-items: center;
@@ -194,9 +197,7 @@
   .pill i {
     width: 9px; height: 9px; border-radius: 50%; background: var(--green);
     box-shadow: 0 0 0 0 rgba(34,211,138,.7);
-    animation: ping 1.8s infinite;
   }
-  @keyframes ping { 70% { box-shadow: 0 0 0 9px rgba(34,211,138,0); } 100% { box-shadow: 0 0 0 0 rgba(34,211,138,0); } }
   h1 {
     font-size: clamp(54px, 5.2vw, 104px);
     line-height: .93;
@@ -228,9 +229,7 @@
   .laptop {
     width: 100%; height: auto; display: block;
     position: relative;
-    animation: hover 7s ease-in-out infinite;
   }
-  @keyframes hover { 50% { transform: translateY(-10px); } }
 
   .tagline {
     margin-top: 22px;
@@ -249,7 +248,7 @@
   }
   .right p.lead b { color: #dfe5ef; font-weight: 500; }
   .right .sub { color: var(--muted); font-size: 16px; margin-top: 22px; }
-  .right .scroll { color: #5d6575; font-size: 16px; margin-top: 18px; display: inline-flex; gap: 6px; transition: color .2s; }
+  .right .scroll { color: #a0a8b7; font-size: 16px; margin-top: 18px; display: inline-flex; gap: 6px; transition: color .2s; }
   .right .scroll:hover { color: #c9cfdb; }
 
   /* Floating coins */
@@ -257,8 +256,6 @@
     position: absolute; z-index: 3;   /* coins float above tiles and the laptop */
     width: var(--s, 64px); aspect-ratio: 1;
     pointer-events: none;
-    animation: float var(--d, 9s) ease-in-out infinite;
-    animation-delay: var(--dl, 0s);
   }
   .coin .face {
     width: 100%; height: 100%; border-radius: 50%;
@@ -274,30 +271,11 @@
     transform: rotateX(var(--rx, 50deg)) rotateZ(var(--rz, -20deg));
   }
   .coin-scene { perspective: 600px; width: 100%; height: 100%; }
-  @keyframes float {
-    0%,100% { transform: translate(0,0) rotate(0deg); }
-    50% { transform: translate(var(--fx, 10px), var(--fy, -18px)) rotate(var(--fr, 12deg)); }
-  }
-
-  /* ---------- MARQUEE ---------- */
-  .ticker {
-    border-top: 1px solid #12151b; border-bottom: 1px solid #12151b;
-    overflow: hidden; padding: 18px 0;
-    background: #07080b;
-    mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
-  }
-  .ticker .row { display: flex; gap: 46px; width: max-content; animation: marquee 40s linear infinite; }
-  .ticker span { font: 500 15px "JetBrains Mono", monospace; color: #9aa3b4; white-space: nowrap; }
-  .ticker span b { color: #fff; font-weight: 500; margin-right: 8px; }
-  .ticker span .up { color: var(--green); }
-  .ticker span .dn { color: var(--red); }
-  @keyframes marquee { to { transform: translateX(-50%); } }
-
   /* ---------- SECTIONS ---------- */
   section.block { padding: 130px clamp(16px, 6vw, 120px); max-width: 1400px; margin: 0 auto; }
-  .eyebrow { color: var(--accent-2); font: 500 14px "JetBrains Mono", monospace; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 18px; }
+  .eyebrow { color: var(--accent-2); font: 500 14px ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 18px; }
   h2 { font-size: clamp(38px, 4.4vw, 72px); letter-spacing: -.04em; line-height: 1; font-weight: 600; max-width: 900px; }
-  h2 span { color: #59616f; }
+  h2 span { color: #a0a8b7; }
 
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 70px; }
   .card {
@@ -311,7 +289,7 @@
     transition: transform .35s cubic-bezier(.2,.8,.2,1), border-color .35s, box-shadow .35s;
   }
   .card:hover { transform: translateY(-8px); border-color: rgba(176,182,194,.4); box-shadow: 0 30px 60px -20px rgba(0,0,0,.8), 0 0 40px -10px rgba(176,182,194,.35); }
-  .card .n { font: 500 14px "JetBrains Mono", monospace; color: #4f5868; }
+  .card .n { font: 500 14px ui-monospace, monospace; color: #a0a8b7; }
   .card h3 { font-size: 30px; letter-spacing: -.03em; font-weight: 600; margin: 90px 0 12px; }
   .card p { color: var(--muted); font-size: 17px; line-height: 1.5; }
   .card .glyph {
@@ -359,12 +337,13 @@
   footer {
     display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap;
     padding: 30px clamp(16px, 6vw, 120px) 50px;
-    color: #5d6575; font-size: 14px;
+    color: #a0a8b7; font-size: 14px;
   }
+  footer .links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
+  footer a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: underline; text-underline-offset: 4px; }
+  a:focus-visible { outline: 2px solid #f4f6fa; outline-offset: 5px; }
   footer .disc { max-width: 620px; line-height: 1.5; }
 
-  .reveal { opacity: 0; transform: translateY(30px); transition: opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1); }
-  .reveal.in { opacity: 1; transform: none; }
 
   /* ---------- RESPONSIVE ---------- */
   @media (max-width: 1280px) {
@@ -391,22 +370,31 @@
     .card h3 { margin-top: 70px; }
   }
   @media (max-width: 600px) {
-    :root { --cell: 72px; --gap: 5px; }
     .tile { border-radius: 16px; }
-    .chip .av { width: 32px; height: 32px; font-size: 14px; }
-    .chip .tk { font-size: 10px; } .chip .pct { display: none; }
+    :root { --cell: 72px; --gap: 5px; }
     .brand img { height: 34px; } .brand .word { height: 44px; }
     .pill { margin-bottom: 22px; font-size: 14px; }
     h1 { font-size: 52px; }
     .coin.m-hide { display: none; }
     .hero-inner { padding-top: 96px; padding-bottom: 60px; }
-    .features { grid-template-columns: 1fr; }
+    .features { grid-template-columns: 1fr; gap: 0; margin-top: 28px; }
+    .feat { display: grid; grid-template-columns: 36px minmax(0, 1fr); column-gap: 14px; padding: 20px 0; border: 0; border-bottom: 1px solid #20242c; border-radius: 0; background: none; }
+    .feat:hover { transform: none; }
+    .feat .fi { width: 36px; height: 36px; border-radius: 10px; grid-row: span 2; }
+    .feat h4 { font-size: 20px; margin: 0 0 6px; }
+    .feat p { font-size: 16px; }
+    .feat-head { margin-top: 64px; }
+    .steps { margin-top: 32px; }
+    .card { min-height: 0; padding: 24px; }
+    .card h3 { margin-top: 40px; }
+    .card .glyph { width: 44px; height: 44px; top: 20px; right: 20px; }
+    .right .ctas { flex-direction: column; align-items: center; }
     .btn.lg { font-size: 18px; padding: 16px 26px; }
-    section.block { padding-top: 90px; padding-bottom: 90px; }
+    section.block { padding-top: 56px; padding-bottom: 56px; }
     .cta { padding: 80px 20px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .laptop, .coin, .ticker .row { animation: none; }
+    html { scroll-behavior: auto; }
   }
 </style>
 </head>
@@ -425,7 +413,7 @@
 
     <div class="center">
       <div class="laptop-wrap">
-        <img class="laptop" width="1448" height="1086" fetchpriority="high" src="/_pub/home/laptop.webp" alt="The BLIX trading terminal showing New Pairs, Final Stretch and Migrated columns">
+        <img class="laptop" width="1448" height="1086" fetchpriority="high" src="/_pub/home/laptop.webp" srcset="/_pub/home/laptop-800.webp 800w, /_pub/home/laptop.webp 1448w" sizes="(max-width: 860px) 100vw, 680px" alt="The BLIX trading terminal showing New Pairs, Final Stretch and Migrated columns">
       </div>
     </div>
 
@@ -435,14 +423,14 @@
         <a class="btn lg" href="/start">Start trading <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></a>
         <a class="btn lg ghost" href="/login">Log in</a>
       </div>
-      <p class="sub">Live now. Start in paper mode, no risk.</p>
+      <p class="sub">Live now. Trade real SOL, or practise in paper mode first.</p>
       <a class="scroll" href="#how">Scroll to see how it works ↓</a>
     </div>
   </div>
 
   <nav>
     <a class="brand" href="#" aria-label="BLIX home">
-      <img src="/_pub/home/bx-logo.webp" alt="">
+      <img class="mark" src="/_pub/home/eye-logo.webp" alt="" width="140" height="140" decoding="async">
       <img class="word" src="/_pub/home/blix-logo.webp" alt="BLIX">
     </a>
     <div class="nav-r">
@@ -462,25 +450,24 @@
   <div class="coin m-hide" style="left:63%;top:84%;--s:40px;--rx:66deg;--rz:-30deg;--d:12s;--dl:-2s;--fx:-8px;--fy:-14px"><div class="coin-scene"><div class="face"></div></div></div>
 </header>
 
-<div class="ticker" aria-hidden="true"><div class="row" id="tickerRow"></div></div>
 
 <section class="block" id="how">
-  <div class="eyebrow reveal">How it works</div>
-  <h2 class="reveal">Your AI copilot <span>for every meme.</span></h2>
+  <div class="eyebrow">How it works</div>
+  <h2 >Your AI copilot <span>for every meme.</span></h2>
   <div class="steps">
-    <div class="card reveal">
+    <div class="card">
       <div class="n">01</div>
       <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
       <h3>Discover what's trending</h3>
       <p>Trending, Surge, New pairs and Bonded, with AI narrative tracking showing which stories are heating up right now.</p>
     </div>
-    <div class="card reveal">
+    <div class="card">
       <div class="n">02</div>
       <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></div>
       <h3>Let AI do the research</h3>
       <p>Daily AI picks, live coin ratings and one-click research tell you what's worth buying and why, before you ape.</p>
     </div>
-    <div class="card reveal">
+    <div class="card">
       <div class="n">03</div>
       <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></div>
       <h3>Ape in one click</h3>
@@ -488,46 +475,61 @@
     </div>
   </div>
 
-  <div class="feat-head reveal">
+  <div class="feat-head">
     <div class="eyebrow">Features</div>
     <h2>Everything you need <span>to find the next runner.</span></h2>
   </div>
   <div class="features">
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-4 3 3 5-6"/></svg></div>
       <h4>AI narrative tracking</h4>
       <p>Tracks the stories moving the market, like AI agents, cats or political coins, and shows which coins ride each narrative as it heats up.</p>
     </div>
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z"/></svg></div>
       <h4>Daily AI picks</h4>
       <p>Every day BLIX's AI picks the coins worth watching and tells you why, so you start with a shortlist, not a firehose.</p>
     </div>
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M8.5 11h5M11 8.5v5"/></svg></div>
       <h4>AI research</h4>
       <p>One click for a full breakdown: dev history, holders, socials, red flags and how the coin compares to its narrative.</p>
     </div>
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.8 3.1 1.1-6.5L2.5 9.4l6.6-1z"/></svg></div>
       <h4>Live coin ratings</h4>
       <p>Every coin gets a rating that updates as it trades, built from liquidity, holders, volume and risk signals.</p>
     </div>
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 10h18"/><circle cx="16.5" cy="15" r="1.2" fill="currentColor"/></svg></div>
       <h4>Wallet tracking</h4>
       <p>Follow top traders and smart wallets and see their buys and sells the moment they hit the chain.</p>
     </div>
-    <div class="feat reveal">
+    <div class="feat">
       <div class="fi"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></div>
       <h4>Twitter tracking</h4>
       <p>Watch the accounts that move memes. When they tweet a ticker or contract, you see it alongside the chart.</p>
     </div>
+    <div class="feat">
+      <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.2" fill="currentColor"/></svg></div>
+      <h4>Live trader feed</h4>
+      <p>Every pump.fun callout and every big Fomo buy, sell and thesis in one live feed, with each position's profit moving as the coin trades.</p>
+    </div>
+    <div class="feat">
+      <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg></div>
+      <h4>Every thesis on every coin</h4>
+      <p>Why people bought, from pump.fun and Fomo together: the market cap they called it at, how many times it's run since and what they hold now.</p>
+    </div>
+    <div class="feat">
+      <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m5 15 4-5 4 3 6-7"/><circle cx="9" cy="10" r="2.2"/><circle cx="19" cy="6" r="2.2"/></svg></div>
+      <h4>See who's trading on the chart</h4>
+      <p>Real faces of known traders right where they bought and sold, plus the dev and every callout. Flip to All for a coin's whole life, launch to now.</p>
+    </div>
   </div>
 </section>
 
-<div class="cta reveal">
-  <img src="/_pub/home/bx-logo.webp" alt="">
+<div class="cta">
+  <img src="/_pub/home/bx-logo.webp" alt="" width="140" height="140" decoding="async">
   <h2>BLIX is live.</h2>
   <p>The AI-powered memecoin terminal. Open it now and start trading.</p>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
@@ -537,18 +539,24 @@
 </div>
 
 <footer>
-  <div>© 2026 BLIX · <a href="/api">API</a> · <a href="/mcp">MCP</a></div>
+  <div class="links"><span>© 2026 BLIX</span> <a href="/pump-fun-tracker">pump.fun tracker</a> <a href="/solana-memecoin-screener">Memecoin screener</a> <a href="/memecoin-paper-trading">Paper trading</a> <a href="/api">API</a> <a href="/mcp">MCP</a></div>
   <div class="disc">Memecoins are extremely volatile. Nothing here is financial advice. Trade only what you can afford to lose.</div>
 </footer>
 
 <script>
 (() => {
+  // Real Solana coins, logos served from /_pub/home/coins (96 px webp, about 40 KB together).
   const TOKENS = [
-    ["BONK", "#f6a623"], ["WIF", "#c98a5a"], ["PEPE", "#3fa34d"], ["POPCAT", "#e46a9b"],
-    ["MEW", "#8f7ae6"], ["GOAT", "#d9a441"], ["FWOG", "#37b37e"], ["PNUT", "#c47a3a"],
-    ["MOODENG", "#e07a6b"], ["CHILL", "#6aa0d8"], ["BOME", "#7bc2c9"], ["MICHI", "#b58cde"],
-    ["SPARK", "#ff5a5a"], ["AURA", "#4fb4ff"], ["GIGA", "#9aa3b4"], ["TRUMP", "#e8c55a"],
+    ["BONK", "#f6a623"], ["WIF", "#c98a5a"], ["POPCAT", "#e46a9b"], ["MEW", "#8f7ae6"],
+    ["GOAT", "#d9a441"], ["FWOG", "#37b37e"], ["PNUT", "#c47a3a"], ["MOODENG", "#e07a6b"],
+    ["CHILLGUY", "#6aa0d8"], ["BOME", "#7bc2c9"], ["MICHI", "#b58cde"], ["FARTCOIN", "#ff5a5a"],
+    ["PENGU", "#4fb4ff"], ["GIGA", "#9aa3b4"], ["TRUMP", "#e8c55a"], ["AI16Z", "#e46a9b"],
   ];
+  const logo = (tk) => `/_pub/home/coins/${tk.toLowerCase()}.webp`;
+  // Every logo is fetched and decoded up front; a tile only shows its coin once that logo is ready,
+  // so a raised tile never shows an empty circle.
+  const ready = new Set();
+  TOKENS.forEach(([tk]) => { const im = new Image(); im.src = logo(tk); (im.decode ? im.decode() : Promise.resolve()).then(() => ready.add(tk), () => {}); });
 
   const grid = document.getElementById("grid");
   const hero = document.getElementById("hero");
@@ -570,15 +578,16 @@
       const el = document.createElement("div");
       el.className = "tile";
       const [tk, col] = TOKENS[Math.floor(Math.random() * TOKENS.length)];
+      el.dataset.tk = tk;
       const up = Math.random() > .25;
       const pct = up ? "+" + rand(4, 900).toFixed(0) + "%" : "-" + rand(2, 40).toFixed(0) + "%";
       el.innerHTML =
-        `<div class="chip"><div class="av" style="background:radial-gradient(circle at 30% 25%, ${col}, #111 120%)">${tk[0]}</div>` +
+        `<div class="chip"><div class="av" style="background:radial-gradient(circle at 30% 25%, ${col}, #111 120%)"><img src="${logo(tk)}" alt="" width="46" height="46" decoding="async"></div>` +
         `<div class="tk">$${tk}</div><div class="pct ${up ? "up" : "dn"}">${pct}</div></div>`;
       frag.appendChild(el);
     }
     grid.appendChild(frag);
-    tiles = [...grid.children].map(el => ({ el, cx: 0, cy: 0, l: 0, up: false, on: false }));
+    tiles = [...grid.children].map(el => ({ el, tk: el.dataset.tk, cx: 0, cy: 0, l: 0, up: false, on: false }));
     measure();
   }
 
@@ -633,7 +642,7 @@
       s.setProperty("--o", l.toFixed(3));
       const up = l > .04;
       if (up !== t.up) { t.up = up; t.el.classList.toggle("up", up); }
-      const on = l > .6;
+      const on = l > .6 && ready.has(t.tk);
       if (on !== t.on) { t.on = on; t.el.classList.toggle("on", on); }
     }
     if (moving) requestAnimationFrame(frame); else running = false;
@@ -646,21 +655,6 @@
   let rt;
   window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(build, 150); });
 
-  // ticker
-  const row = document.getElementById("tickerRow");
-  const items = TOKENS.map(([tk]) => {
-    const up = Math.random() > .3;
-    const pct = (up ? "+" : "-") + rand(1, up ? 420 : 35).toFixed(1) + "%";
-    const mc = "$" + rand(40, 980).toFixed(1) + "K";
-    return `<span><b>$${tk}</b>MC ${mc} <em class="${up ? "up" : "dn"}" style="font-style:normal">${pct}</em></span>`;
-  }).join("");
-  row.innerHTML = items + items;
-
-  // scroll reveal
-  const io = new IntersectionObserver(es => es.forEach(e => {
-    if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
-  }), { threshold: .15 });
-  document.querySelectorAll(".reveal").forEach((el, i) => { el.style.transitionDelay = (i % 4) * 80 + "ms"; io.observe(el); });
 })();
 </script>
 </body>

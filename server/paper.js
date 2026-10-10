@@ -16,6 +16,7 @@ import { fastMcap } from "./pulse.js";
 import { readingProblem } from "./quality.js";
 import { PAPER } from "./brain.js";
 import { quote, curveQuoteNow } from "./quote.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const now = () => Date.now();
 const MIN = 60_000;
@@ -31,6 +32,21 @@ db.exec(`CREATE TABLE IF NOT EXISTS paper (
 db.exec("CREATE INDEX IF NOT EXISTS paper_status ON paper(status, t)");
 // Quoted fills: tokens held, SOL received on exit, and what the fill looked like (impact, fee, route).
 for (const col of ["tokens REAL", "exit_sol REAL", "fill TEXT"]) { try { db.exec(`ALTER TABLE paper ADD COLUMN ${col}`); } catch {} }
+// Whose desk: '' is the owner's, a member's email otherwise (a signed-in member on the public site, server.js).
+try { db.exec("ALTER TABLE paper ADD COLUMN who TEXT NOT NULL DEFAULT ''"); } catch {}
+db.exec("CREATE INDEX IF NOT EXISTS paper_who ON paper(who, status, t)");
+
+// Every request runs as someone (asUser, from server.js); the once-a-second re-pricing runs as no one and sees
+// every desk, so a member's take profit and stop fire like the owner's. `mine` is the SQL that keeps a request
+// to its own desk: "who = ?" for a request, always true for the background work.
+const als = new AsyncLocalStorage();
+export const asUser = (who, fn) => als.run({ who: String(who || "") }, fn);
+const ctx = () => als.getStore();
+const me = () => ctx()?.who ?? "";
+const isOwner = () => me() === "";
+const mine = () => (ctx() ? ["who = ?", [me()]] : ["1 = 1", []]);
+const rowsMine = (sql, ...args) => { const [w, a] = mine(); return db.prepare(sql.replace("$MINE", w)).all(...args, ...a); };
+const rowMine = (sql, ...args) => { const [w, a] = mine(); return db.prepare(sql.replace("$MINE", w)).get(...args, ...a); };
 
 // ---------- prices ----------
 const dexPx = new Map();      // mint -> { mcap, t }
@@ -65,11 +81,12 @@ async function pollDex(mints) {
 // Paper trading uses fake money, but a limited amount of it, so results mean something: the wallet starts
 // with settings.paperStartSol, every buy takes SOL out, every sell puts back what the sale returned. A reset
 // closes whatever is open and starts the count again from now (older trades stay in the history).
-const epoch = () => Number(meta.get("paper_epoch", 0)) || 0;
+const epoch = () => Number(meta.get(isOwner() ? "paper_epoch" : `paper_epoch:${me()}`, 0)) || 0;
+const startSol = () => { const v = isOwner() ? settings.paperStartSol : meta.get(`paper_start:${me()}`, 10); return Number(v) > 0 ? Number(v) : 10; };
 const returned = (p) => p.exit_sol > 0 ? p.exit_sol : p.usd > 0 ? p.sol * (1 + (p.pnl || 0) / p.usd) : p.sol;
 export function wallet() {
-  const since = epoch(), start = Number(settings.paperStartSol) > 0 ? Number(settings.paperStartSol) : 10;
-  const rows = db.prepare("SELECT * FROM paper WHERE t >= ?").all(since);
+  const since = epoch(), start = startSol();
+  const rows = rowsMine("SELECT * FROM paper WHERE t >= ? AND $MINE", since);
   let cash = start, openCost = 0, openValue = 0, unpriced = 0, realized = 0;
   for (const p of rows) {
     cash -= p.sol;
@@ -84,18 +101,59 @@ export function wallet() {
   return { start, cash: +cash.toFixed(6), equity: +(cash + openValue).toFixed(6), openCost: +openCost.toFixed(6), realized: +realized.toFixed(6),
     pnl: +(cash + openValue - start).toFixed(6), open: rows.filter((p) => p.status === "open").length, trades: rows.length, unpriced, since: since || null, solUsd: feed.solUsd };
 }
+// A member's desk has limits the owner's does not: every open position is re-priced every second for everyone,
+// so one person opening thousands of dust positions would slow the whole site.
+const MEMBER_OPEN_MAX = 25, MEMBER_MIN_SOL = 0.01;
 function spend(sol) {
+  if (!isOwner()) {
+    if (sol < MEMBER_MIN_SOL) throw Object.assign(new Error(`The smallest paper buy is ${MEMBER_MIN_SOL} SOL.`), { status: 400 });
+    const n = rowMine("SELECT COUNT(*) n FROM paper WHERE status = 'open' AND $MINE").n;
+    if (n >= MEMBER_OPEN_MAX) throw Object.assign(new Error(`You have ${n} open paper positions, the most a member can hold. Sell one first.`), { status: 409 });
+  }
   const w = wallet();
-  if (sol > w.cash + 1e-9) throw Object.assign(new Error(`Not enough paper SOL: you have ${w.cash.toFixed(3)} and this buy needs ${sol}. Sell something, or reset the paper wallet in Settings.`), { status: 409 });
+  if (sol > w.cash + 1e-9) throw Object.assign(new Error(`Not enough paper SOL: you have ${w.cash.toFixed(3)} and this buy needs ${sol}. Press +10 next to your paper balance to add fake SOL, or sell something.`), { status: 409 });
 }
-export function resetWallet(startSol) {
-  for (const p of db.prepare("SELECT id FROM paper WHERE status = 'open'").all()) {
+export function resetWallet(newStart) {
+  for (const p of rowsMine("SELECT id FROM paper WHERE status = 'open' AND $MINE")) {
     try { sell(p.id, 100, { why: "paper wallet reset" }); }
     catch { db.prepare("UPDATE paper SET status = 'closed', exit_t = ?, exit_why = 'paper wallet reset (no price)', pnl = 0, exit_mcap = last WHERE id = ?").run(now(), p.id); }
   }
-  if (Number(startSol) > 0 && Number(startSol) <= 100000) saveSettings({ paperStartSol: Number(startSol) });
-  meta.set("paper_epoch", now());
-  logEvent("paper", `Paper wallet reset to ${settings.paperStartSol} SOL`);
+  const ok = Number(newStart) > 0 && Number(newStart) <= 100000;
+  if (isOwner()) {
+    if (ok) saveSettings({ paperStartSol: Number(newStart) });
+    meta.set("paper_epoch", now());
+    logEvent("paper", `Paper wallet reset to ${settings.paperStartSol} SOL`);
+  } else {
+    if (ok) meta.set(`paper_start:${me()}`, Math.min(Number(newStart), 1000));   // a member's fake wallet: up to 1,000 SOL
+    meta.set(`paper_epoch:${me()}`, now());
+  }
+  return wallet();
+}
+
+// Add fake SOL to the paper wallet without a reset: open positions and the history stay, and the starting amount
+// grows by the same sum, so profit and loss still read true (it is measured against everything put in).
+export function depositPaper(amount) {
+  const sol = Number(amount);
+  if (!(sol >= 0.1) || sol > 1000 || !Number.isFinite(sol)) throw Object.assign(new Error("Add between 0.1 and 1,000 SOL at a time."), { status: 400 });
+  const start = startSol(), next = +(start + sol).toFixed(6);
+  // A member's wallet stops at 10,000 fake SOL in all (everything paper is re-priced for everyone every second).
+  if (!isOwner() && next > 10_000) throw Object.assign(new Error(`A paper wallet holds at most 10,000 SOL in all; this one has had ${start} put in.`), { status: 409 });
+  if (isOwner()) { saveSettings({ paperStartSol: next }); logEvent("paper", `Added ${sol} SOL to the paper wallet (${next} SOL put in)`); }
+  else meta.set(`paper_start:${me()}`, next);
+  return wallet();
+}
+
+// Set the SOL left to spend to an exact figure (the top bar's balance editor), without a reset: the amount put in
+// moves by the difference, so open positions, history and the profit and loss all stay as they were.
+export function setPaperBalance(target) {
+  const want = Number(target);
+  const cap = isOwner() ? 100_000 : 10_000;
+  if (!Number.isFinite(want) || want < 0 || want > cap) throw Object.assign(new Error(`Set a balance between 0 and ${cap.toLocaleString()} SOL.`), { status: 400 });
+  const w = wallet(), next = +(startSol() + (want - w.cash)).toFixed(6);
+  if (!(next > 0)) throw Object.assign(new Error("That balance is lower than this wallet allows: sell or reset instead."), { status: 409 });
+  if (next > cap) throw Object.assign(new Error(`A paper wallet holds at most ${cap.toLocaleString()} SOL in all.`), { status: 409 });
+  if (isOwner()) { saveSettings({ paperStartSol: next }); logEvent("paper", `Paper balance set to ${want} SOL`); }
+  else meta.set(`paper_start:${me()}`, next);
   return wallet();
 }
 
@@ -114,12 +172,12 @@ export function open(mint, sol, { symbol, name, tp, sl, trail, note } = {}) {
   const t = sym(mint), n = names(mint) || {};
   const usd = sol * feed.solUsd;
   const rule = (v, d) => { const x = Number(v ?? d); return x > 0 ? x : null; };
-  db.prepare(`INSERT INTO paper (mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(mint, symbol || t.symbol || n.symbol || null, name || t.name || n.name || null, now(), sol, usd, px.mcap, px.src, px.mcap, px.mcap, px.mcap, now(),
+  db.prepare(`INSERT INTO paper (who, mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(me(), mint, symbol || t.symbol || n.symbol || null, name || t.name || n.name || null, now(), sol, usd, px.mcap, px.src, px.mcap, px.mcap, px.mcap, now(),
       rule(tp, settings.paperTake), rule(sl, settings.paperStop), rule(trail, settings.paperTrail), note ? String(note).slice(0, 200) : null);
   const row = db.prepare("SELECT * FROM paper WHERE id = last_insert_rowid()").get();
-  logEvent("paper", `Paper buy $${row.symbol || mint.slice(0, 6)}: ${sol} SOL at ${Math.round(px.mcap).toLocaleString()} mcap (${px.src})`);
+  if (isOwner()) logEvent("paper", `Paper buy $${row.symbol || mint.slice(0, 6)}: ${sol} SOL at ${Math.round(px.mcap).toLocaleString()} mcap (${px.src})`);
   return out(row);
 }
 
@@ -129,19 +187,21 @@ export async function openQuoted(mint, sol, { symbol, name, tp, sl, trail, note,
   sol = Number(sol);
   if (!(sol > 0) || sol > 1000) throw Object.assign(new Error("Size must be between 0 and 1000 SOL."), { status: 400 });
   spend(sol);
-  const q = await quote(mint, "buy", sol, { slippageBps });
+  // Paper fills are instant: curve coins fill from the curve's own maths; a bonded coin takes Jupiter's route if it
+  // answers within 250 ms, else the pool estimate (the user's call, 2026-10-09: paper trades must not wait seconds).
+  const q = await quote(mint, "buy", sol, { slippageBps, estimate: true, waitMs: 250 });
   // Coins with a near-empty curve quote absurd price impact (thousands of %): a fill there is meaningless.
   if (q.impactPct > 50) throw Object.assign(new Error(`This buy would move the price ${Math.round(q.impactPct)}%: too thin to trade at this size.`), { status: 409 });
   const t = sym(mint), n = names(mint) || {};
   const spot = q.spotMcapUsd || q.avgMcapUsd;
   const rule = (v, d) => { const x = Number(v ?? d); return x > 0 ? x : null; };
   const fill = { side: "buy", solIn: sol, src: q.src, route: q.route, impactPct: +q.impactPct.toFixed(3), feeSol: q.feeSol ?? null, avgMcap: q.avgMcapUsd, spotMcap: spot, slippageBps: q.slippageBps, solUsd: q.solUsd };
-  db.prepare(`INSERT INTO paper (mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, note, tokens, fill)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(mint, symbol || t.symbol || n.symbol || null, name || t.name || n.name || null, now(), sol, sol * q.solUsd, q.avgMcapUsd, q.src, spot, spot, spot, now(),
+  db.prepare(`INSERT INTO paper (who, mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, note, tokens, fill)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(me(), mint, symbol || t.symbol || n.symbol || null, name || t.name || n.name || null, now(), sol, sol * q.solUsd, q.avgMcapUsd, q.src, spot, spot, spot, now(),
       rule(tp, settings.paperTake), rule(sl, settings.paperStop), rule(trail, settings.paperTrail), note ? String(note).slice(0, 200) : null, q.outTokens, JSON.stringify(fill));
   const row = db.prepare("SELECT * FROM paper WHERE id = last_insert_rowid()").get();
-  logEvent("paper", `Paper buy $${row.symbol || mint.slice(0, 6)}: ${sol} SOL -> ${Math.round(q.outTokens).toLocaleString()} tokens at ${Math.round(q.avgMcapUsd).toLocaleString()} avg mcap (${q.src}, impact ${q.impactPct.toFixed(2)}%)`);
+  if (isOwner()) logEvent("paper", `Paper buy $${row.symbol || mint.slice(0, 6)}: ${sol} SOL -> ${Math.round(q.outTokens).toLocaleString()} tokens at ${Math.round(q.avgMcapUsd).toLocaleString()} avg mcap (${q.src}, impact ${q.impactPct.toFixed(2)}%)`);
   return out(row);
 }
 
@@ -178,9 +238,13 @@ async function refreshAll(getQuote) {
     if (curveQuoteNow(p.mint, "sell", p.tokens)) continue;
     if (now() < (nextExitQuote.get(p.id) || 0)) continue;
     const e = exitQuotes.get(p.id);
-    if (e && now() - e.t < 10_000) continue;
+    // 45 s between a position's exit quotes, a second between positions: 26 open positions re-quoted every
+    // 10 s were most of the keyless Jupiter lane's traffic (429s all night, 2026-10-07), and the take-profit
+    // and stop checks read the live price every second anyway.
+    if (e && now() - e.t < 45_000) continue;
     try { const q = await getQuote(p.mint, "sell", p.tokens); exitQuotes.set(p.id, { outSol: q.outSol, mcap: priceNow(p.mint)?.mcap || null, t: now() }); nextExitQuote.delete(p.id); }
-    catch (e) { nextExitQuote.set(p.id, now() + (e.status === 409 ? 60_000 : 15_000)); }
+    catch (e) { nextExitQuote.set(p.id, now() + (e.status === 409 ? 60_000 : 30_000)); }
+    await new Promise((go) => setTimeout(go, 1000));
   }
 }
 
@@ -190,12 +254,12 @@ async function quoteSell(p, part) {
   const own = ownBuy(p);
   const c = curveQuoteNow(p.mint, "sell", p.tokens * part, 300, own);
   if (c) return { ...c, avgMcapUsd: c.avgSol * 1e9 * feed.solUsd, route: ["pump.fun curve"] };
-  const q = await quote(p.mint, "sell", p.tokens * part);
+  const q = await quote(p.mint, "sell", p.tokens * part, { estimate: true, waitMs: 250 });   // instant, as openQuoted
   return { ...q, outSol: q.outSol * (1 + Math.max(0, own.impactPct) / 100) };
 }
 // The sell buttons' preview: what each would return, without selling.
 export async function previewSell(id, pct = 100) {
-  const p = db.prepare("SELECT * FROM paper WHERE id = ? AND status = 'open'").get(id);
+  const p = rowMine("SELECT * FROM paper WHERE id = ? AND status = 'open' AND $MINE", id);
   if (!p) throw Object.assign(new Error("No open paper position with that id."), { status: 404 });
   pct = Math.max(1, Math.min(100, Number(pct) || 100));
   const part = pct / 100;
@@ -210,11 +274,15 @@ export async function previewSell(id, pct = 100) {
 
 // A sell filled at a real quote (the trade panel's sell buttons). Older positions fall back to sell().
 export async function sellQuoted(id, pct = 100, { why = "sold" } = {}) {
-  const p = db.prepare("SELECT * FROM paper WHERE id = ? AND status = 'open'").get(id);
+  const p = rowMine("SELECT * FROM paper WHERE id = ? AND status = 'open' AND $MINE", id);
   if (!p) throw Object.assign(new Error("No open paper position with that id."), { status: 404 });
   if (!(p.tokens > 0)) return sell(id, pct, { why });
   pct = Math.max(1, Math.min(100, Number(pct) || 100));
   const part = pct / 100;
+  // Instant: what the desk already values it at (the curve exactly, the last exit quote, or the live price), so
+  // the fill is the figure on screen. Only a position with none of those waits for a fresh quote.
+  const ex = exitSol(p, part);
+  if (ex) return closePart(p, part, ex.sol, priceNow(p.mint)?.mcap || p.last, why, { src: ex.how, route: null, impactPct: null, feeSol: null });
   const q = await quoteSell(p, part);
   return closePart(p, part, q.outSol, priceNow(p.mint)?.mcap || q.spotMcapUsd || q.avgMcapUsd, why, { src: q.src, route: q.route, impactPct: +q.impactPct.toFixed(3), feeSol: q.feeSol ?? null });
 }
@@ -233,19 +301,19 @@ function closePart(p, part, outSol, mcap, why, fillOut = null) {
     db.prepare("UPDATE paper SET status = 'closed', exit_mcap = ?, exit_t = ?, exit_why = ?, pnl = ?, exit_sol = ?, last = ?, last_t = ?, fill = ? WHERE id = ?").run(mcap, now(), why, pnl, outSol, mcap, now(), fill, p.id);
     exitQuotes.delete(p.id);
   } else {
-    db.prepare(`INSERT INTO paper (mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, status, exit_mcap, exit_t, exit_why, pnl, note, tokens, exit_sol, fill)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(p.mint, p.symbol, p.name, p.t, solIn, usdIn, p.mcap0, p.src, p.peak, p.low, mcap, now(), p.tp, p.sl, p.trail, mcap, now(), why, pnl, p.note, p.tokens * part, outSol, fill);
+    db.prepare(`INSERT INTO paper (who, mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, status, exit_mcap, exit_t, exit_why, pnl, note, tokens, exit_sol, fill)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(p.who, p.mint, p.symbol, p.name, p.t, solIn, usdIn, p.mcap0, p.src, p.peak, p.low, mcap, now(), p.tp, p.sl, p.trail, mcap, now(), why, pnl, p.note, p.tokens * part, outSol, fill);
     db.prepare("UPDATE paper SET sol = sol * ?, usd = usd * ?, tokens = tokens * ?, last = ?, last_t = ? WHERE id = ?").run(1 - part, 1 - part, 1 - part, mcap, now(), p.id);
     exitQuotes.delete(p.id);
   }
-  logEvent("paper", `Paper sell $${p.symbol || p.mint.slice(0, 6)} ${Math.round(part * 100)}% for ${outSol.toFixed(4)} SOL (${(outSol / solIn).toFixed(2)}x, ${why}): ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(0)}`);
+  if (!p.who) logEvent("paper", `Paper sell $${p.symbol || p.mint.slice(0, 6)} ${Math.round(part * 100)}% for ${outSol.toFixed(4)} SOL (${(outSol / solIn).toFixed(2)}x, ${why}): ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(0)}`);
   return out(db.prepare("SELECT * FROM paper WHERE id = ?").get(p.id));
 }
 
 // Close all or part of a position at the price now (or at a given market cap, for rule exits).
 export function sell(id, pct = 100, { why = "sold", mcap } = {}) {
-  const p = db.prepare("SELECT * FROM paper WHERE id = ? AND status = 'open'").get(id);
+  const p = rowMine("SELECT * FROM paper WHERE id = ? AND status = 'open' AND $MINE", id);
   if (!p) throw Object.assign(new Error("No open paper position with that id."), { status: 404 });
   pct = Math.max(1, Math.min(100, Number(pct) || 100));
   if (p.tokens > 0) {
@@ -262,22 +330,23 @@ export function sell(id, pct = 100, { why = "sold", mcap } = {}) {
     db.prepare("UPDATE paper SET status = 'closed', exit_mcap = ?, exit_t = ?, exit_why = ?, pnl = ?, last = ?, last_t = ? WHERE id = ?").run(px.mcap, now(), why, pnl, px.mcap, now(), id);
   } else {
     // The sold part becomes its own closed row; the rest stays open with the same entry.
-    db.prepare(`INSERT INTO paper (mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, status, exit_mcap, exit_t, exit_why, pnl, note)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?)`)
-      .run(p.mint, p.symbol, p.name, p.t, p.sol * part, usd, p.mcap0, p.src, p.peak, p.low, px.mcap, now(), p.tp, p.sl, p.trail, px.mcap, now(), why, pnl, p.note);
+    db.prepare(`INSERT INTO paper (who, mint, symbol, name, t, sol, usd, mcap0, src, peak, low, last, last_t, tp, sl, trail, status, exit_mcap, exit_t, exit_why, pnl, note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?)`)
+      .run(p.who, p.mint, p.symbol, p.name, p.t, p.sol * part, usd, p.mcap0, p.src, p.peak, p.low, px.mcap, now(), p.tp, p.sl, p.trail, px.mcap, now(), why, pnl, p.note);
     db.prepare("UPDATE paper SET sol = sol * ?, usd = usd * ?, last = ?, last_t = ? WHERE id = ?").run(1 - part, 1 - part, px.mcap, now(), id);
   }
-  logEvent("paper", `Paper sell $${p.symbol || p.mint.slice(0, 6)} ${pct}% at ${mult.toFixed(2)}x (${why}): ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(0)}`);
+  if (!p.who) logEvent("paper", `Paper sell $${p.symbol || p.mint.slice(0, 6)} ${pct}% at ${mult.toFixed(2)}x (${why}): ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(0)}`);
   return out(db.prepare("SELECT * FROM paper WHERE id = ?").get(id));
 }
 
 export function setRule(id, { tp, sl, trail }) {
   const rule = (v) => { const x = Number(v); return x > 0 ? x : null; };
+  if (!rowMine("SELECT id FROM paper WHERE id = ? AND $MINE", id)) throw Object.assign(new Error("No open paper position with that id."), { status: 404 });
   db.prepare("UPDATE paper SET tp = ?, sl = ?, trail = ? WHERE id = ? AND status = 'open'").run(rule(tp), rule(sl), rule(trail), id);
   return out(db.prepare("SELECT * FROM paper WHERE id = ?").get(id));
 }
 
-export function remove(id) { db.prepare("DELETE FROM paper WHERE id = ? AND status = 'closed'").run(id); }
+export function remove(id) { const [w, a] = mine(); db.prepare(`DELETE FROM paper WHERE id = ? AND status = 'closed' AND ${w}`).run(id, ...a); }
 
 function out(p) {
   if (!p) return null;
@@ -301,15 +370,18 @@ function out(p) {
 // Every second: re-price open positions, keep their high and low, and apply each one's exit rule.
 let onExit = null;
 export const exitHook = (fn) => { onExit = fn; };
+// The price rows are written together in one transaction, and only for positions whose price moved: 25 open
+// positions were 25 separate writes a second on the main thread, and one of them waiting on the database lock
+// (busy_timeout, 5 s) froze every live chart for 5 s (2026-10-06).
 export function tick() {
   const open = db.prepare("SELECT * FROM paper WHERE status = 'open'").all();
   if (!open.length) return;
-  const need = [];
+  const need = [], moved = [];
   for (const p of open) {
     const px = priceNow(p.mint);
     if (!px) { need.push(p.mint); continue; }
     const m = px.mcap;
-    db.prepare("UPDATE paper SET last = ?, last_t = ?, peak = MAX(COALESCE(peak, 0), ?), low = MIN(COALESCE(low, ?), ?) WHERE id = ?").run(m, now(), m, m, m, p.id);
+    if (m !== p.last || now() - (p.last_t || 0) > 60_000) moved.push([m, p.id]);
     const peak = Math.max(p.peak || 0, m);
     // A quoted position's take profit and stop look at what it would really sell for, not the headline price.
     const ex = p.tokens > 0 ? exitSol(p) : null;
@@ -323,6 +395,11 @@ export function tick() {
       try { onExit?.(r); } catch {}
     }
   }
+  if (moved.length) {
+    const st = db.prepare("UPDATE paper SET last = ?, last_t = ?, peak = MAX(COALESCE(peak, 0), ?), low = MIN(COALESCE(low, ?), ?) WHERE id = ?"), t = now();
+    try { db.exec("BEGIN"); for (const [m, id] of moved) st.run(m, t, m, m, m, id); db.exec("COMMIT"); }
+    catch (e) { try { db.exec("ROLLBACK"); } catch {} throw e; }
+  }
   if (need.length) pollDex(need).catch(() => {});
   refreshExitQuotes().catch(() => {});
 }
@@ -332,13 +409,13 @@ export const sizes = () => [...new Set(String([].concat(settings.quickSizes || [
 
 export function desk() {
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-  const open = db.prepare("SELECT * FROM paper WHERE status = 'open' ORDER BY t DESC").all().map(out);
-  const closed = db.prepare("SELECT * FROM paper WHERE status = 'closed' ORDER BY exit_t DESC LIMIT 60").all().map(out);
-  const totals = db.prepare(`SELECT COUNT(*) allN, COALESCE(SUM(pnl), 0) allPnl,
+  const open = rowsMine("SELECT * FROM paper WHERE status = 'open' AND $MINE ORDER BY t DESC").map(out);
+  const closed = rowsMine("SELECT * FROM paper WHERE status = 'closed' AND $MINE ORDER BY exit_t DESC LIMIT 60").map(out);
+  const totals = rowMine(`SELECT COUNT(*) allN, COALESCE(SUM(pnl), 0) allPnl,
     COUNT(CASE WHEN exit_t >= ? THEN 1 END) todayN,
     COALESCE(SUM(CASE WHEN exit_t >= ? THEN pnl END), 0) todayPnl,
     COUNT(CASE WHEN exit_t >= ? AND pnl > 0 THEN 1 END) todayWins
-    FROM paper WHERE status = 'closed'`).get(d0.getTime(), d0.getTime(), d0.getTime());
+    FROM paper WHERE status = 'closed' AND $MINE`, d0.getTime(), d0.getTime(), d0.getTime());
   const openUnpriced = open.filter(p => p.stale || p.pnl == null).length;
   const sum = (list, f) => list.reduce((s, p) => s + (f(p) || 0), 0);
   return {
@@ -349,6 +426,6 @@ export function desk() {
   };
 }
 
-export function positionsFor(mint) { return db.prepare("SELECT * FROM paper WHERE mint = ? ORDER BY t DESC LIMIT 10").all(mint).map(out); }
+export function positionsFor(mint) { return rowsMine("SELECT * FROM paper WHERE mint = ? AND $MINE ORDER BY t DESC LIMIT 10", mint).map(out); }
 
 export function startPaper() { setInterval(() => { try { tick(); } catch (e) { logEvent("error", `paper: ${e.message}`); } }, 1000); }

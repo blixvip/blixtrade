@@ -4,7 +4,15 @@
  */
 @import "tailwindcss";
 
+@keyframes chat-arrival { from { background-color: color-mix(in oklab, var(--color-up) 9%, transparent); } to { background-color: transparent; } }
+@keyframes welcome-in { from { opacity: 0; transform: translateY(6px) scale(0.94); } }
+.chat-arrival { animation: chat-arrival 600ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .chat-arrival { animation: none; } }
+
 /* The one place colour, type, radius and motion are defined. Components only use these names. */
+/* Inter Tight (web/public/fonts): the figures in data panels such as Known holders. */
+@font-face { font-family: "Inter Tight"; src: url("/fonts/inter-tight-var.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+
 @theme {
   /* surfaces: flat neutral greys, no tint (owner, 2026-10-04: a browser new-tab page is "the feeling": #1c1c1c ground, #2b2b2b fields, soft edges). A trace of blue keeps it cold like polished steel. */
   --color-paper: oklch(18% 0 0);
@@ -45,6 +53,7 @@
      anyone without it gets Segoe UI. */
   --font-display: "SF Pro Display", "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-body: "SF Pro Text", "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-tight: "Inter Tight", var(--font-body);
   --font-outlier: "JetBrains Mono", "Cascadia Mono", ui-monospace, Consolas, monospace;
 
   --text-2xs: 0.625rem;
@@ -69,13 +78,56 @@
   --shadow-glow: none;
   --shadow-sheet: 0 24px 60px -20px oklch(0% 0 0 / 0.6);
 
-  --animate-flash-up: flash-up 700ms var(--ease-out);
-  --animate-flash-down: flash-down 700ms var(--ease-out);
+  --animate-flash-up: flash-up 650ms var(--ease-out);
+  --animate-flash-down: flash-down 650ms var(--ease-out);
   --animate-row-in: row-in 420ms var(--ease-out);
+  /* Placeholder shapes while a list loads (Pulse columns): a soft light passing over them. */
+  --animate-shimmer: shimmer 1.8s ease-in-out infinite;
+  /* A new post on the Feed: opens from nothing to its height while it fades and settles in, then its highlight
+     fades over two seconds. The row is a grid so its height can go 0fr -> 1fr; see pages/Feed.tsx Row. */
+  --animate-post-in: post-in 560ms var(--ease-out) both, post-glow 2400ms 200ms ease-out both;
   --animate-sweep: sweep 4s linear infinite;
-  @keyframes flash-up { from { color: var(--color-up); } }
-  @keyframes flash-down { from { color: var(--color-down); } }
+  /* The Feed's chat stream: a message opens its own height and slides in, lit for a moment on its left edge;
+     live figures tick by colour only (a coloured block on every number that moves each second was noise). */
+  --animate-msg-in: msg-in 520ms var(--ease-out) both, msg-lit 2600ms 150ms ease-out both;
+  --animate-tick-up: tick-up 900ms var(--ease-out);
+  --animate-tick-down: tick-down 900ms var(--ease-out);
+  --animate-live-dot: live-dot 2s ease-in-out infinite;
+  --animate-brand-sheen: brand-sheen 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  --animate-brand-glow: brand-glow 2.4s ease-in-out infinite;
+  --animate-brand-bar: brand-bar 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  --animate-brand-in: brand-in 500ms var(--ease-out) both;
+  @keyframes brand-sheen { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+  @keyframes brand-glow { 0%, 100% { opacity: 0.35; transform: scale(0.94); } 50% { opacity: 0.7; transform: scale(1.04); } }
+  @keyframes brand-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  @keyframes brand-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
+  /* The rail's wordmark (shell/Rail.tsx Mark): it arrives out of a blur, a light crosses the chrome every 7 s
+     (and at once on hover), a slow glow breathes behind it; the "Powered by" strip's top hairline carries a
+     travelling glint and its two chips come in one after the other. */
+  --animate-mark-in: mark-in 900ms var(--ease-out) both;
+  --animate-mark-sheen: mark-sheen 7s cubic-bezier(0.45, 0, 0.25, 1) 0.6s infinite;
+  --animate-mark-sheen-now: brand-sheen 1.1s cubic-bezier(0.45, 0, 0.25, 1) both;
+  --animate-mark-glow: mark-glow 6s ease-in-out infinite;
+  --animate-glint: glint 5s ease-in-out 1.2s infinite;
+  --animate-chip-in: chip-in 600ms var(--ease-out) both;
+  @keyframes mark-in { from { opacity: 0; filter: blur(8px); transform: translateY(6px) scale(0.96); } }
+  @keyframes mark-sheen { 0% { background-position: 130% 0; } 18%, 100% { background-position: -30% 0; } }
+  @keyframes mark-glow { 0%, 100% { opacity: 0.25; transform: scale(0.92); } 50% { opacity: 0.6; transform: scale(1.05); } }
+  @keyframes glint { 0% { background-position: -60% 0; } 40%, 100% { background-position: 160% 0; } }
+  @keyframes chip-in { from { opacity: 0; transform: translateY(5px); filter: blur(3px); } }
+  @keyframes msg-in { from { grid-template-rows: 0fr; opacity: 0; transform: translateY(-8px) scale(0.985); } 60% { grid-template-rows: 1fr; opacity: 0.7; } to { grid-template-rows: 1fr; opacity: 1; transform: none; } }
+  @keyframes msg-lit { from { background-color: oklch(100% 0 0 / 0.045); box-shadow: inset 2px 0 0 var(--color-up); } to { background-color: transparent; box-shadow: inset 2px 0 0 transparent; } }
+  @keyframes tick-up { from { color: var(--color-up); } }
+  @keyframes tick-down { from { color: var(--color-down); } }
+  @keyframes live-dot { 50% { opacity: 0.35; } }
+  @keyframes pic-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes flash-up { from { color: var(--color-up); background-color: color-mix(in oklch, var(--color-up) 22%, transparent); } }
+  @keyframes flash-down { from { color: var(--color-down); background-color: color-mix(in oklch, var(--color-down) 22%, transparent); } }
   @keyframes row-in { from { opacity: 0; transform: translateY(-6px); } }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+  @keyframes post-in { from { grid-template-rows: 0fr; opacity: 0; transform: translateY(-10px); } 55% { grid-template-rows: 1fr; opacity: 0.6; } to { grid-template-rows: 1fr; opacity: 1; transform: none; } }
+  @keyframes post-glow { from { background-color: color-mix(in oklch, var(--color-info) 16%, transparent); box-shadow: inset 3px 0 0 var(--color-info); } to { background-color: transparent; box-shadow: inset 3px 0 0 transparent; } }
+  @keyframes heart-pop { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
   @keyframes sweep { to { transform: rotate(360deg); } }
   /* A transaction: its toast drops in, the tick draws itself, a failure shakes, a fill lights the button. */
   --animate-tx-in: tx-in 260ms var(--ease-out);
@@ -85,10 +137,14 @@
   --animate-tx-bar-ok: tx-bar 5s linear forwards;
   --animate-tx-bar-fail: tx-bar 7s linear forwards;
   --animate-tx-fill: tx-fill 900ms var(--ease-out);
+  --animate-tx-pop: tx-pop 420ms var(--ease-out);
+  --animate-tx-sheen: tx-sheen 1.8s ease-in-out infinite;
   @keyframes tx-in { from { opacity: 0; transform: translateY(-14px) scale(0.96); } }
   @keyframes tx-shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
   @keyframes tx-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
   @keyframes tx-bar { to { transform: scaleX(0); } }
+  @keyframes tx-sheen { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  @keyframes tx-pop { from { transform: scale(0.6); opacity: 0.4; } 60% { transform: scale(1.12); opacity: 1; } }
   @keyframes tx-fill { from { box-shadow: 0 0 0 0 var(--color-up), inset 0 0 0 99px color-mix(in oklch, var(--color-up) 45%, transparent); } to { box-shadow: 0 0 0 10px transparent, inset 0 0 0 99px transparent; } }
 }
 
@@ -106,8 +162,24 @@
   ::selection { background: color-mix(in oklch, var(--color-accent) 35%, transparent); }
   :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; border-radius: var(--radius-chip); }
   button { cursor: pointer; }
+  /* an icon keeps its square in a tight row; the text beside it gives way (a utility like `shrink` still wins) */
+  svg { flex-shrink: 0; }
   button:disabled { cursor: not-allowed; }
   * { scrollbar-width: thin; scrollbar-color: var(--color-rule-2) transparent; }
+  /* every checkbox drawn like the filter panels' boxes: a 16 px rounded square, ink when ticked */
+  input[type="checkbox"] {
+    appearance: none; flex: none; width: 1rem; height: 1rem; margin: 0; cursor: pointer;
+    border: 1px solid var(--color-rule-2); border-radius: 4px; background: var(--color-paper) center / 0.75rem no-repeat;
+    transition: background-color 100ms, border-color 100ms;
+  }
+  input[type="checkbox"]:hover { border-color: var(--color-muted); }
+  input[type="checkbox"]:checked {
+    border-color: var(--color-ink); background-color: var(--color-ink);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23171717' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5'/%3E%3C/svg%3E");
+  }
+  input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* a post's photo whose link has died (main.tsx) folds away */
+  img[data-broken] { display: none; }
 }
 
 @layer components {

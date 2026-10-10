@@ -186,16 +186,39 @@ async function pollWallets(emit) {
   }
 }
 
-async function pollOne(w) {
-  const first = !w.backfilled;
-  const pages = first ? 1 : settings.rpcUrl ? 8 : 3;
-  let all = [], before, reached = first || !w.last_sig;
+// A wallet's signatures since the last one seen (`lastSig`), newest first, a page of 50 at a time, up to `pages`.
+// `reached`: the list goes all the way back to `lastSig` (false: the older part is a gap). `fetch(opts)` is
+// sol.signatures for the wallet; exported for the tests.
+export async function pageSignatures(fetch, { first, lastSig, pages }) {
+  let all = [], before, reached = first || !lastSig;
+  let until = lastSig && !first ? lastSig : null, lostUntil = false;
   for (let p = 0; p < pages; p++) {
-    const sigs = (await sol.signatures(w.address, { limit: first ? 25 : 50, ...(before ? { before } : {}), ...(w.last_sig && !first ? { until: w.last_sig } : {}) })) || [];
+    let sigs;
+    try {
+      sigs = (await fetch({ limit: first ? 25 : 50, ...(before ? { before } : {}), ...(until ? { until } : {}) })) || [];
+    } catch (e) {
+      // The RPC answers "Transaction … not found" when it does not know the page's anchor (a node behind the others,
+      // a dropped transaction). Thrown on, the wallet's every later poll hit the same anchor: hundreds of errors a
+      // day per wallet and no new trades. A later page: stop here and count the rest as a gap. The first page's
+      // `until` (the last one seen): read the newest page without it.
+      if (!/not found/i.test(e.message)) throw e;
+      if (p > 0) { reached = false; break; }
+      if (!until) throw e;
+      until = null; lostUntil = true; p--; continue;
+    }
+    // Read without `until`: stop at the last one seen, if this page reaches back to it.
+    const seen = lostUntil ? sigs.findIndex((x) => x.signature === lastSig) : -1;
+    if (seen >= 0) { all = all.concat(sigs.slice(0, seen)); reached = true; break; }
     all = all.concat(sigs);
-    if (sigs.length < 50) { reached = true; break; }   // got everything back to the last one we saw
+    if (sigs.length < 50) { reached = !lostUntil; break; }   // got everything back to the last one we saw
     before = sigs[sigs.length - 1].signature;
   }
+  return { all, reached };
+}
+
+async function pollOne(w) {
+  const first = !w.backfilled;
+  const { all, reached } = await pageSignatures((o) => sol.signatures(w.address, o), { first, lastSig: w.last_sig, pages: first ? 1 : settings.rpcUrl ? 8 : 3 });
   db.prepare("UPDATE wallets SET last_poll = ?, last_sig = COALESCE(?, last_sig), backfilled = 1 WHERE address = ?").run(now(), all[0]?.signature || null, w.address);
   // More activity than we could page through since the last look: the older part is a known gap.
   if (!reached) miss(w.address, 1, `more than ${all.length} transactions since the last check; the oldest were skipped`);
@@ -576,6 +599,7 @@ const fmtUsd = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n
 
 // ---------- loop ----------
 export function startWallets(onTrade) {
+  if (settings.marketFeeds === false) return () => {};   // a quiet dev copy: no wallet sockets or polling
   const stopStream = startStream(onTrade);
   const timers = [
     setInterval(() => pollWallets(onTrade), 20_000),

@@ -1,5 +1,6 @@
 // The radar loop: discover → enrich → safety check → score → signals → outcome tracking.
 import { EventEmitter } from "node:events";
+import * as coinIndex from "./coinindex.js";
 import { db, q, json, logEvent, prune } from "./db.js";
 import * as src from "./sources.js";
 import { themesFor } from "./narratives.js";
@@ -91,6 +92,24 @@ function startPump() {
   });
 }
 
+// A pump.fun coin's first trade in its PumpSwap pool, from the chain (pumpswap.js): it has bonded, whether or not
+// PumpPortal's migration event came (it drops some) and before the next DexScreener read names the pair. The pool
+// is the pair (DexScreener's pair id for PumpSwap is the pool), so the Migrated column can show it at once.
+const bondedOnChainSeen = new Set();
+export function bondedOnChain(mint, pool) {
+  if (bondedOnChainSeen.has(mint)) return;
+  const had = q.getToken.get(mint);
+  if (!had) { adopt({ mint, source: "pump-graduated" }); return; }   // adopted now; marked on its next pool trade
+  bondedOnChainSeen.add(mint); if (bondedOnChainSeen.size > 5000) bondedOnChainSeen.clear();
+  if (had.graduated && had.pair) return;
+  const r = db.prepare("UPDATE tokens SET graduated = 1, pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = COALESCE(pair_created, ?) WHERE mint = ?").run(pool || null, now(), mint);
+  if (!r.changes || had.graduated) return;
+  stats.graduated++;
+  nursery.delete(mint);
+  pendingGraduations.add(mint);
+  bus.emit("migration", mint);
+}
+
 // One way in for a launch, whichever feed saw it first (PumpPortal, or the chain itself via the live feed).
 export const launchFeeds = { pumpportal: 0, chainOnly: 0 };
 function addLaunch(t) {
@@ -105,6 +124,7 @@ function addLaunch(t) {
   const launch = { ...t, seen: now(), devCount: t.creator ? devLaunches.get(t.creator) : 1 };
   recentLaunches.push(launch);
   launchIndex.set(t.mint, launch);
+  coinIndex.note({ mint: t.mint, name: t.name, symbol: t.symbol, uri: t.uri, creator: t.creator });   // kept for good (coinindex.js)
   if (launchIndex.size > 24000) for (const k of [...launchIndex.keys()].slice(0, 3000)) launchIndex.delete(k);
   bus.emit("launch", { mint: t.mint, symbol: t.symbol, name: t.name, mcapSol: t.mcapSol, devSol: t.devSol, devCount: launch.devCount });
   if (recentLaunches.length > 400) recentLaunches.splice(0, recentLaunches.length - 400);
@@ -118,6 +138,63 @@ function fillLaunchGaps() {
   }, 2000));
 }
 const pendingGraduations = new Set();
+
+// pump.fun's own list of its newest coins, read back so no launch stays unseen. A restart loses the launches made
+// while the radar was down and connecting (measured 2026-10-09: 18 of 1,024 coins in 33 minutes, every one within
+// ~2 minutes of one of 8 restarts, never indexed). At start the list is read back page by page to the last coin
+// the index knew before the restart; after that its first page every 45 s catches anything both live feeds
+// dropped. A coin found this way under BACKFILL_FRESH_MS old goes in as a launch (New pairs, the nursery); an
+// older one is kept in the coin index with its real creation time, so its page, search and later trading know it.
+// pump.fun limits this list hard (429 on the second quick read from the VM), so pages are spaced and a 429 stops.
+const PUMP_NEW = "https://frontend-api-v3.pump.fun/coins?limit=50&sort=created_timestamp&order=DESC&includeNsfw=true";
+const BACKFILL_FRESH_MS = 5 * MIN, BACKFILL_PAGES = 8, BACKFILL_GAP_MS = 4000;
+export const backfill = { reads: 0, added: 0, indexed: 0, last: 0, error: null, limited: 0 };
+export async function backfillLaunches(pages = 1, until = 0) {
+  for (let page = 0; page < pages; page++) {
+    let list;
+    try {
+      const r = await fetch(`${PUMP_NEW}&offset=${page * 50}`, { headers: { origin: "https://pump.fun", referer: "https://pump.fun/", "user-agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10_000) });
+      if (r.status === 429) { backfill.limited++; backfill.error = "pump.fun rate limited"; return; }
+      if (!r.ok) throw new Error(`pump.fun answered ${r.status}`);
+      const j = await r.json();
+      list = Array.isArray(j) ? j : j?.coins || [];
+      backfill.reads++; backfill.last = now(); backfill.error = null;
+    } catch (e) { backfill.error = e.message; return; }
+    let unknown = 0;
+    for (const c of list) {
+      if (!c?.mint || launchIndex.has(c.mint) || coinIndex.get(c.mint)) continue;
+      unknown++;
+      const created = Number(c.created_timestamp) || now();
+      if (now() - created < BACKFILL_FRESH_MS) {
+        if (addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.metadata_uri, creator: c.creator, pool: "pump", mcapSol: Number(c.market_cap) || null, devSol: null, source: "pump-backfill" })) backfill.added++;
+      } else { coinIndex.note({ mint: c.mint, name: c.name, symbol: c.symbol, uri: c.metadata_uri, creator: c.creator, created }); backfill.indexed++; }
+    }
+    const oldest = Math.min(...list.map((c) => Number(c.created_timestamp) || Infinity));
+    // Back far enough: past the last coin known before the restart, or a page with nothing new on it.
+    if (!list.length || oldest <= until || (!until && !unknown)) return;
+    await new Promise((go) => setTimeout(go, BACKFILL_GAP_MS));
+  }
+}
+
+// Coins launched anywhere but pump.fun (Meteora DBC and DAMM, Bags, LaunchLab, memefun, a plain pool), from
+// Jupiter's newest-tokens list: GeckoTerminal's first page every 90 s (discoverFeeds) caught about half of them
+// (measured 2026-10-09: 5 of 10 Meteora DAMM v2 coins, one with 1,222 trades in its first hour, never seen).
+// They wait in the nursery with the pump.fun launches and are kept only if they show real trading. pump.fun's own
+// launches come from PumpPortal and the chain already.
+export const recentFeed = { calls: 0, found: 0, nursed: 0, last: 0, error: null };
+export async function scanRecent() {
+  try {
+    const list = await src.jupRecent();
+    recentFeed.calls++; recentFeed.last = now(); recentFeed.error = null;
+    for (const t of list) {
+      if (t.launchpad === "pump.fun" || /pump$/.test(t.mint) && !t.launchpad) continue;
+      recentFeed.found++;
+      coinIndex.note({ mint: t.mint, name: t.name, symbol: t.symbol, creator: t.creator, created: t.poolAt || undefined });
+      if (nursery.has(t.mint) || launchIndex.has(t.mint) || q.getToken.get(t.mint)) continue;
+      if (nursery.size < 20000) { nursery.set(t.mint, { ...t, seen: now() }); recentFeed.nursed++; }
+    }
+  } catch (e) { recentFeed.error = e.message; }
+}
 
 // Every minute: check launches that are 4+ minutes old and keep only the ones with real trading.
 async function graduateNursery() {
@@ -141,7 +218,7 @@ async function graduateNursery() {
     if (!p) continue;
     const mcap = p.marketCap || p.fdv || 0, vol = p.volume?.m5 || 0;
     if (mcap >= settings.nurseryMinMcap || vol >= settings.nurseryMinVol5m) {
-      if (adopt({ ...t, source: "pump-live" })) { applyPair(t.mint, p); kept++; }
+      if (adopt({ ...t, source: t.source === "jup-recent" ? "jup-recent" : "pump-live" })) { applyPair(t.mint, p); kept++; }
     }
   }
   if (kept) logEvent("discover", `${kept} of ${ripe.length} new launches showed real trading`);
@@ -226,6 +303,18 @@ export async function refreshVisible(mints) {
   }
 }
 
+// Many single-row writes, 50 to a transaction (one WAL commit instead of 50), yielding between batches so
+// a 900-coin cycle never holds the feeds up. Inside someone else's transaction it just runs.
+async function batched(items, fn) {
+  for (let i = 0; i < items.length; i += 50) {
+    const own = !db.isTransaction;
+    if (own) db.exec("BEGIN");
+    try { for (const x of items.slice(i, i + 50)) fn(x); if (own) db.exec("COMMIT"); }
+    catch (e) { if (own && db.isTransaction) db.exec("ROLLBACK"); throw e; }
+    await new Promise((go) => setImmediate(go));
+  }
+}
+
 async function refreshActive() {
   const rows = q.activeMints.all();
   stats.tracked = rows.length;
@@ -238,7 +327,7 @@ async function refreshActive() {
   const scoring = cyc % 4 !== 0 ? [] : db.prepare(`SELECT DISTINCT t.mint FROM tokens t JOIN signals s ON s.mint = t.mint
     WHERE t.status = 'dead' AND s.hidden = 0 AND s.p24h IS NULL AND s.t > ? LIMIT 300`).all(now() - 25 * 60 * MIN).map((r) => r.mint);
   const pairs = await src.dexTokens([...due, ...scoring]);
-  for (const m of [...due, ...scoring]) {
+  await batched([...due, ...scoring], (m) => {
     const p = pairs.get(m);
     if (p) applyPair(m, p);
     else if (!pairs.failed?.has(m)) {
@@ -247,8 +336,8 @@ async function refreshActive() {
       // It had a market and DexScreener no longer lists one: nothing left to sell into.
       else if (t?.pair && !t.quarantine && now() - (t.price_t || t.updated || 0) > 30 * MIN) db.prepare("UPDATE tokens SET quarantine = 'no longer listed on any DEX' WHERE mint = ?").run(m);
     }
-  }
-  for (const m of due) { const t = q.getToken.get(m); if (t?.pair) rescore(t); }
+  });
+  await batched(due, (m) => { const t = q.getToken.get(m); if (t?.pair) rescore(t); });
   cull();
 }
 
@@ -285,7 +374,49 @@ function cull() {
 
 // ---------- safety ----------
 const safetyQueue = new Set();
+// Coins on someone's screen right now (Discover, Pulse): a never-checked one is read next, however small it is,
+// so its audit pills do not sit on dashes until it happens to grow. Asked by server.js with the mints shown.
+const visibleSafety = new Map();   // mint -> last shown
+// A coin still owed a report: never checked, or checked while RugCheck did not know it yet (it answers "not found"
+// for a coin's first minute or so, and that answer used to stand for good): asked again 40 s later.
+const owesSafety = (row) => !row.safety_checked || (row.safety_score == null && now() - row.safety_checked > 40_000);
+export function wantSafety(mints) {
+  const t = now();
+  for (const m of mints) visibleSafety.set(m, t);
+  if (visibleSafety.size > 400) for (const [m, at] of visibleSafety) if (t - at > 60_000) visibleSafety.delete(m);
+}
+// Between scan cycles (30 s apart), one on-screen never-checked coin every 3 s: RugCheck allows 40 a minute
+// (sources.js) and the cycle uses about half, so a coin shown on Discover gets its report in seconds.
+let visibleBusy = false;
+setInterval(async () => {
+  if (visibleBusy || !visibleSafety.size) return;
+  const t = now();
+  let pick = null;
+  for (const [m, at] of visibleSafety) {
+    if (t - at > 60_000) { visibleSafety.delete(m); continue; }
+    const row = q.getToken.get(m);
+    if (!row) { visibleSafety.delete(m); continue; }
+    if (!owesSafety(row)) continue;
+    pick = m; break;
+  }
+  if (!pick) return;
+  visibleBusy = true;
+  try { await safetyCheck(pick); }
+  catch (e) { if (e.status !== 429) db.prepare("UPDATE tokens SET safety_checked = ? WHERE mint = ?").run(now(), pick); }
+  finally { visibleBusy = false; }
+}, 2000).unref?.();
 async function runSafety() {
+  {
+    const t = now();
+    let n = 0;
+    for (const [m, at] of visibleSafety) {
+      if (t - at > 60_000) { visibleSafety.delete(m); continue; }
+      const row = q.getToken.get(m);
+      if (!row) { visibleSafety.delete(m); continue; }
+      if (!owesSafety(row)) continue;
+      if (n++ < 6) safetyQueue.add(m);
+    }
+  }
   // Never-checked coins first: a busy coin with no report at all shows blank audit figures everywhere, while
   // re-reading the top scorers every 12 minutes could otherwise take every slot. Busy means real trading,
   // whatever its score (a coin trending on Discover can score under 50).
@@ -391,7 +522,8 @@ function rescore(t) {
   const meme = (t.asset_class || "meme") === "meme";
   const score = meme && !t.quarantine ? scoreToken(t) : 0;
   const themes = json(t.themes_user, null) || (meme ? themesFor(t) : []);
-  db.prepare("UPDATE tokens SET score = ?, themes = ? WHERE mint = ?").run(score, JSON.stringify(themes), t.mint);
+  const themesJson = JSON.stringify(themes);
+  if (score !== t.score || themesJson !== t.themes) db.prepare("UPDATE tokens SET score = ?, themes = ? WHERE mint = ?").run(score, themesJson, t.mint);   // unchanged: no write
   if (!meme) return;
   t = { ...t, score };
   const safe = isSafe(t);
@@ -473,6 +605,9 @@ function trackOutcomes() {
     const age = now() - s.t;
     const at = (ms, cur) => (cur == null && age >= ms ? x : null);
     const wrote = [at(15 * MIN, s.p15), at(60 * MIN, s.p1h), at(6 * 60 * MIN, s.p6h), at(24 * 60 * MIN, s.p24h)];
+    // Nothing new (no checkpoint due, no new peak, already flagged or not): no write. Rewriting every open signal
+    // each cycle was one of the radar's busiest writers.
+    if (wrote.every((v) => v == null) && !(exit.ok && x > (s.peak || 0))) continue;
     upd.run(...wrote, exit.ok ? x : null, x, !exit.ok && wrote.some((v) => v != null) ? 1 : 0, s.id);
   }
 }
@@ -602,6 +737,10 @@ export function start() {
   if (meta.get("repair") !== "2") {
     try { rebuildFromSnapshots(); meta.set("repair", "2"); } catch (e) { try { db.exec("ROLLBACK"); } catch {} logEvent("error", `data repair: ${e.message}`); }
   }
+  // The nursery lives in memory: a restart (every deploy) used to forget the launches of the last few minutes before
+  // they were checked, so a coin that took off right then was never tracked. The coin index kept them: they wait again.
+  for (const c of db.prepare("SELECT mint, name, symbol, creator, created FROM coins WHERE created > ?").all(now() - 25 * MIN))
+    if (!nursery.has(c.mint) && !q.getToken.get(c.mint)) nursery.set(c.mint, { mint: c.mint, name: c.name, symbol: c.symbol, creator: c.creator, source: "restart", seen: c.created });
   const pump = startPump();
   fillLaunchGaps();
   startCoverage();
@@ -610,9 +749,14 @@ export function start() {
     walletSignals(ev, raise, adoptMint, vet).catch((e) => logEvent("error", `wallet signal: ${e.message}`));
   });
   discoverFeeds().then(cycle);
+  // The launches made while the radar was down: back to the newest coin the index already had (backfill above).
+  const knownUntil = db.prepare("SELECT MAX(created) t FROM coins").get()?.t || now() - 30 * MIN;
+  setTimeout(() => backfillLaunches(BACKFILL_PAGES, knownUntil).catch(() => {}), 20_000);
   const timers = [
+    setInterval(() => backfillLaunches(4).catch(() => {}), 45_000),
     setInterval(cycle, 30_000),
     setInterval(discoverFeeds, 90_000),
+    setInterval(scanRecent, 25_000),
     setInterval(prune, 60 * MIN),
   ];
   logEvent("system", "Radar started");

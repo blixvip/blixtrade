@@ -30,7 +30,7 @@ function Split({ title, rows }: { title: string; rows: J[] }) {
   return (
     <Panel title={title}>
       <table className="w-full text-md"><tbody>{rows.map((r) => (
-        <tr key={r.key}><td className={cn(td, "capitalize first:border-t-0")}>{r.key}</td><td className={cn(tdR, "text-muted")}>{r.wins}/{r.n} won</td><td className={cn(tdR, "font-semibold", toneX(r.avg))}>{`${r.avg >= 1 ? "+" : "−"}${Math.abs((r.avg - 1) * 100).toFixed(0)}%`}</td></tr>))}
+        <tr key={r.key} className="first:[&>td]:border-t-0"><td className={cn(td, "capitalize")}>{r.key}</td><td className={cn(tdR, "text-muted")}>{r.wins}/{r.n} won</td><td className={cn(tdR, "font-semibold", toneX(r.avg))}>{`${r.avg >= 1 ? "+" : "−"}${Math.abs((r.avg - 1) * 100).toFixed(0)}%`}</td></tr>))}
       </tbody></table>
     </Panel>
   );

@@ -19,7 +19,7 @@ const enabled = () => Boolean(settings.publicHost && settings.tunnelKey);
 
 async function register(url) {
   try {
-    const r = await fetch(`https://${settings.publicHost}/__register`, { method: "POST", headers: { "content-type": "application/json", "x-reg-key": settings.tunnelKey }, body: JSON.stringify({ origin: url }), signal: AbortSignal.timeout(15_000) });
+    const r = await fetch(`https://${settings.publicHost}/__register`, { method: "POST", headers: { "content-type": "application/json", "x-reg-key": settings.tunnelKey }, body: JSON.stringify({ origin: url, role: settings.tunnelRole === "pc" ? "pc" : "main" }), signal: AbortSignal.timeout(15_000) });
     if (!r.ok) throw new Error(`register ${r.status}: ${(await r.text()).slice(0, 120)}`);
     tunnelStats.registered = now(); tunnelStats.registerError = null;
     health.ok("tunnel");
@@ -61,6 +61,14 @@ function start(port) {
 }
 
 export function startTunnel(port) {
+  // A named tunnel (settings.tunnelOrigin, e.g. https://origin.blixvip.com) runs as its own service (cloudflared on
+  // the server, systemd), so it stays up while Blix restarts and its address never changes: only registered here.
+  if (settings.tunnelOrigin && enabled()) {
+    tunnelStats.on = true; tunnelStats.exe = "named tunnel (service)"; tunnelStats.url = settings.tunnelOrigin; tunnelStats.since = now();
+    register(settings.tunnelOrigin);
+    setInterval(() => register(settings.tunnelOrigin), 10 * 60_000);
+    return;
+  }
   // Starts now if a public hostname and tunnel key are set, or as soon as they are saved in Settings.
   const tryStart = () => { if (!tunnelStats.on && enabled()) start(port); };
   tryStart();

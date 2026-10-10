@@ -1,22 +1,29 @@
 // Pulse: the live three-column view (new pairs → about to bond → migrated), Axiom style, with the
 // AI's rating state for every coin (queued, Grok reading it right now, graded, deep read, buy call).
+import { slotTime } from "./feedlag.js";
 import { db, q, json } from "./db.js";
 import { recentLaunches, devLaunches, launchIndex } from "./engine.js";
 import { candidates, ipfs, bondingProgress, providers, queueStatus, liveTraction } from "./research.js";
 import { safeUrl, publicUrl, cleanLinks, readingProblem } from "./quality.js";
-import { liveStats, feed, live, closeToBonding } from "./livetrades.js";
+import { liveStats, feed, live, closeToBonding, curveLiqUsd } from "./livetrades.js";
 import { dexTokens } from "./sources.js";
 import { triageFor, triageStats } from "./triage.js";
 import { earlyFor } from "./early.js";
 import { grokStatus } from "./grok.js";
-import { rowHolders, holderStats } from "./holders.js";
-import { runners, windowStats, oddCurve } from "./coverage.js";
+import { rowHolders, holderStats, seedWanted } from "./holders.js";
+import { snipeFor } from "./snipe.js";
+import { runners, windowStats, oddCurve, isMoving } from "./coverage.js";
 import { traction } from "./quality.js";
 import { adoptLaunch, adoptMint, vet } from "./engine.js";
 import { enqueue } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
-import { priceTick } from "./candles.js";
+import { supplyOf } from "./jup.js";
+import { priceTick, addTrade } from "./candles.js";
+import { onPoolTrade } from "./pumpswap.js";
+import { onPoolPrice, watchSol } from "./poolwatch.js";
+const WSOL_MINT = "So11111111111111111111111111111111111111112";
 import { gtGet, gtReady } from "./gtgate.js";
+import * as coinIndex from "./coinindex.js";
 
 // Every row carries a live rank: the traction score (0-100) measured on this radar's own past reads as the
 // one ranking that predicted winners, computed this second from the trade feed (5-minute volume, traders,
@@ -32,6 +39,8 @@ function window5m(mint) {
 }
 function rankRow(r) {
   const w = window5m(r.mint), x = liveStats(r.mint);
+  // Nothing known yet (a launch seconds old, no trade seen): no rank, rather than a made-up middling one.
+  if (!x && !w && !r.vol5m && !r.holders && (r.startMcapSol != null || !(r.mcap > 0))) return { ...r, tr: null };
   const live = x && now() - x.last < 15 * MIN;
   const stage = r.graduated ? "bonded" : (r.progress ?? 0) >= 0.6 ? "near" : "new";
   const vol5m = w ? (w.buySol + w.sellSol) * feed.solUsd : r.vol5m ?? undefined;
@@ -54,11 +63,11 @@ function readHot(rows) {
     Promise.resolve(q.getToken.get(r.mint) ? null : l ? adoptLaunch(l) : adoptMint(r.mint)).then(() => vet(r.mint)).catch(() => {}).then(() => { try { enqueue(r.mint, stage, 0); } catch {} });
   }
 }
-export const getMeta = (mint) => meta.get(mint);
+export const getMeta = (mint) => meta.get(mint) ?? coinIndex.metaOf(mint);
 // A picture address found for a coin the radar does not track (see lookupPictures).
-export const knownImage = (mint) => names.get(mint)?.image || null;
+export const knownImage = (mint) => names.get(mint)?.image || coinIndex.imageOf(mint);
 // Ticker and name for any coin the page has seen: the launch feed first, then the DexScreener lookup.
-export const nameOf = (mint) => { const l = launchIndex.get(mint), n = names.get(mint); return l || n?.symbol ? { symbol: l?.symbol || n?.symbol || null, name: l?.name || n?.name || null } : null; };
+export const nameOf = (mint) => { const l = launchIndex.get(mint), n = names.get(mint); return l || n?.symbol ? { symbol: l?.symbol || n?.symbol || null, name: l?.name || n?.name || null } : coinIndex.nameOf(mint); };
 // The Jupiter price of a migrated coin on the page (refreshed every 2s), for anything that needs it now.
 export const fastMcap = (mint) => { const x = migPx.get(mint); return x && now() - x.t < 30_000 ? x.mcap : null; };
 
@@ -72,22 +81,44 @@ export const watched = new Set();
 // a row with neither says its number is the bonding-time one. The ledger stops at bonding too, so a bonded
 // coin carries it only for LEDGER_AFTER_BOND (while it still describes the coin); then RugCheck's or nothing.
 const LEDGER_AFTER_BOND = 3 * 60_000;
+// The ledger's figures for a row. A book that missed the coin's first trades (partial, not yet seeded from the
+// chain) knows only the wallets it saw trade: its count can only be low and its top 10 and dev share are of
+// those wallets alone, so RugCheck's figures stand in wherever it has them. Seeded or complete, the ledger's win.
+function ledgerFor(r) {
+  let hl = rowHolders(r.mint);
+  // A book that joined after the launch has no sniper or bundle figures: those come from the coin's first blocks.
+  if (hl && hl.snN == null && hl.bdN == null) { const x = snipeFor(r.mint); if (x) hl = { ...hl, sn: x.sn, snN: x.snN, snOut: x.snOut, bd: x.bd, bdN: x.bdN }; }
+  if (!hl?.p) return hl;
+  return { ...hl, h: r.holders > (hl.h ?? 0) ? r.holders : hl.h, t10: r.top10 ?? hl.t10, dev: r.dev ?? hl.dev };
+}
 function withLive(r) {
   // pump.fun Mayhem Mode (its AI agent trades the coin for the first 24 h), from the launch feed.
   if (launchIndex.get(r.mint)?.mayhem) r = { ...r, mayhem: true };
   const x = liveStats(r.mint);
   const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
-  const hl = bonded && (!x || now() - x.last > LEDGER_AFTER_BOND) ? null : rowHolders(r.mint);
+  // The ledger follows a coin into its PumpSwap pool (x.pool); one that bonded elsewhere keeps it LEDGER_AFTER_BOND.
+  const hl = bonded && !x?.pool && (!x || now() - x.last > LEDGER_AFTER_BOND) ? null : ledgerFor(r);
   if (!x || now() - x.last > 15 * MIN) return hl ? { ...r, hl } : r;
   if (bonded) {
     bondedSeen.add(r.mint);
+    // Trading in its pool: every count comes from the chain, trade by trade, like a coin on the curve.
+    if (x.pool) return { ...r, ...(hl ? { hl } : {}), progress: 1, graduated: true, mcap: x.mc, buys: x.buys, sells: x.sells, liveVol: x.vol, vol: x.vol, traders: x.traders,
+      liq: x.liq ?? r.liq, chg1m: x.chg1m, side: x.side, lastTrade: x.last, priceT: x.last, live: true, warn: null };
     const fast = fastMcap(r.mint), tracked = r.mcap > 0 && r.priceT && now() - r.priceT < 2 * MIN ? r.mcap : null;
     const mcap = fast ?? tracked;
     return { ...r, ...(hl ? { hl } : {}), progress: 1, graduated: true, traders: x.traders, live: false, mcap: mcap ?? x.mc,
       ...(mcap == null ? { warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : {}) };
   }
-  return { ...r, mcap: x.mc, buys: r.graduated ? r.buys : x.buys, sells: r.graduated ? r.sells : x.sells, liveVol: x.vol, traders: x.traders,
+  return { ...r, mcap: x.mc, buys: r.graduated ? r.buys : x.buys, sells: r.graduated ? r.sells : x.sells, liveVol: x.vol, traders: x.traders, liq: x.liq ?? r.liq,
     progress: r.graduated ? r.progress : x.progress, chg1m: x.chg1m, side: x.side, lastTrade: x.last, live: true, hl };
+}
+// A migrated row whose pool the chain feed is reading: its counts, volume, traders, depth and holders from the
+// feed (this second) rather than DexScreener's half-minute-old reading and RugCheck's.
+function withPool(r) {
+  const x = liveStats(r.mint);
+  if (!x?.pool || now() - x.last > 15 * MIN) return r;
+  const hl = ledgerFor(r);
+  return { ...r, ...(hl ? { hl } : {}), buys: x.buys, sells: x.sells, liveVol: x.vol, vol: x.vol, traders: x.traders, liq: x.liq ?? r.liq, chg1m: x.chg1m, side: x.side, lastTrade: x.last, live: true };
 }
 
 const now = () => Date.now();
@@ -224,12 +255,13 @@ export const focusPrice = (mint) => { focusMints.set(mint, now()); };
 async function priceMigrated() {
   for (const [m, t] of focusMints) if (now() - t > 15_000) focusMints.delete(m);
   const pulseOpen = now() - cache.t <= 15_000;
-  const ids = [...new Set([...focusMints.keys(), ...(pulseOpen ? migMints : [])])].slice(0, 50);
+  // Coins the chain priced in the last 20 s need no Jupiter call (a quiet pool falls back to it).
+  const ids = [...new Set([...focusMints.keys(), ...(pulseOpen ? migMints : [])])].filter((m) => !chainFresh(m)).slice(0, 50);
   if (migBusy || now() < migPause || !ids.length) return;
   migBusy = true;
   try {
     const got = await jupiterGet(`/price/v3?ids=${ids.join(",")}`, { timeout: 5000 });
-    migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes.
+    migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes (one call, 50 coins, every ~6 s; 2.5 s hit 429s, 4 s a few an hour).
     migStats.calls++; migStats.last = now();
     const out = [];
     for (const m of ids) {
@@ -239,7 +271,9 @@ async function priceMigrated() {
       // a billion tokens, which is the fallback).
       // Without the radar's own ratio, only a pump.fun coin's supply is known (1B); any other coin is read from
       // its stored row, or skipped (stORE: 43K tokens priced at $131.50 became a $131.5B market cap).
-      let t = migRatio.get(m);
+      // Jupiter's circulating supply first: the chart is drawn in it (a burn makes it less than 1B).
+      const circ = supplyOf(m);
+      let t = circ ?? migRatio.get(m);
       if (!t && !/pump$/.test(m)) {
         const row = db.prepare("SELECT price, mcap FROM tokens WHERE mint = ?").get(m);
         if (row?.price > 0 && row?.mcap > 0) migRatio.set(m, (t = row.mcap / row.price)); else continue;
@@ -247,7 +281,8 @@ async function priceMigrated() {
       const mc = usd * (t || 1e9);
       const prev = migPx.get(m);
       migPx.set(m, { mcap: mc, t: now() });
-      priceTick(m, mc);
+      // Into the chart only on the chart's own scale (the supply arrives a moment after the first price).
+      if (circ) priceTick(m, mc);
       if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
     }
     // A pool Jupiter cannot price yet (it indexes new pools within minutes): DexScreener's reading, at most
@@ -271,6 +306,45 @@ async function priceMigrated() {
   } catch (e) { if (e.status === 429) { migPause = now() + 30_000; migStats.paused++; } }
   finally { migBusy = false; }
 }
+// Bonded pump.fun coins are priced trade by trade from the chain (pumpswap.js): within a slot, where the
+// Jupiter poll above trails by seconds. Every trade also goes into the chart's candle book. Moves of coins
+// on the page (or a coin page that is open) go out together every 100 ms.
+const chainOut = new Map();
+let chainTimer = null;
+// An open chart's fast feed (fastpx.js, set by server.js) leads its candles; the late log copy would drag them back.
+let fastCheck = () => false;
+export const setPulseFastCheck = (fn) => { fastCheck = fn; };
+onPoolTrade((mint, e) => {
+  const mc = e.mcSol * feed.solUsd;
+  if (!fastCheck(mint)) addTrade(mint, mc, e.sol * feed.solUsd, e.buy, slotTime(e.slot) ?? Date.now());
+  const prev = migPx.get(mint);
+  migPx.set(mint, { mcap: mc, t: now(), src: "chain" });
+  if (prev && Math.round(prev.mcap) === Math.round(mc)) return;
+  if (!watched.has(mint) && !focusMints.has(mint)) return;
+  chainOut.set(mint, Math.round(mc));
+  if (!chainTimer) chainTimer = setTimeout(() => { chainTimer = null; const out = [...chainOut]; chainOut.clear(); if (out.length) onMig?.(out); }, 100);
+});
+const chainFresh = (m) => migPx.get(m)?.src === "chain" && now() - migPx.get(m).t < 20_000;
+// Coins outside PumpSwap with an open chart: their pool's price on every change (poolwatch.js), on the chart's
+// scale (no supply known yet: not drawn). No trade size, so the chart candles get prices, not volume.
+const chainMc = [];
+export const onChainMc = (fn) => chainMc.push(fn);
+onPoolPrice((mint, { px, quote }) => {
+  // The SOL price itself (poolwatch.js watchSol): kept live for every SOL-to-dollar figure.
+  if (mint === WSOL_MINT) { if (quote === "usd" && px > 10 && px < 10_000) { feed.solUsd = px; feed.solKnown = true; feed.solT = now(); } return; }
+  const sup = supplyOf(mint);
+  if (!sup) return;
+  const mc = px * (quote === "sol" ? feed.solUsd : 1) * sup;
+  if (!(mc > 0)) return;
+  priceTick(mint, mc);
+  const prev = migPx.get(mint);
+  migPx.set(mint, { mcap: mc, t: now(), src: "chain" });
+  for (const fn of chainMc) fn(mint, mc);
+  if (prev && Math.round(prev.mcap) === Math.round(mc)) return;
+  chainOut.set(mint, Math.round(mc));
+  if (!chainTimer) chainTimer = setTimeout(() => { chainTimer = null; const out = [...chainOut]; chainOut.clear(); if (out.length) onMig?.(out); }, 100);
+});
+
 function withFastPrice(r) {
   const x = migPx.get(r.mint);
   if (!x || now() - x.t > 30_000) return r;
@@ -283,14 +357,25 @@ function staleness(r) {
 }
 
 // ---------- rows ----------
+// The five fields Pulse wants from a full research report, parsed once per version of the report instead of
+// on every Pulse build (parsing ~500 report blobs each time was the heaviest part of pulseData).
+const reportBits = new Map();   // mint -> { key, bits }
+const bitsKey = (r) => `${r.t}|${r.status}|${r.stage}|${r.model}`;
 function researchMap(mints) {
   if (!mints.length) return new Map();
-  const rows = db.prepare(`SELECT mint, status, grade, score, tier, verdict, stage, report, t, model FROM research WHERE status != 'expired' AND mint IN (${mints.map(() => "?").join(",")})`).all(...mints);
-  return new Map(rows.map((r) => {
-    const rep = json(r.report, {});
-    return [r.mint, { status: r.status, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict, stage: r.stage, t: r.t, model: r.model, rated: Boolean(r.grade) && ["done", "deep"].includes(r.status),
-      action: rep.trade?.action || null, pwin: rep.trade?.pWin ?? null, conviction: rep.trade?.conviction ?? null, tag: rep.narrative?.tag || null, organic: rep.xBuzz?.organic || null }];
-  }));
+  const marks = mints.map(() => "?").join(",");
+  const rows = db.prepare(`SELECT mint, status, grade, score, tier, verdict, stage, t, model FROM research WHERE status != 'expired' AND mint IN (${marks})`).all(...mints);
+  const stale = rows.filter((r) => reportBits.get(r.mint)?.key !== bitsKey(r)).map((r) => r.mint);
+  if (stale.length) {
+    for (const r of db.prepare(`SELECT mint, status, stage, t, model, report FROM research WHERE status != 'expired' AND mint IN (${stale.map(() => "?").join(",")})`).all(...stale)) {
+      const rep = json(r.report, {});
+      reportBits.set(r.mint, { key: bitsKey(r), bits: { action: rep.trade?.action || null, pwin: rep.trade?.pWin ?? null, conviction: rep.trade?.conviction ?? null, tag: rep.narrative?.tag || null, organic: rep.xBuzz?.organic || null } });
+    }
+    if (reportBits.size > 5000) for (const k of [...reportBits.keys()].slice(0, reportBits.size - 4000)) reportBits.delete(k);
+  }
+  const none = { action: null, pwin: null, conviction: null, tag: null, organic: null };
+  return new Map(rows.map((r) => [r.mint, { status: r.status, grade: r.grade, score: r.score, tier: r.tier, verdict: r.verdict, stage: r.stage, t: r.t, model: r.model, rated: Boolean(r.grade) && ["done", "deep"].includes(r.status),
+    ...(reportBits.get(r.mint)?.bits || none) }]));
 }
 
 // RugCheck's holder figures for a tokens row, or nulls where the reading cannot still be true. An empty
@@ -316,7 +401,7 @@ function row(t, ai) {
   const link = (re) => links.find((l) => re.test(`${l.type} ${l.url}`))?.url || null;
   return {
     mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.pair_created || t.first_seen), dex: t.dex, priceT: t.price_t || t.updated || null,
-    mcap: t.mcap, vol: t.vol_h1, vol5m: t.vol_m5, peak: t.peak_mcap, liq: t.liquidity, chg5: t.chg_m5, chg1h: t.chg_h1, buys: t.buys_h1, sells: t.sells_h1,
+    mcap: t.mcap, vol: t.vol_h1, vol5m: t.vol_m5, peak: t.peak_mcap, liq: t.liquidity > 0 || t.graduated || t.dex !== "pumpfun" ? t.liquidity : curveLiqUsd(t.mcap), chg5: t.chg_m5, chg1h: t.chg_h1, buys: t.buys_h1, sells: t.sells_h1,
     holders: rf.holders, top10: rf.top10, dev: rf.dev, insiders: rf.insiders,
     safety: rf.safety, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
     x: link(/twitter|x\.com/i), web: links.find((l) => l.type === "website")?.url || null, tg: link(/telegram|t\.me/i),
@@ -354,7 +439,7 @@ export function pulseData() {
   // Migrated: everything that bonded in the last 6 hours and is still worth something, plus coins that
   // bonded seconds ago and have no pool listed yet.
   const since = now() - 6 * 60 * MIN;
-  const older = db.prepare(`SELECT * FROM tokens WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'
+  const older = db.prepare(`SELECT * FROM tokens INDEXED BY tokens_bonded_t WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'
     AND COALESCE(pair_created, first_seen) > ? AND mcap >= 5000 ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(since);
   const seconds = db.prepare("SELECT * FROM tokens WHERE graduated = 1 AND pair IS NULL AND status = 'active' AND quarantine IS NULL AND first_seen > ? ORDER BY first_seen DESC LIMIT 20").all(now() - 10 * MIN);
   const all = [...fresh.map((l) => l.mint), ...stretchMints, ...quiet.map((t) => t.mint), ...older.map((t) => t.mint), ...seconds.map((t) => t.mint)];
@@ -362,8 +447,9 @@ export function pulseData() {
   const newPairs = fresh.filter((l) => { const t = tracked.get(l.mint); return !t || now() - (t.pair_created || t.first_seen) < 24 * 60 * MIN; }).map((l) => {
     const t = tracked.get(l.mint);
     const m = meta.get(l.mint) || {};
+    // Before its first trade a launch's market cap is the curve's starting one, from the launch event itself.
     const base = t ? row(t, ai.get(l.mint)) : {
-      mint: l.mint, symbol: l.symbol, name: l.name, image: null, age: now() - l.seen, mcap: null, ai: ai.get(l.mint) || null,
+      mint: l.mint, symbol: l.symbol, name: l.name, image: null, age: now() - l.seen, mcap: l.mcapSol > 0 ? l.mcapSol * feed.solUsd : null, ai: ai.get(l.mint) || null,
     };
     const age = now() - l.seen;
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
@@ -384,7 +470,7 @@ export function pulseData() {
   const migrated = [...seconds, ...older].map((t) => {
     const b = bare(t.mint), r = row({ ...t, graduated: 1 }, ai.get(t.mint)), x = liveStats(t.mint);
     // Bonded seconds ago: its last price on the curve stands in until the new pool is priced, and says so.
-    const out = withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 });
+    const out = withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 }));
     return r.mcap == null && x && out.priceT == null ? { ...out, warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : staleness(out);
   }).filter((r) => r.symbol && (r.mcap || 0) >= 5000).map(rankRow).sort((a, b) => a.age - b.age).slice(0, 80);
   bondedSeen.clear();
@@ -405,13 +491,16 @@ export function pulseData() {
   runningMints = running.map((r) => r.mint);
   // Jupiter prices every migrated row, and any coin another column shows as just bonded (first, they are few).
   migMints = [...new Set([...bondedSeen, ...migrated.map((r) => r.mint)])];
-  for (const list of [newPairs, stretch, migrated, running]) for (let i = 0; i < list.length; i++) list[i] = flag(list[i]);
+  // mv: real trading in the last 5 minutes (coverage.js): the page shows it even if its holders look like a rug.
+  for (const list of [newPairs, stretch, migrated, running]) for (let i = 0; i < list.length; i++) { const r = flag(list[i]); list[i] = r.win || isMoving(r.mint) ? { ...r, mv: true } : r; }
   // Anything moving that no AI has read yet goes to the queue (the queue's own cap and ranking take it from there).
   try { readHot([...running, ...stretch, ...newPairs.filter((r) => r.state !== "faded")]); } catch {}
   const { reading, queued, ratedHour } = researchCounts();
   const perMin = recentLaunches.filter((l) => l.seen > now() - MIN).length;
   watched.clear();
   for (const r of [...newPairs, ...stretch, ...migrated, ...running]) watched.add(r.mint);
+  // Partial holder books among them are read from the chain once (holders.js), busiest first.
+  try { seedWanted([...stretch, ...migrated, ...running, ...newPairs].map((r) => r.mint)); } catch {}
   const pv = providers(), qs = queueStatus();
   // Who is actually doing the reading right now, and why it may differ from what was configured.
   const lanes = { fast: pv.fast.actualName, deep: pv.deep.actualName, fastFallback: pv.fast.fallback ? pv.fast.reason : null, deepFallback: pv.deep.fallback ? pv.deep.reason : null, note: pv.fast.note || pv.deep.note, recovery: pv.recovery };
@@ -473,8 +562,9 @@ async function fillImages() {
 }
 
 export function startPulse() {
+  watchSol();
   const timer = setInterval(enrich, 1000);
-  const fast = setInterval(() => priceMigrated().catch(() => {}), 2000);
+  const fast = setInterval(() => priceMigrated().catch(() => {}), 1000);
   const look = setInterval(() => lookupPictures().catch(() => {}), 6000);
   const who = setInterval(() => lookupNames().catch(() => {}), 2500);
   const pics = setInterval(() => fillImages().catch(() => {}), 20_000);

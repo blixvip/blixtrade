@@ -53,6 +53,9 @@ const STD_START_SOL = 25;
 export const oddCurve = (s) => Boolean(s) && !s.pad && s.mc > 0 && s.mc < STD_START_SOL;
 
 const moving = (w) => (w.trades >= 10 && w.traders >= 6 && w.buySol + w.sellSol >= 0.5) || w.netSol >= 3;
+// Is this coin moving right now (the test above, on its last 5 minutes)? Pulse marks such rows so the page never
+// hides one as a rug: a coin people are really trading is shown whatever its holders look like.
+export const isMoving = (mint) => { const w = windowStats(mint); return Boolean(w && moving(w)); };
 const heat = (w) => w.traders * 2 + w.netSol * 3 + w.trades * 0.3 + Math.max(0, Math.min(w.chg ?? 0, 300)) * 0.1;
 
 // Every coin moving right now, hottest first. `exclude` = mints already shown elsewhere (they are still

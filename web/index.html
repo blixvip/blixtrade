@@ -5,10 +5,75 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#000000">
 <title>Blix</title>
-<link rel="icon" href="/brand/bx.png" type="image/png">
+<script>
+// Every file and read this page asks for is relative ("assets/…", "api/…"). Opened at a deeper address (/app/, with
+// a slash, or /app/anything) those resolved under it and came back as this page instead: a blank screen. The
+// address is put back to its first part before anything is loaded; the page's routes live after the #.
+(function () {
+  try {
+    var parts = location.pathname.split("/").filter(Boolean);
+    var clean = "/" + (parts[0] || "");
+    if (location.pathname !== clean) history.replaceState(history.state, "", clean + location.search + location.hash);
+  } catch (e) {}
+})();
+</script>
+<link rel="icon" href="brand/favicon.png?v=eye" type="image/png" sizes="192x192">
+<link rel="icon" href="favicon.ico?v=eye" sizes="any">
+<link rel="apple-touch-icon" href="brand/apple-touch-icon.png?v=eye">
+<style>
+/* The shell drawn before any script (the #root skeleton below), in the page's own colours (src/styles/app.css):
+   the rail, top bar and bottom bars are on screen with the HTML; React replaces them with the real ones. */
+html,body{height:100%;margin:0;background:oklch(18% 0 0)}
+.sk{display:flex;height:100dvh}
+.sk-rail{width:12rem;flex-shrink:0;box-sizing:border-box;padding:1rem .5rem;border-right:1px solid oklch(26% 0 0);background:oklch(18% 0 0)}
+.sk-rail img{display:block;width:116px;height:auto;margin:0 .625rem;mix-blend-mode:screen}
+.sk-main{display:flex;min-width:0;flex:1;flex-direction:column}
+.sk-top{height:3.25rem;flex-shrink:0;box-sizing:border-box;display:flex;align-items:center;padding:0 .75rem;border-bottom:1px solid oklch(26% 0 0)}
+.sk-top img{display:none;height:1.5rem;width:auto;mix-blend-mode:screen}
+.sk-body{flex:1}
+.sk-foot{height:2rem;flex-shrink:0;box-sizing:border-box;border-top:1px solid oklch(26% 0 0);background:oklch(20% 0 0)}
+.sk-bot{display:none;height:3.25rem;flex-shrink:0;box-sizing:border-box;border-top:1px solid oklch(26% 0 0);background:oklch(20% 0 0)}
+@media (max-width:767.98px){.sk-rail,.sk-foot{display:none}.sk-top img,.sk-bot{display:block}}
+@media (max-width:378.98px){.sk-top img{display:none}}
+</style>
+<script>
+// The reads the page on screen makes, started now, before its scripts have loaded. src/lib/api.ts remembers them
+// per page (the first word of the address; a coin's own address stands as {m}) and picks these answers up.
+(function () {
+  try {
+    performance.mark("blix:html");
+    var at = location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
+    // The open page's own code (vite.config.ts fills the list in at build), fetched beside the entry script.
+    (/*BLIX_PAGE_FILES*/{}[at[0] || ""] || []).forEach(function (f) { var l = document.createElement("link"); l.rel = "modulepreload"; l.crossOrigin = ""; l.href = "/" + f; document.head.appendChild(l); });
+    var list = JSON.parse(localStorage.getItem("blix:warm:" + (at[0] || "home")) || "[]"), warm = (window.__blixWarm = {});
+    // On blixvip.com reads go straight to the server (src/lib/api.ts, the direct line), with the member cookie.
+    var direct = /^(www\.|trade\.)?blixvip\.com$/.test(location.hostname), base = direct ? "https://origin.blixvip.com/" : "";
+    var ask = function (path, init) { init = init || {}; if (direct) init.credentials = "include"; return fetch(base + path, init); };
+    // The connection to the server now (DNS, TLS: ~0.2 s), so the first logos and reads do not each wait for it.
+    if (direct) { var pre = document.createElement("link"); pre.rel = "preconnect"; pre.href = base; document.head.appendChild(pre); }
+    // The logos of the list this page showed last time (src/lib/pics.ts), in one request.
+    var logos = at[1] || !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? [] : JSON.parse(localStorage.getItem("blix:warm:pics:" + (at[0] || "home")) || "[]");
+    // The faces this page drew in its first moments last time (src/lib/thumb.ts noteFace), loading beside the scripts.
+    (JSON.parse(localStorage.getItem("blix:warm:faces:" + (at[0] || "home")) || "[]") || []).slice(0, 40).forEach(function (u) { if (typeof u !== "string" || !/^(https:|\/api\/pic)/.test(u)) return; var l = document.createElement("link"); l.rel = "preload"; l.as = "image"; l.href = u; document.head.appendChild(l); });
+    if (logos.length) window.__blixPics = ask("api/pics?m=" + logos.slice(0, 80).join(",")).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    list.slice(0, 16).forEach(function (raw) {
+      var path = String(raw);
+      if (path === "market" && !matchMedia("(min-width: 768px)").matches) return;
+      if (path.indexOf("{m}") >= 0) { if (!at[1]) return; path = path.split("{m}").join(at[1]); }
+      var t = performance.now();
+      // _k (kept, a query parameter so the direct line needs no OPTIONS trip): the page server's kept answer will do if it is under a minute old (server/apicache.js); the
+      // page asks again as soon as it has drawn.
+      var asked = (warm[path] = ask("api/" + path + (path.indexOf("?") >= 0 ? "&" : "?") + "_k=5000").then(function (r) {
+        if (!r.ok) throw 0;
+        return r.json().then(function (data) { var got = { data: data, age: +r.headers.get("x-blix-age") || 0, t: t }; if (warm[path] === asked) warm[path] = got; return got; });
+      }).catch(function () { if (warm[path] === asked) delete warm[path]; return null; }));
+    });
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div class="sk" aria-hidden="true"><div class="sk-rail"><img src="brand/blix-chrome-sm.webp" alt="" width="300" height="130" fetchpriority="high"></div><div class="sk-main"><div class="sk-top"><img src="brand/blix-chrome-sm.webp" alt="" width="300" height="130"></div><div class="sk-body"></div><div class="sk-bot"></div><div class="sk-foot"></div></div></div></div>
 <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -39,12 +39,16 @@ From a terminal: `npm start` (radar + dashboard, foreground).
 
 ## Files
 
+- `server/journal.js` / `journalfeed.js` — every pump.fun curve and PumpSwap trade heard, kept a day, confirmed, outages recorded and read back
+- `server/candleroll.js` / `candlestore.js` — those trades rolled into 5 s / 1 m / 5 m / 15 m / 1 h candles kept for good (`data/candles.db`, on its own thread); `candles.js` draws the chart from them, Jupiter only for a coin's life before the radar heard it
+- `server/coinindex.js` — every pump.fun coin's name, ticker, creator, launch time, socials, description and picture address, kept for good (`coins` table) from the launch feeds; metadata files read in the background, pictures fetched to `data/img` as soon as a coin exists (30-day retention for coins that traded)
 - `server/engine.js` — discovery, enrichment, safety, scoring, signals, outcomes
 - `server/narratives.js` — themes, heat, emerging words
 - `server/ai.js` — Claude briefs and coin explanations
 - `server/wallets.js` — watchlist, wallet PnL, smart-money discovery
 - `server/solana.js` — RPC pacing and swap parsing
 - `server/fomo.js` — Fomo links, fee-payer learning, on-chain Fomo trade flow, Fomo trader ranking
+- `server/fomochart.js` — the coin page's Fomo chart: Fomo's own bars at Fomo's sizes (`/proxy/getBarsNew` through the kept fomo.family tab, like `fomolists.js`), kept per coin and re-read on Fomo's pace while a chart is open; `/api/fomo/bars/<mint>`
 - `server/notify.js` — Discord and Telegram
 - `bin/supervise.mjs` — restarts the radar if it ever exits
 - `server/server.js` — API, live event stream, brief schedule

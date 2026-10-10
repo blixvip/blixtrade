@@ -5,30 +5,57 @@ import { Segmented } from "@/components/ui/segmented";
 import { COLS, usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useUi } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
+import { EmptyState } from "@/components/page";
 import { Icon } from "@/shell/icons";
 import { Sol } from "@/shell/Rail";
-import { rowHeight, usePrefs, type PulseCol, type PulsePrefs } from "@/lib/prefs";
+import { FILTER_KEYS, filterCount, rowHeight, setPrefs, usePrefs, type PulseCol, type PulsePrefs } from "@/lib/prefs";
 import { PulseRow } from "./PulseRow";
-import { PulseSettings } from "./PulseSettings";
+import { CTL, PulseSettings } from "./PulseSettings";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { hideCoins, showHidden, unhideAll, useHidden } from "@/lib/hidden";
-import { FilterButton, fitsColumn, PulseFilters, useColFilters } from "./pulse/ColumnFilters";
+import { countFilters, FilterButton, fitsColumn, PulseFilters, resetColumn, useColFilters } from "./pulse/ColumnFilters";
 
 type Show = "all" | "noslop" | "rated" | "buy";
-// The columns on this page. "Running now" is left out: New Pairs, Final Stretch and Migrated are the page.
+// The columns on this page. Running Now is gone for good (the user's call, 2026-10-09: never add it back, not as a
+// column and not as a tab): New Pairs, Final Stretch and Migrated remain.
 const TITLES: Record<string, string> = { new: "New Pairs", stretch: "Final Stretch", migrated: "Migrated" };
-const SHOWN = COLS.filter(([col]) => col !== "running");
+const SHOWN = COLS.filter(([c]) => c !== "running");
 const SHOW: [Show, string][] = [["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["buy", "Buy calls"]];
 
 // A coin that is already a rug, or cannot end any other way: its pool was emptied, the dev sold everything before it went anywhere,
 // a handful of wallets hold nearly all of it, or the AI failed it outright. These never show on the Pulse,
-// in any display mode. Searching a ticker or contract still finds one.
+// in any display mode. Searching a ticker or contract still finds one. A coin people are really trading right now
+// (mv, from the server) is shown anyway, whatever its holders look like: only an emptied pool hides it.
 export const isRug = (t: Coin) => {
+  if (t.mv) return t.warn?.kind === "emptied";
   const H = t.hl || {}, top10 = H.t10 ?? t.top10 ?? 0, dev = H.dev ?? t.dev ?? 0, holders = H.h ?? t.holders ?? 0, old = Date.now() - t.born > 90_000;
   // A dev selling out kills a coin that has not gone anywhere; one that kept running after it is a community coin, not a rug.
   const devDumped = (H.ds === "all" || H.ds === 2) && !t.graduated && (t.mcap ?? 0) < 10_000;
   return t.warn?.kind === "emptied" || devDumped || (holders >= 15 && top10 >= 80) || (old && dev >= 50) || (H.bd ?? 0) >= 50 || (H.sn ?? 0) >= 50 || t.ai?.grade === "F";
+};
+
+// A coin whose chart is dead is never shown, in any list or search: a new pair nobody has traded for minutes
+// (the server's "faded"), or one still under $6K of market cap 45 minutes after launch. It comes back by itself if
+// it starts trading again (the server makes it "watching" once it trades).
+export const isDeadCoin = (t: Coin) => t.state === "faded" || (Date.now() - t.born > 45 * 60_000 && t.mcap != null && t.mcap > 0 && t.mcap < 6000);
+
+// Rug guard (Pulse settings): the visitor's simple anti-rug switches. A figure not known yet passes, so a coin a
+// second old is not hidden for what nobody has measured.
+export const rugGuard = (t: Coin, p: PulsePrefs) => {
+  if (!p.rug) return false;
+  const c = p.rugChecks, H = t.hl || {}, age = Date.now() - t.born, holders = H.h ?? t.holders;
+  const top10 = H.t10 ?? t.top10, dev = H.dev ?? t.dev;
+  // After bonding a dev selling is common for a community coin (isRug above): only coins still on the curve.
+  if (c.devSold && H.ds && !t.graduated) return true;
+  if (c.top10 && top10 != null && (holders ?? 0) >= 10 && top10 > 30) return true;
+  if (c.dev && dev != null && age > 60_000 && dev > 10) return true;
+  if (c.snipers && (H.sn ?? 0) > 25) return true;
+  if (c.bundle && (H.bd ?? 0) > 25) return true;
+  if (c.serial && (t.devCount ?? 0) >= 5) return true;
+  if (c.dead && holders != null && age > 180_000 && holders < 15) return true;
+  if (c.socials && !(t.x || t.web || t.tg)) return true;
+  return false;
 };
 
 // The visitor's own filters (Pulse settings). A figure that is not known yet passes a "most" limit and fails a "least" one.
@@ -46,8 +73,9 @@ const fits = (t: Coin, f: PulsePrefs) => {
 };
 
 const passes = (t: Coin, show: Show, q: string, f: PulsePrefs): boolean => {
+  if (isDeadCoin(t)) return false;
   if (q) return `${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q) && (show === "all" || show === "noslop" || passes(t, show, "", f));
-  if (isRug(t) || !fits(t, f)) return false;
+  if (isRug(t) || rugGuard(t, f) || !fits(t, f)) return false;
   if (show === "noslop") return !(t.tri?.label === "slop" && !t.ai);
   if (show === "rated") return Boolean(t.ai?.rated);
   if (show === "buy") return t.ai?.action === "buy";
@@ -60,7 +88,7 @@ const NONE: string[] = [];
 interface Preset { p: number; sizes: number[] }
 const PRESET0: Preset = { p: 0, sizes: [0.25, 0.5, 1] };
 
-function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: string }) {
+function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; show: Show; setShow: (v: Show) => void; globalQ: string; phoneHidden?: boolean }) {
   const title = TITLES[col], prefs = usePrefs(), rowH = rowHeight(prefs);
   const [own, setOwn] = useState("");
   const [preset, setPresetState] = useState<Preset>(() => store.get<Preset>(`pulse:buy:${col}`, PRESET0));
@@ -100,14 +128,14 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
   const v = useVirtualizer({ count: list.length, getScrollElement: () => scroller.current, estimateSize: () => rowH, overscan: 6, getItemKey: (i) => list[i] });
 
   return (
-    <section aria-label={title} className="flex min-h-0 min-w-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-rule px-3.5">
+    <section aria-label={title} className={cn("@container flex min-h-0 min-w-0 snap-start flex-col", phoneHidden && "max-md:hidden")}>
+      <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-rule px-3.5 @max-md:h-auto @max-md:min-h-12 @max-md:flex-wrap @max-md:gap-2 @max-md:py-2">
         <h2 className="text-xl font-semibold whitespace-nowrap text-ink">{title}</h2>
         <label className="ml-auto flex h-8 w-52 min-w-0 shrink items-center max-[1800px]:hidden rounded-full border border-rule-2 bg-paper px-3 focus-within:border-accent-dim">
           <input value={own} onChange={(e) => setOwn(e.target.value)} placeholder="Search by ticker or name" aria-label={`Search ${title}`}
             className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
         </label>
-        <div className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-rule-2 bg-paper pr-1 pl-2.5 max-[1800px]:ml-auto">
+        <div className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-rule-2 bg-paper pr-1 pl-2.5 max-[1800px]:ml-auto @max-md:order-last @max-md:ml-0! @max-md:gap-1.5">
           <label className="flex items-center gap-1 text-ink-2" title="Quick-buy size in SOL for this column">
             <Icon.bolt className="size-3.5 fill-current" />
             <input value={String(preset.sizes[preset.p] ?? "")} inputMode="decimal" aria-label={`Quick-buy size for ${title}, in SOL`}
@@ -119,14 +147,14 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
           <span className="flex" role="radiogroup" aria-label="Quick-buy preset">
             {[0, 1, 2].map((i) => (
               <button key={i} role="radio" aria-checked={preset.p === i} onClick={() => setPreset({ ...preset, p: i })}
-                className={cn("h-6 rounded-full px-2 text-sm font-semibold transition-colors duration-100", preset.p === i ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2")}>P{i + 1}</button>
+                className={cn("h-6 rounded-full px-2 text-sm font-semibold transition-colors duration-100 @max-md:px-1.5", preset.p === i ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2")}>P{i + 1}</button>
             ))}
           </span>
         </div>
         {!showing && (
           <Tip tip={`Hide every coin in ${title} now; new ones keep coming in`}>
             <button onClick={hideAll} aria-label={`Hide all coins in ${title}`}
-              className="grid size-8 shrink-0 place-items-center rounded-control border border-rule-2 text-ink-2 transition-colors duration-100 hover:border-muted hover:text-ink">
+              className="@max-md:ml-auto grid size-8 shrink-0 place-items-center rounded-control border border-rule-2 text-ink-2 transition-colors duration-100 hover:border-muted hover:text-ink">
               <Icon.eyeOff className="size-4.5" />
             </button>
           </Tip>
@@ -135,22 +163,25 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
       </header>
       <div className="relative flex min-h-0 flex-1 flex-col">
       {paused && (
-        <button onClick={resume} className={cn("absolute top-2 left-1/2 z-10 flex h-7 -translate-x-1/2 items-center gap-1.5 rounded-full border border-rule-2 bg-paper-4/95 px-3 text-sm font-medium text-ink-2 shadow-raised backdrop-blur transition-opacity duration-150 hover:text-ink",
-          waiting ? "opacity-100" : "pointer-events-none opacity-0")}>
-          <i className="size-1.5 rounded-full bg-warn" />Paused{waiting ? ` · ${waiting} new` : ""}
+        <button onClick={resume} aria-label={`Show ${waiting} new coin${waiting === 1 ? "" : "s"}`}
+          className={cn("absolute top-2.5 left-1/2 z-10 flex h-6.5 -translate-x-1/2 items-center gap-1 rounded-full bg-accent pr-2.5 pl-2 text-sm font-semibold text-accent-ink tabular-nums shadow-raised transition-[opacity,translate,scale] duration-200 ease-out hover:scale-[1.04] active:scale-[0.97]",
+            waiting ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-1.5 opacity-0")}>
+          <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4" /></svg>
+          {waiting} new
         </button>
       )}
       <div ref={scroller} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 8)}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-width:none]">
-        {!loaded ? <p className="p-4 text-md text-muted">Loading…</p>
-          : !list.length ? <p className="p-4 text-md text-muted">{showing ? "No hidden coins in this column." : q || show !== "all" || Object.keys(cf).length ? "Nothing matches the filter." : "Nothing here right now."}</p>
+        {!loaded ? <PulseSkeleton rowH={rowH} />
+          : !list.length ? <ColumnEmpty title={title} showing={showing} q={q} own={own} clearOwn={() => setOwn("")} colFilters={countFilters(cf)}
+              resetCol={() => resetColumn(col as "new")} show={show} setShow={setShow} prefs={prefs} />
           : (
             <div className="relative" style={{ height: v.getTotalSize() }}>
               {v.getVirtualItems().map((it) => {
                 const m = list[it.index];
                 return (
-                  <div key={it.key} className={cn("absolute inset-x-0 top-0 transition-transform duration-300 ease-out will-change-transform", fresh.current.has(m) && "animate-row-in")}
+                  <div key={it.key} className={cn("absolute inset-x-0 top-0 transition-transform duration-300 ease-out", fresh.current.has(m) && "animate-row-in")}
                     style={{ height: rowH, transform: `translateY(${it.start}px)` }}>
                     <PulseRow mint={m} col={col} sol={+sol || 0.25} />
                   </div>
@@ -164,20 +195,52 @@ function Column({ col, show, globalQ }: { col: ColKey; show: Show; globalQ: stri
   );
 }
 
+// An empty column says exactly what emptied it, most specific first, with the one click that brings coins back.
+// "Buy calls" or "AI rated" with nothing called yet is not a filter mistake, so it does not read like one.
+function ColumnEmpty({ title, showing, q, own, clearOwn, colFilters, resetCol, show, setShow, prefs }: {
+  title: string; showing: boolean; q: string; own: string; clearOwn: () => void; colFilters: number; resetCol: () => void;
+  show: Show; setShow: (v: Show) => void; prefs: PulsePrefs;
+}) {
+  const showAll = { label: "Show all coins", onClick: () => setShow("all") };
+  if (showing) return <EmptyState brand icon="eye" title="No hidden coins here" hint="Coins you hide from this column show up here, so you can bring them back." />;
+  if (q) return <EmptyState brand icon="search" title="No matches" hint={`Nothing in ${title} matches "${q}".`} action={own ? { label: "Clear search", onClick: clearOwn } : null} />;
+  if (colFilters) return <EmptyState brand icon="filter" title="No coins match this column's filters" hint="Loosen them, or reset to see every coin again." action={{ label: "Reset filters", onClick: resetCol }} />;
+  if (show === "buy") return <EmptyState brand icon="bolt" title="No buy calls yet" hint={`The AI hasn't called a buy in ${title}. Calls land here the moment it makes one.`} action={showAll} />;
+  if (show === "rated") return <EmptyState brand icon="spark" title="No AI-rated coins yet" hint={`Coins in ${title} show here once the AI has rated them.`} action={showAll} />;
+  if (show === "noslop") return <EmptyState brand icon="filter" title="Only slop right now" hint={`Every coin in ${title} was flagged as slop. Better ones show up as they launch.`} action={showAll} />;
+  if (filterCount(prefs)) return <EmptyState brand icon="shield" title="Your filters hide every coin" hint="Rug guard or your Pulse settings filter out everything in this column."
+    action={{ label: "Clear filters", onClick: () => setPrefs({ ...Object.fromEntries(FILTER_KEYS.map((k) => [k, null])), socials: false, rug: false }) }} />;
+  return <EmptyState brand icon="inbox" title="Nothing here right now" hint="Coins appear the moment they qualify." />;
+}
+
 // Axiom's eye button: how many coins are hidden; pressing it shows just those (and Unhide all).
 function HiddenButton() {
   const { mints, showing } = useHidden();
   return (
     <span className="flex items-center gap-2">
-      {showing && mints.length > 0 && <button onClick={() => { if (confirm(`Unhide all ${mints.length} hidden coins?`)) { unhideAll(); showHidden(false); toast("All coins unhidden"); } }} className="h-8 rounded-full border border-rule-2 px-3 text-md text-ink-2 hover:border-muted hover:text-ink">Unhide all</button>}
+      {showing && mints.length > 0 && <button onClick={() => { if (confirm(`Unhide all ${mints.length} hidden coins?`)) { unhideAll(); showHidden(false); toast("All coins unhidden"); } }} className={cn(CTL, "px-3 text-ink-2")}>Unhide all</button>}
       <Tip tip={showing ? "Back to the live columns" : mints.length ? `Show the ${mints.length} hidden coin${mints.length === 1 ? "" : "s"}` : "No hidden coins yet: hover a coin and press its eye"}>
         <button onClick={() => showHidden(!showing)} aria-pressed={showing} aria-label="Hidden coins"
-          className={cn("relative grid size-8 place-items-center rounded-control border transition-colors duration-100", showing ? "border-ink/50 bg-paper-4 text-ink" : "border-rule-2 text-ink-2 hover:border-muted hover:text-ink")}>
-          <Icon.eyeOff className="size-4.5" />
-          {mints.length > 0 && <span className="num absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-paper-5 px-1 text-2xs font-bold text-ink">{mints.length > 99 ? "99+" : mints.length}</span>}
+          className={cn(CTL, "gap-1.5 px-2.5", showing ? "bg-paper-5 text-ink ring-rule-2" : "text-ink-2")}>
+          <Icon.eyeOff className="size-4" />
+          {mints.length > 0 && <span className={cn("num text-xs font-semibold tabular-nums", showing ? "text-ink" : "text-muted")}>{mints.length > 99 ? "99+" : mints.length}</span>}
         </button>
       </Tip>
     </span>
+  );
+}
+
+// Rug guard on or off in one click (its checks are in Pulse settings).
+function RugButton() {
+  const on = usePrefs((p) => p.rug);
+  return (
+    <Tip tip={on ? "Rug guard is on: likely rugs are hidden. Its checks are in Settings." : "Hide likely rugs: dev sold, a few wallets or snipers holding most of it, serial launchers, dead coins"}>
+      <button role="switch" aria-checked={on} onClick={() => { setPrefs({ rug: !on }); toast(on ? "Rug guard off" : "Rug guard on: likely rugs hidden"); }}
+        className={cn(CTL, "gap-1.5 px-3", on ? "bg-up/10 text-up ring-up/35 hover:bg-up/15 hover:text-up" : "text-ink-2")}>
+        <Icon.shield className="size-4" /><span className="max-md:sr-only">Rug guard</span>
+        <i aria-hidden className={cn("size-1.5 rounded-full transition-colors", on ? "bg-up shadow-[0_0_6px_var(--color-up)]" : "bg-rule-2")} />
+      </button>
+    </Tip>
   );
 }
 
@@ -186,22 +249,60 @@ export function Pulse() {
   const [show, setShowState] = useState<Show>(() => store.get<Show>("pulse:show", "noslop"));
   const setShow = (v: Show) => { store.set("pulse:show", v); setShowState(v); };
   const prefs = usePrefs(), rowH = rowHeight(prefs), open = SHOWN.filter(([col]) => prefs.cols[col as PulseCol]);
+  // A phone shows one column at a time, picked here: stacked, each column's own scroll caught every swipe and the
+  // columns under New Pairs could not be reached.
+  const [phoneCol, setPhoneColState] = useState<ColKey>(() => store.get<ColKey>("pulse:phone", "new"));
+  const setPhoneCol = (c: ColKey) => { store.set("pulse:phone", c); setPhoneColState(c); };
+  const pick = open.some(([c]) => c === phoneCol) ? phoneCol : open[0]?.[0];
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 p-3 max-md:h-auto">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl leading-none font-bold tracking-tight text-ink">Pulse</h1>
         <span className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper px-3 text-md font-medium text-ink" title="Blix is Solana only"><Sol className="size-3.5" />Solana</span>
-        <div className="ml-auto flex items-center gap-2.5">
+        {/* One row: on a narrow phone (320 px) the Display choices scroll sideways rather than push the row off screen. */}
+        <div className="ml-auto flex max-w-full min-w-0 items-center gap-2">
           <HiddenButton />
-          <span className="text-sm text-muted max-md:hidden">Display</span>
-          <Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" />
+          <RugButton />
+          <i aria-hidden className="mx-1 h-5 w-px shrink-0 bg-rule-2 max-md:hidden" />
+          <div className="min-w-0 overflow-x-auto [scrollbar-width:none] max-[419px]:[&_button]:px-2"><Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" /></div>
           <PulseSettings />
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-[repeat(var(--cols),minmax(0,1fr))] divide-x divide-rule overflow-hidden rounded-card border border-rule bg-paper-2 max-md:grid-cols-[minmax(0,1fr)] max-md:divide-x-0 max-md:[&>section]:h-[75vh]" style={{ "--cols": open.length } as CSSProperties}>
-        {open.map(([col]) => <Column key={`${col}:${rowH}`} col={col} show={show} globalQ={globalQ} />)}
+      {open.length > 1 && <div className="overflow-x-auto [scrollbar-width:none] md:hidden"><Segmented value={pick} options={open.map(([c]) => [c, TITLES[c]] as [ColKey, string])} onChange={setPhoneCol} label="Which column" /></div>}
+      <div className="grid min-h-0 flex-1 grid-cols-[repeat(var(--cols),minmax(22.5rem,1fr))] snap-x snap-mandatory divide-x divide-rule overflow-x-auto overflow-y-hidden rounded-card border border-rule bg-paper-2 max-md:grid-cols-[minmax(0,1fr)] max-md:divide-x-0 max-md:[&>section]:h-[75vh]" style={{ "--cols": open.length } as CSSProperties}>
+        {open.map(([col]) => <Column key={`${col}:${rowH}`} col={col} show={show} setShow={setShow} globalQ={globalQ} phoneHidden={col !== pick} />)}
       </div>
       <PulseFilters />
+    </div>
+  );
+}
+
+// A column still loading: rows shaped like the coins about to arrive (picture, name and links, market cap, buy
+// button), a light passing over them, fading out down the column. Read as "coins are coming", not "something broke".
+const shim = "animate-shimmer rounded bg-[linear-gradient(90deg,var(--color-paper-3)_0%,var(--color-paper-4)_45%,var(--color-paper-5)_50%,var(--color-paper-4)_55%,var(--color-paper-3)_100%)] bg-[length:250%_100%]";
+function PulseSkeleton({ rowH }: { rowH: number }) {
+  const pic = Math.max(36, Math.min(76, rowH - 40));
+  return (
+    <div role="status" aria-label="Loading coins" className="flex flex-col [mask-image:linear-gradient(to_bottom,black_55%,transparent)]">
+      {Array.from({ length: 10 }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 border-b border-rule/60 px-3.5" style={{ height: rowH }}>
+          <span className={cn(shim, "shrink-0 rounded-lg")} style={{ width: pic, height: pic, animationDelay: `${i * 90}ms` }} />
+          <span className="flex min-w-0 flex-1 flex-col gap-2.5">
+            <span className={cn(shim, "h-3.5")} style={{ width: `${38 + ((i * 23) % 30)}%`, animationDelay: `${i * 90 + 40}ms` }} />
+            <span className="flex gap-1.5">
+              <span className={cn(shim, "h-3 w-8")} style={{ animationDelay: `${i * 90 + 70}ms` }} />
+              <span className={cn(shim, "size-3 rounded-full")} style={{ animationDelay: `${i * 90 + 90}ms` }} />
+              <span className={cn(shim, "size-3 rounded-full")} style={{ animationDelay: `${i * 90 + 110}ms` }} />
+              <span className={cn(shim, "size-3 rounded-full")} style={{ animationDelay: `${i * 90 + 130}ms` }} />
+            </span>
+            <span className={cn(shim, "h-2.5")} style={{ width: `${55 + ((i * 17) % 30)}%`, animationDelay: `${i * 90 + 150}ms` }} />
+          </span>
+          <span className="flex shrink-0 flex-col items-end gap-2.5">
+            <span className={cn(shim, "h-4 w-16")} style={{ animationDelay: `${i * 90 + 60}ms` }} />
+            <span className={cn(shim, "h-7 w-[86px] rounded-full")} style={{ animationDelay: `${i * 90 + 120}ms` }} />
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

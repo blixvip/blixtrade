@@ -17,7 +17,7 @@ let built = null;   // { body, csp } per isolate: the page's inline script is al
 async function page() {
   if (built) return built;
   const hashes = await Promise.all([...PAGE.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
-    .map(async ([, s]) => `'sha256-${b64(await crypto.subtle.digest("SHA-256", enc.encode(s)))}'`));
+    .map(async ([, s]) => `'sha256-${b64(await crypto.subtle.digest("SHA-256", enc.encode(s.replace(/\r\n?/g, "\n"))))}'`));
   built = {
     body: PAGE,
     csp: `default-src 'none'; script-src ${hashes.join(" ")} https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
@@ -38,11 +38,26 @@ function pack(rows) {
   return { dict, ev };
 }
 
-async function data(env, url) {
+// Each member's paper desk and hosted wallet (real SOL balance) from the server (server/adminmembers.js), asked
+// as the owner: signed like any owner request through the Worker (x-blix-member*, MEMBER_KEY) plus the edge key.
+async function vmMembers(env, owner) {
+  try {
+    const origin = await env.REG.get("origin", { cacheTtl: 60 });
+    if (!origin || !owner || !env.MEMBER_KEY) return null;
+    const t = String(Date.now());
+    const key = await crypto.subtle.importKey("raw", enc.encode(env.MEMBER_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(`${owner}.${t}.owner`)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const r = await fetch(new URL("/api/admin/members", origin), { headers: { "x-blix-member": owner, "x-blix-member-t": t, "x-blix-owner": "1", "x-blix-member-sig": sig, ...(env.EDGE_KEY ? { "x-blix-edge": env.EDGE_KEY } : {}), "x-forwarded-host": "blixvip.com", "x-forwarded-proto": "https", accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+
+async function data(env, url, owner) {
   const t = Date.now();
   const fresh = url.searchParams.has("fresh");
   const kept = fresh ? null : await caches.default.match(keep(url, "data")).catch(() => null);
   if (kept) { const o = await kept.json(); o.pending = await heldSignups(env); return json(o); }
+  const vm = vmMembers(env, owner);
   // Sign-ups held while D1 was down go in first, so they are counted (the cron does it too, every 10 min).
   if ((await heldSignups(env)).length) await drainHeld(env).catch(() => 0);
   try {
@@ -51,7 +66,7 @@ async function data(env, url) {
       env.DB.prepare("SELECT email, google_sub, name, picture, created, last_seen, logins, country, city, referrer, visitor, status FROM accounts ORDER BY created DESC LIMIT 5000"),
     ])).map((r) => r.results);
     for (const a of accounts) { a.recovered = String(a.google_sub || "").startsWith("session:"); delete a.google_sub; }
-    const o = { now: t, from: t - 30 * DAY, owners: owners(env), accounts, ...pack(events), health: { db: true } };
+    const o = { now: t, from: t - 30 * DAY, owners: owners(env), accounts, ...pack(events), health: { db: true }, vm: await vm };
     const body = JSON.stringify(o);
     await caches.default.put(keep(url, "data"), new Response(body, { headers: { "content-type": "application/json", "cache-control": "max-age=60" } })).catch(() => {});
     await caches.default.put(keep(url, "lastgood"), new Response(body, { headers: { "content-type": "application/json", "cache-control": "max-age=172800" } })).catch(() => {});
@@ -61,7 +76,7 @@ async function data(env, url) {
     // D1 down: the last good copy (marked stale), and the sign-ups held in KV meanwhile.
     const last = await caches.default.match(keep(url, "lastgood")).then((r) => r && r.json()).catch(() => null);
     const health = { db: false, error: String(e && e.message || e).slice(0, 200) };
-    return json({ ...(last || { now: t, from: t - 30 * DAY, owners: owners(env), accounts: [], dict: [], ev: [] }), stale: Boolean(last), health, pending: await heldSignups(env, true), owners: owners(env) });
+    return json({ ...(last || { now: t, from: t - 30 * DAY, owners: owners(env), accounts: [], dict: [], ev: [] }), stale: Boolean(last), health, pending: await heldSignups(env, true), owners: owners(env), vm: (await vm) || last?.vm || null });
   }
 }
 
@@ -79,8 +94,9 @@ async function pic(url) {
 }
 
 // Called by site/waitlist.js admin() once isAdmin passed; null for paths that are not the dashboard's.
-export async function dashboard(req, env, url, p) {
-  if (p === "/__admin/data") return data(env, url);
+// `owner`: the signed-in owner's email (isAdmin checked it).
+export async function dashboard(req, env, url, p, owner) {
+  if (p === "/__admin/data") return data(env, url, owner);
   if (p === "/__admin/pic") return pic(url);
   if (p !== "/__admin") return null;
   const { body, csp } = await page();

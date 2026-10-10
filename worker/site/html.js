@@ -2,9 +2,11 @@
 // the stylesheet and small builders. Pages are plain server-rendered HTML so search engines and AI
 // crawlers read all of it without running a script. The look is the app's (public/tokens.css, design.md):
 // the colour tokens are copied into CSS below, so change them there when the app's identity changes.
-export const ORIGIN = "https://trade.blixvip.com";
+// The docs live at the root of blixvip.com (index.js routes these exact paths here); trade.blixvip.com and
+// blixvip.com/trade/<page> send them on with a 301 so all the ranking goes to one address.
+export const ORIGIN = "https://blixvip.com";
 export const REPO = "https://github.com/blixvip/blixtrade";
-export const UPDATED = "2026-10-04"; // when the facts on these pages were last checked
+export const UPDATED = "2026-10-08"; // when the facts on these pages were last checked
 export const UPDATED_TEXT = "October 4, 2026";
 
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -114,8 +116,8 @@ export const SCRIPT = `document.querySelectorAll(".code").forEach(function(b){va
 export function layout(p) {
   const url = ORIGIN + p.path;
   const graph = [
-    { "@type": "Organization", "@id": `${ORIGIN}/#org`, name: "Blix", url: `${ORIGIN}/api`, logo: `${ORIGIN}/_pub/icon-512.png`, sameAs: [REPO, "https://github.com/blixvip", "https://blixvip.com"] },
-    { "@type": "WebSite", "@id": `${ORIGIN}/#site`, url: `${ORIGIN}/api`, name: "Blix", publisher: { "@id": `${ORIGIN}/#org` } },
+    { "@type": "Organization", "@id": `${ORIGIN}/#org`, name: "Blix", url: `${ORIGIN}/`, logo: `${ORIGIN}/_pub/icon-512.png`, sameAs: [REPO, "https://github.com/blixvip", "https://blixvip.com"] },
+    { "@type": "WebSite", "@id": `${ORIGIN}/#site`, url: `${ORIGIN}/`, name: "BLIX", alternateName: ["Blix", "Blix VIP", "blixvip"], publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "TechArticle", "@id": `${url}#article`, headline: p.h1, description: p.description, url, mainEntityOfPage: url, image: `${ORIGIN}/_pub/${p.og}`,
       datePublished: UPDATED, dateModified: UPDATED, inLanguage: "en", author: { "@id": `${ORIGIN}/#org` }, publisher: { "@id": `${ORIGIN}/#org` }, isPartOf: { "@id": `${ORIGIN}/#site` },
       about: { "@id": `${ORIGIN}/#software` } },
@@ -125,8 +127,8 @@ export function layout(p) {
       url: `${ORIGIN}/api`, downloadUrl: REPO, codeRepository: REPO, license: "https://opensource.org/licenses/MIT", isAccessibleForFree: true,
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" }, publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "BreadcrumbList", itemListElement: [
-      { "@type": "ListItem", position: 1, name: "Blix", item: `${ORIGIN}/api` },
-      ...(p.path === "/api" ? [] : [{ "@type": "ListItem", position: 2, name: p.crumb, item: url }]) ] },
+      { "@type": "ListItem", position: 1, name: "BLIX", item: `${ORIGIN}/` },
+      { "@type": "ListItem", position: 2, name: p.crumb, item: url } ] },
   ];
   if (p.faq?.length) graph.push({ "@type": "FAQPage", "@id": `${url}#faq`, mainEntity: p.faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: plain(a) } })) });
   const ld = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
@@ -158,24 +160,23 @@ export function layout(p) {
 <meta name="twitter:title" content="${esc(p.ogTitle || p.title)}">
 <meta name="twitter:description" content="${esc(p.description)}">
 <meta name="twitter:image" content="${ORIGIN}/_pub/${p.og}">
-<link rel="icon" href="/_pub/icon.svg" type="image/svg+xml">
-<link rel="icon" href="/_pub/icon-96.png" sizes="96x96" type="image/png">
-<link rel="apple-touch-icon" href="/_pub/icon-180.png">
+<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml">
+<link rel="icon" href="/_pub/icon-96.png?v=eye" sizes="96x96" type="image/png">
+<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye">
 <link rel="alternate" type="text/plain" title="LLM summary" href="/llms.txt">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preload" href="/_pub/fonts/space-grotesk-600.woff2" as="font" type="font/woff2" crossorigin>
+<style>@font-face{font-family:'Space Grotesk';font-style:normal;font-weight:600;font-display:swap;src:url(/_pub/fonts/space-grotesk-600.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>
 <style>${CSS.replace(/\n/g, "")}</style>
 <script type="application/ld+json">${ld}</script>
 </head>
 <body>
 <header class="top"><div class="top-in">
-<a class="brand" href="/api" aria-label="Blix home">${ICON}<span>Blix</span></a>
+<a class="brand" href="/" aria-label="BLIX home">${ICON}<span>Blix</span></a>
 <nav class="nav" aria-label="Docs">${nav}</nav>
 <a class="gh" href="${REPO}" rel="noopener">${GH}<span>GitHub</span></a>
 </div></header>
 <main>
-<nav class="crumbs" aria-label="Breadcrumb"><a href="/api">Blix</a>${p.path === "/api" ? "<span>/</span>API" : `<span>/</span>${esc(p.crumb)}`}</nav>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">BLIX</a>${p.path === "/api" ? "<span>/</span>API" : `<span>/</span>${esc(p.crumb)}`}</nav>
 <article>
 <p class="eyebrow">${p.eyebrow}</p>
 <h1>${p.h1}</h1>
@@ -199,6 +200,9 @@ ${related ? `<h2 id="related">Related</h2><div class="related">${related}</div>`
 export const PAGE_CARDS = {
   "/api": ["Blix API", "52 endpoints and a live stream: launches, trades, holders, candles, quotes, AI reads.", "/api"],
   "/mcp": ["Blix MCP server", "20 tools that give Claude, Cursor or Codex live Solana memecoin data.", "/mcp"],
+  "/pump-fun-tracker": ["Live pump.fun tracker", "New pairs, final stretch and migrations live, with holders, snipers and AI ratings.", "/pump-fun-tracker"],
+  "/solana-memecoin-screener": ["Memecoin screener with AI", "Trending and surging coins, live AI ratings, daily picks and narratives.", "/solana-memecoin-screener"],
+  "/memecoin-paper-trading": ["Memecoin paper trading", "Real prices and costs, take profit and stops, nothing on chain.", "/memecoin-paper-trading"],
   "/pump-fun-api": ["Free pump.fun API", "Launches, trades, bonding progress, migrations, snipers and bundles. No key.", "/pump-fun-api"],
   "/gmgn-api": ["GMGN API", "How GMGN's key works, what it covers, and a free alternative.", "/gmgn-api"],
   "/axiom-api": ["Axiom Trade API", "Axiom has no public API. Axiom-style Pulse data without one.", "/axiom-api"],

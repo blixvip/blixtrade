@@ -9,11 +9,13 @@ import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post } from "@/lib/api";
 import { usePoll } from "@/lib/coin";
-import { ageStr, compact, pct, shortAddr, tone } from "@/lib/format";
+import { ageStr, compact, pct, safeHref, shortAddr, tone } from "@/lib/format";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
+import { LiveMc } from "@/components/Live";
+import { thumb } from "@/lib/thumb";
 
 type User = { handle: string; name: string; avatar: string | null };
 type Media = { type: string; url: string; video: string | null };
@@ -50,7 +52,7 @@ function MediaGrid({ media }: { media?: Media[] }) {
     <div className={cn("mt-2 grid gap-1 overflow-hidden rounded-card border border-rule", media.length > 1 && "grid-cols-2")}>
       {media.slice(0, 4).map((m) => m.video
         ? <video key={m.url} src={m.video} poster={m.url} controls muted preload="none" className="max-h-80 w-full bg-black object-contain" />
-        : <a key={m.url} href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="" loading="lazy" className="max-h-80 w-full object-cover" /></a>)}
+        : <a key={m.url} href={safeHref(m.url) || undefined} target="_blank" rel="noopener noreferrer"><img src={thumb(m.url, 640, { fit: "inside" })} alt="" loading="lazy" decoding="async" className="max-h-80 w-full object-cover" /></a>)}
     </div>
   );
 }
@@ -69,9 +71,9 @@ function CoinChip({ mint, info, live }: { mint: string; info?: { symbol: string 
   return (
     <span className="inline-flex h-8 items-center gap-2 rounded-full border border-rule-2 bg-paper pr-1 pl-1">
       <a href={`#/coin/${mint}`} className="flex items-center gap-1.5 pl-1 hover:text-ink">
-        <img src={`/img/${mint}`} alt="" className="size-5 rounded-full bg-paper-4 object-cover" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+        <img src={`img/${mint}`} alt="" loading="lazy" decoding="async" className="size-5 rounded-full bg-paper-4 object-cover" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
         <b className="text-sm font-semibold">${symbol}</b>
-        <span className="num text-sm text-ink-2">{compact(live?.mc ?? info?.mcap ?? null)}</span>
+        <LiveMc mint={mint} value={live?.mc ?? info?.mcap ?? null} className="text-sm font-normal text-ink-2" />
         {live?.chg != null && <span className={cn("num text-xs", tone(live.chg))}>{pct(live.chg)}</span>}
       </a>
       <button onClick={buy} disabled={busy} title={paper ? "Paper money" : "Real SOL"}
@@ -91,7 +93,7 @@ function PostCard({ p, coins, live }: { p: XPost; coins: Resp["coins"]; live: Re
       {shown && <p className="mb-1.5 flex items-center gap-1.5 text-xs text-muted"><Icon.refresh className="size-3" />{p.name} reposted</p>}
       <div className="flex gap-3">
         <a href={`https://x.com/${author.handle}`} target="_blank" rel="noopener noreferrer" className="shrink-0">
-          {author.avatar ? <img src={author.avatar} alt="" className="size-10 rounded-full bg-paper-4" /> : <span className="grid size-10 place-items-center rounded-full bg-paper-4 text-sm">{author.handle[0]}</span>}
+          {author.avatar ? <img src={thumb(author.avatar, 40)} alt="" loading="lazy" decoding="async" className="size-10 rounded-full bg-paper-4" /> : <span className="grid size-10 place-items-center rounded-full bg-paper-4 text-sm">{author.handle[0]}</span>}
         </a>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5 text-sm">
@@ -106,7 +108,7 @@ function PostCard({ p, coins, live }: { p: XPost; coins: Resp["coins"]; live: Re
           {p.data.quote && (
             <div className="mt-2 rounded-card border border-rule p-3">
               <p className="mb-1 flex items-center gap-1.5 text-sm">
-                {p.data.quote.user?.avatar && <img src={p.data.quote.user.avatar} alt="" className="size-4 rounded-full" />}
+                {p.data.quote.user?.avatar && <img src={thumb(p.data.quote.user.avatar, 16)} alt="" loading="lazy" decoding="async" className="size-4 rounded-full" />}
                 <b className="font-semibold">{p.data.quote.user?.name}</b><span className="text-muted">@{p.data.quote.user?.handle}</span>
               </p>
               <Rich text={p.data.quote.text} mints={p.mints} />
@@ -164,7 +166,9 @@ export function XTracker() {
   const [onlyCoins, setOnlyCoins] = useState(() => store.get<boolean>("x:coins", false));
   const [adding, setAdding] = useState("");
   const q = new URLSearchParams({ limit: "150", ...(handle ? { handle } : {}), ...(onlyCoins ? { coins: "1" } : {}) });
-  const { data, refresh } = usePoll<Resp>(`x?${q}`, 4000);
+  const { data: raw, refresh } = usePoll<Resp>(`x?${q}`, 4000);
+  // An answer missing its lists (an older server, a cut-off read) draws as empty rather than taking the page down.
+  const data = useMemo(() => raw && { ...raw, accounts: raw.accounts || [], posts: raw.posts || [], changes: raw.changes || [], coins: raw.coins || {} }, [raw]);
   const mints = useMemo(() => [...new Set((data?.posts || []).slice(0, 60).flatMap((p) => p.mints))], [data]);
   const { data: sp } = usePoll<{ rows: Record<string, { mc: number | null; chg: number | null; live?: { mc: number | null } | null }> }>(mints.length ? `sparks?w=1h&m=${mints.join(",")}` : null, 3000);
   const live = useMemo(() => Object.fromEntries(Object.entries(sp?.rows || {}).map(([m, r]) => [m, { mc: r.live?.mc ?? r.mc, chg: r.chg }])), [sp]);
@@ -178,7 +182,7 @@ export function XTracker() {
     catch (err) { toast((err as Error).message); }
   };
   const remove = async (h: string) => {
-    await fetch(`/api/x/accounts/${h}`, { method: "DELETE" }); if (handle === h) setHandle(null); refresh();
+    await fetch(`api/x/accounts/${h}`, { method: "DELETE" }); if (handle === h) setHandle(null); refresh();
   };
   const tracked = new Set((data?.accounts || []).map((a) => a.handle.toLowerCase()));
 
@@ -193,14 +197,14 @@ export function XTracker() {
       <div className="grid items-start gap-3 lg:grid-cols-[300px_minmax(0,1fr)_280px]">
         <Panel title="Accounts" aside={data ? data.accounts.length : ""}>
           <form onSubmit={(e) => add(adding, e)} className="flex gap-1.5 border-b border-rule p-3">
-            <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="@handle or x.com link" className="h-9 min-w-0 flex-1 rounded-control border border-rule-2 bg-paper px-3 text-md outline-none focus:border-accent-dim" />
+            <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="@handle or x.com link" className="h-8 min-w-0 flex-1 rounded-control border border-rule-2 bg-paper px-3 text-md outline-none focus:border-accent-dim" />
             <Button variant="primary" size="lg" type="submit">Add</Button>
           </form>
           <button onClick={() => setHandle(null)} className={cn("flex w-full items-center justify-between px-4 py-2 text-left text-md", !handle ? "bg-paper-4 font-semibold" : "hover:bg-paper-3")}>All accounts</button>
           {(data?.accounts || []).map((a) => (
             <div key={a.handle} className={cn("group flex items-center gap-2.5 px-4 py-2", handle === a.handle ? "bg-paper-4" : "hover:bg-paper-3")}>
               <button onClick={() => setHandle(a.handle)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
-                {a.avatar ? <img src={a.avatar} alt="" className="size-8 rounded-full bg-paper-4" /> : <span className="grid size-8 place-items-center rounded-full bg-paper-4 text-xs">{a.handle[0]}</span>}
+                {a.avatar ? <img src={thumb(a.avatar, 32)} alt="" loading="lazy" decoding="async" className="size-8 rounded-full bg-paper-4" /> : <span className="grid size-8 place-items-center rounded-full bg-paper-4 text-xs">{a.handle[0]}</span>}
                 <span className="min-w-0"><b className="block truncate text-sm font-semibold">{a.name || a.handle}</b>
                   <span className="block truncate text-xs text-muted">@{a.handle}{a.followers != null ? ` · ${num(a.followers)}` : ""}{a.last_post ? ` · ${ageStr(Date.now() - a.last_post)}` : ""}</span></span>
               </button>
@@ -228,9 +232,9 @@ export function XTracker() {
               const c = data?.coins[m], l = live[m], by = data?.posts.find((p) => p.mints.includes(m));
               return (
                 <a key={m} href={`#/coin/${m}`} className="flex items-center gap-2.5 border-b border-rule px-4 py-2 last:border-0 hover:bg-paper-3">
-                  <img src={`/img/${m}`} alt="" className="size-7 rounded-full bg-paper-4 object-cover" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+                  <img src={`img/${m}`} alt="" loading="lazy" decoding="async" className="size-7 rounded-full bg-paper-4 object-cover" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
                   <span className="min-w-0 flex-1"><b className="block truncate text-sm font-semibold">${c?.symbol || shortAddr(m)}</b><span className="block truncate text-xs text-muted">@{by?.handle} · {by ? ageStr(Date.now() - by.t) : ""}</span></span>
-                  <span className="num text-right text-sm"><span className="block">{compact(l?.mc ?? c?.mcap ?? null)}</span><span className={cn("block text-xs", tone(l?.chg))}>{pct(l?.chg)}</span></span>
+                  <span className="num text-right text-sm"><LiveMc mint={m} value={l?.mc ?? c?.mcap ?? null} className="block font-normal" /><span className={cn("block text-xs", tone(l?.chg))}>{pct(l?.chg)}</span></span>
                 </a>
               );
             })}
@@ -239,7 +243,7 @@ export function XTracker() {
             {!data?.changes.length ? <p className="px-4 py-6 text-center text-sm text-muted">Name, picture and bio changes show here.</p> : data.changes.slice(0, 12).map((c) => (
               <div key={c.id} className="border-b border-rule px-4 py-2 text-sm last:border-0">
                 <b className="font-semibold">@{c.handle}</b> <span className="text-muted">changed {c.field === "avatar" ? "picture" : c.field} · {ageStr(Date.now() - c.t)}</span>
-                {c.field === "avatar" ? <span className="mt-1 flex items-center gap-2"><img src={c.old} alt="" className="size-6 rounded-full opacity-60" />→<img src={c.new} alt="" className="size-6 rounded-full" /></span>
+                {c.field === "avatar" ? <span className="mt-1 flex items-center gap-2"><img src={thumb(c.old, 24)} alt="" loading="lazy" decoding="async" className="size-6 rounded-full opacity-60" />→<img src={thumb(c.new, 24)} alt="" loading="lazy" decoding="async" className="size-6 rounded-full" /></span>
                   : <p className="mt-0.5 text-xs text-ink-2"><s className="text-muted">{c.old}</s> → {c.new}</p>}
               </div>
             ))}

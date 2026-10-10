@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, DATA } from "./db.js";
 import { publicUrl } from "./quality.js";
+import { fetchPublic } from "./netguard.js";
 import { getMeta, knownImage } from "./pulse.js";
 
 const DIR = path.join(DATA, "img");
@@ -65,7 +66,7 @@ export function sources(mint) {
   out.push(`https://axiomtrading-v2.axiom-cdn.io/${mint}.webp`);
   out.push(`https://images.pump.fun/coin-image/${mint}?variant=200x200`);
   const t = db.prepare("SELECT image FROM tokens WHERE mint = ?").get(mint);
-  for (const given of [t?.image, getMeta(mint)?.image, knownImage(mint)]) {
+  for (const given of [t?.image, getMeta(mint)?.image, knownImage(mint), hints.get(mint)]) {
     const raw = unwrap(given);
     if (!raw) continue;
     // DexScreener's CDN resizes on request: ask for a thumbnail rather than the 800px original.
@@ -76,6 +77,17 @@ export function sources(mint) {
   }
   out.push(`https://dd.dexscreener.com/ds-data/tokens/solana/${mint}.png?size=lg`);
   return [...new Set(out.map((u) => publicUrl(u)).filter(Boolean))];
+}
+
+// A picture link a list carried for a coin the radar may not track (Fomo's and pump.fun's posts and lists:
+// feedwarm.js). Tried after the radar's own; a coin already missed is looked for again at once with it.
+const hints = new Map();   // mint -> url
+export function hint(mint, url) {
+  if (typeof url !== "string" || !/^https:\/\//.test(url) || url.length > 1500 || hints.get(mint) === url) return false;
+  if (hints.size > 50_000) hints.clear();
+  hints.set(mint, url);
+  if (!known.has(mint)) missing.delete(mint);
+  return true;
 }
 
 // When none of the known places has it (an older coin the radar first met as a graduation, with no picture
@@ -96,14 +108,13 @@ async function lookup(mint) {
   return [...new Set(out.map((u) => publicUrl(u)).filter(Boolean))];
 }
 
-// Follows redirects by hand so a launcher's link cannot bounce the radar onto this PC or the home network.
+// Follows redirects by hand so a launcher's link cannot bounce the radar onto this PC or the home network:
+// every hop's name is checked and resolved first (netguard.js).
 async function grab(url, ms = 7000) {
   for (let hop = 0; hop < 4; hop++) {
-    const safe = publicUrl(url);
-    if (!safe) return null;
     // A real browser's headers, sent as if from the picture's own site: gmgn.ai and others answer 403 without a referer.
-    const r = await fetch(safe, { redirect: "manual", signal: AbortSignal.timeout(ms), headers: { "user-agent": UA, referer: new URL(safe).origin + "/", accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.5" } });
-    if (r.status >= 300 && r.status < 400) { const to = r.headers.get("location"); if (!to) return null; url = new URL(to, safe).href; continue; }
+    const r = await fetchPublic(url, { timeout: ms, maxBytes: MAX_BYTES, headers: { "user-agent": UA, referer: new URL(url).origin + "/", accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.5" } });
+    if (r.status >= 300 && r.status < 400) { const to = r.headers.get("location"); if (!to) return null; url = new URL(to, url).href; continue; }
     if (!r.ok) return null;
     if (+r.headers.get("content-length") > MAX_BYTES) return null;
     const buf = Buffer.from(await r.arrayBuffer());
@@ -114,12 +125,15 @@ async function grab(url, ms = 7000) {
   return null;
 }
 
-// A logo is drawn at 64px at most, but some sources hand over the 1-3 MB original. A big one is fetched
-// again through wsrv.nl (an open image resizer) as a 128px WebP; an animated GIF stays animated.
-const SMALL = 96_000;
+// A logo is drawn at 68px at most (136 device pixels on a sharp screen), but sources hand over anything up to
+// the 1-3 MB original. One over SMALL is fetched again through wsrv.nl (an open image resizer) as a 128px WebP,
+// typically 5-10 KB; an animated GIF stays animated. Small logos keep every page's picture batch light.
+const SMALL = 24_000;
 const resized = (u) => `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=128&h=128&fit=cover&output=webp&q=82&n=-1`;
+// wsrv.nl refuses some hosts outright ("Domain or TLD blocked by policy", after up to 7 s): don't ask for those.
+const REFUSED = /^https?:\/\/([^/]+\.)?(pump\.fun|[^/]+\.xyz)(\/|$)/i;
 async function shrink(got, url) {
-  if (got.buf.length <= SMALL) return got;
+  if (got.buf.length <= SMALL || REFUSED.test(url)) return got;
   try { const small = await grab(resized(url), 5000); if (small && small.buf.length < got.buf.length) return small; } catch {}
   return got;
 }
@@ -201,7 +215,7 @@ export async function serve(mint, res) {
 
 // Many logos in one answer: the page shows dozens of coins at once, and a browser sends only six requests
 // at a time to this PC, so one by one they trickle in over a couple of seconds. The ones on disk come back
-// here as data URLs (small: logos are kept under ~100 KB); the rest are fetched in the background and
+// here as data URLs (small: logos are kept under SMALL, ~24 KB); the rest are fetched in the background and
 // announced on the live stream when they land. Hot ones stay in memory.
 const mem = new Map();   // mint -> data URL, most recent last
 let memBytes = 0;
@@ -213,7 +227,7 @@ export async function batch(mints) {
   const out = {};
   await Promise.all([...new Set(mints)].slice(0, 120).map(async (mint) => {
     const file = known.get(mint);
-    if (!file) { out[mint] = null; picture(mint).catch(() => {}); return; }
+    if (!file) { noteAsked(mint); out[mint] = null; picture(mint).catch(() => {}); return; }
     let url = mem.get(mint);
     if (!url) {
       try {
@@ -226,6 +240,28 @@ export async function batch(mints) {
   }));
   imgStats.served += Object.values(out).filter(Boolean).length;
   return out;
+}
+
+// The coins a page wanted and did not get (the page server asks here for every miss, and warm() for every coin
+// in an answer that has no picture yet): when one lands, server.js sends it down the live stream, bytes and all
+// ("pic"), so the page draws it without asking again. Any coin, not only the launches it watches.
+const asked = new Map();   // mint -> when it was last wanted
+const ASKED_MS = 10 * 60_000;
+function noteAsked(mint) { if (asked.size > 20_000) asked.clear(); asked.set(mint, now()); }
+export const wasAsked = (mint) => now() - (asked.get(mint) || 0) < ASKED_MS;
+// A coin's picture as a data URL (a few KB), from memory or disk; null when there is none or it is still large.
+export async function inline(mint) {
+  const file = known.get(mint);
+  if (!file) return null;
+  let url = mem.get(mint);
+  if (url) return url;
+  try {
+    const body = await fs.promises.readFile(path.join(DIR, file));
+    if (body.length > SMALL * 1.5) return null;
+    url = `data:${BY_EXT[file.split(".").pop()]};base64,${body.toString("base64")}`;
+  } catch { return null; }
+  remember(mint, url);
+  return url;
 }
 
 // A picture saved before logos were kept small: fetch it again from the small sources in the background
@@ -259,7 +295,7 @@ function pump() {
 
 // Fetch ahead of the page: the coins on the live lists get their pictures before anyone asks.
 export function warm(mints) {
-  for (const m of mints) if (!known.has(m) && !flying.has(m) && waiting.length < 40) picture(m).catch(() => {});
+  for (const m of mints) if (!known.has(m)) { noteAsked(m); if (!flying.has(m) && waiting.length < 40) picture(m).catch(() => {}); }
 }
 
 // A coin that was created this second: pump.fun's picture CDN has it about half a second later and the
@@ -278,10 +314,21 @@ export function eager(mint) {
 // A new source for a coin's picture just turned up: look again now, whatever the earlier misses said.
 export function retry(mint) { if (known.has(mint)) return; missing.delete(mint); picture(mint).catch(() => {}); }
 
-// Pictures fetched more than three days ago go (a coin still on screen simply gets its picture again).
-export function prunePictures() {
-  for (const [mint, file] of known) {
-    try { if (now() - fs.statSync(path.join(DIR, file)).mtimeMs > 3 * DAY) { fs.rmSync(path.join(DIR, file)); known.delete(mint); } } catch { known.delete(mint); }
-  }
-  imgStats.cached = known.size;
+// Pictures fetched more than three days ago go (a coin still on screen simply gets its picture again), except
+// those of coins that mattered (tracked in the tokens table, or traded in the last week): theirs stay 30 days.
+const wasTracked = (mint) => { try { return Boolean(db.prepare("SELECT 1 FROM tokens WHERE mint = ?").get(mint)) || (db.prepare("SELECT last FROM j_mints WHERE mint = ?").get(mint)?.last ?? 0) > now() - 7 * DAY; } catch { return false; } };
+// Off the main thread's back: ~100K files checked one at a time with the filesystem's own threads, a pause
+// every 200 (the synchronous version would have held the radar up for many seconds).
+let pruning = false;
+export async function prunePictures() {
+  if (pruning) return;
+  pruning = true;
+  try {
+    let n = 0;
+    for (const [mint, file] of [...known]) {
+      try { const age = now() - (await fs.promises.stat(path.join(DIR, file))).mtimeMs; if (age > 3 * DAY && (age > 30 * DAY || !wasTracked(mint))) { await fs.promises.rm(path.join(DIR, file)); known.delete(mint); } } catch { known.delete(mint); }
+      if (++n % 200 === 0) await new Promise((go) => setImmediate(go));
+    }
+    imgStats.cached = known.size;
+  } finally { pruning = false; }
 }

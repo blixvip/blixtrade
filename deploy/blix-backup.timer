@@ -1,0 +1,11 @@
+[Unit]
+Description=Blix off-box backup, nightly
+
+[Timer]
+# 09:10 UTC = 03:10 in Edmonton, the quietest hour.
+OnCalendar=*-*-* 09:10:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

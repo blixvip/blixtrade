@@ -2,3 +2,5 @@ data/
 node_modules/
 worker/.wrangler/
 web/tsconfig.tsbuildinfo
+.wrangler/
+.ui-deploy/

@@ -127,6 +127,8 @@ Tests: `npm test` (Node's built-in runner, no network).
 
 Browser regressions: start Blix, then run `node scripts/browser-check.mjs`. Set `PLAYWRIGHT_PATH` to an existing Playwright installation if it is not installed locally; Chrome is used headlessly. Trade requests are mocked and do not change your positions. Set `BLIX_SCREENSHOTS` to keep the screenshots.
 
+Frontend performance checks: run `npm run build --prefix web`, then `npm run test:performance`. These run the production frontend with controlled API responses and inspect the landing page at desktop and phone widths, without starting the radar or submitting trades. Requires Playwright (or `PLAYWRIGHT_PATH`) and Chrome; reports and screenshots go to ignored `data/performance-after/` and `data/landing-after/`. The checks enforce a 600 KB uncompressed startup JavaScript budget, loading unopened pages only on navigation intent, pausing hidden desktop polling, and batching landing-page resize work.
+
 Use Node 24.16 or newer. Windows Node 24.15 has a [reported native TCP crash](https://github.com/nodejs/node/issues/63620) matching Blix's silent exits. `node bin/supervise.mjs` prefers a verified Windows runtime at `data/runtime/node.exe`, when present, or the executable set in `BLIX_NODE`. Otherwise it uses the Node running the supervisor. This runtime choice is local to Blix; `npm start` uses the Node on your PATH.
 
 All UI paper buys and manual sells use quotes. The desk keeps unsaved exit-rule edits through refreshes, prevents duplicate pending submissions, shows missing valuations explicitly, and calculates lifetime totals over the complete history. Older positions and automatic exits can still use the documented estimate model.

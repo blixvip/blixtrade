@@ -97,6 +97,7 @@ Nothing is ever bought. The UI uses curve or Jupiter quotes (`/quoted`, `/sellq`
 | DELETE | `/api/wallet/<address>` | – | Unfollow |
 | GET | `/api/fomo` | – | Fomo overview: learned fee payer, what Fomo is buying, top Fomo traders |
 | POST | `/api/fomo/trader` | `{ wallet, handle? }` | Mark a wallet as a Fomo wallet (teaches the fee payer) |
+| GET | `/api/fomo/bars/<mint>` | `res` (Fomo's sizes: `1S 15S 30S 1 5 15 30 60 240 720 1D 7D`, default `1`), `since` (s) | Fomo's own chart bars for the coin, `[t, o, h, l, c, v]` in USD price, with `supply` (market cap = price × supply) and `live`. Read through the kept Fomo tab while the chart is open; each new bar also goes out on the stream as `fbar` |
 
 ## Track record, health, ops
 

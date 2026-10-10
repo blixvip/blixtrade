@@ -2,6 +2,7 @@
 // The endpoint, event and tool lists are the shared modules the classic pages, the public docs pages
 // (worker/) and the MCP server load, so none of them can drift from what the server offers.
 // main.tsx loads this lazily; keep the two exports.
+import { pageHref } from "@/lib/route";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { API_DOCS, API_EVENTS } from "@shared/api-docs.js";
 import { MCP_TOOLS } from "@shared/mcp-tools.js";
@@ -76,7 +77,7 @@ function LiveCall() {
   const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true);
-    const a = await callApi("/api/overview");
+    const a = await callApi("api/overview");
     let short = a.text;
     try {
       const j = JSON.parse(a.text);
@@ -175,7 +176,7 @@ export function Api() {
         <Chip icon="link" mono onClick={() => copy(BASE, "base")} done={copied === "base"}>{BASE}</Chip>
         <Chip icon="layers">{n} endpoints</Chip>
         <Chip icon="radio">1 event stream</Chip>
-        <Chip icon="lock"><span>No key on this PC · <code className="font-outlier text-ink">blix_key</code> cookie remotely</span></Chip>
+        <Chip icon="lock"><span>No key on this PC · Google sign-in at <code className="font-outlier text-ink">blixvip.com</code> remotely</span></Chip>
       </Hero>
 
       <Section id="doc-start" icon="zap" title="Quick start" aside="two calls cover most bots">
@@ -263,7 +264,7 @@ const ASK: [string, string[]][] = [
 // on Windows too, and they need no escaping in JSON or TOML.
 function useScript() {
   const [path, setPath] = useState<string | null>(null);
-  useEffect(() => { fetch("/api/me").then((r) => r.json()).then((j) => { if (j.mcpScript) setPath(String(j.mcpScript).replace(/\\/g, "/")); }).catch(() => {}); }, []);
+  useEffect(() => { fetch("api/me").then((r) => r.json()).then((j) => { if (j.mcpScript) setPath(String(j.mcpScript).replace(/\\/g, "/")); }).catch(() => {}); }, []);
   return path;
 }
 
@@ -354,7 +355,7 @@ export function Mcp() {
   return (
     <Layout nav={nav}>
       <Hero icon="plug" title="MCP" side={<ChatDemo />}
-        lead={<>Plug Claude, Cursor or Codex into Blix. The MCP server is one small script with no dependencies that turns the <a className="text-ink underline decoration-muted underline-offset-[3px] hover:text-focus" href="#/api">API</a> into tools an AI can call: ask what is running, why a coin was flagged, or paper trade a call.</>}>
+        lead={<>Plug Claude, Cursor or Codex into Blix. The MCP server is one small script with no dependencies that turns the <a className="text-ink underline decoration-muted underline-offset-[3px] hover:text-focus" href={pageHref("api")}>API</a> into tools an AI can call: ask what is running, why a coin was flagged, or paper trade a call.</>}>
         <Chip icon="wrench">{TOOLS.length} tools</Chip>
         <Chip icon="terminal">stdio</Chip>
         <Chip icon="shield">Reads only, plus the paper desk</Chip>

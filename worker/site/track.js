@@ -7,7 +7,7 @@ const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart
 
 export async function visitorOf(req, env) {
   const ip = req.headers.get("cf-connecting-ip") || "", ua = req.headers.get("user-agent") || "";
-  const key = await crypto.subtle.importKey("raw", enc.encode(`visitor:${env.REG_KEY || ""}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("raw", enc.encode(`visitor:${env.SESSION_KEY || env.REG_KEY || ""}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return hex(await crypto.subtle.sign("HMAC", key, enc.encode(`${ip}|${ua}`))).slice(0, 16);
 }
 
@@ -44,7 +44,7 @@ export async function who(req, env, url) {
 export function record(env, defer, info, kind, { path = null, email = null, detail = null } = {}) {
   if (!env.DB) return;
   defer(env.DB.prepare("INSERT INTO events (t, kind, path, email, visitor, country, city, referrer, device, detail) VALUES (?,?,?,?,?,?,?,?,?,?)")
-    .bind(Date.now(), kind, path, email, info.visitor, info.country, info.city, info.referrer, info.device, detail).run());
+    .bind(...[Date.now(), kind, path, email, info.visitor, info.country, info.city, info.referrer, info.device, detail].map((v) => v ?? null)).run());
 }
 
 // Pages worth a row: what a person opens in a browser, not the files and data those pages load.
@@ -54,4 +54,15 @@ export function isPageView(req, url) {
   if (/^\/(_pub|api|img|assets|brand|cdn-cgi|auth|__)\//.test(p) || p.startsWith("/__")) return false;
   if (/\.(js|css|png|jpe?g|webp|svg|ico|woff2?|json|txt|xml|map)$/i.test(p)) return false;
   return /text\/html/.test(req.headers.get("accept") || "") || p === "/";
+}
+
+// A signed-in person was just here (a page view, or the terminal's /api/me ping): their account's last_seen, so
+// the dashboard shows who is on now. Written at most once a minute per person per isolate (D1's free writes).
+const seenAt = new Map();   // email -> ms
+export function seen(env, defer, email) {
+  if (!env.DB || !email) return;
+  const t = Date.now();
+  if (t - (seenAt.get(email) || 0) < 60_000) return;
+  seenAt.set(email, t); if (seenAt.size > 5000) seenAt.clear();
+  defer(env.DB.prepare("UPDATE accounts SET last_seen = ? WHERE email = ? AND last_seen < ?").bind(t, email, t).run());
 }

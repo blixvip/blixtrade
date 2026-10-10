@@ -1,6 +1,10 @@
+import { XHover } from "@/components/XCard";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { PumpLogo } from "@/components/brand";
+import { padOf, PadLogo, PADS } from "@/components/logos";
+// X links arrive as a URL or a bare handle.
+const xUrl = (x?: string | null) => !x ? null : /^https?:/i.test(x) ? x : `https://x.com/${x.replace(/^@/, "")}`;
 import { usePic } from "@/lib/pics";
+import { previewHandlers } from "@/components/PicPreview";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
@@ -8,11 +12,14 @@ import { ageStr, ageTone, compact, pct, providerOf, safeHref, shortAddr, tone } 
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
+import { prefetchCoin } from "@/lib/coin";
 import { usePrefs } from "@/lib/prefs";
 import { hideCoins, unhideCoin, useHidden } from "@/lib/hidden";
-import { useNow } from "@/lib/route";
+import { rowLink, useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
+import { Flash } from "@/components/Live";
+import { KnownHolders } from "@/components/KnownHolders";
 
 // One Pulse row, laid out like the terminal in the owner's mockup (design.md "Pulse rows"): a large
 // picture framed by bonding progress with the contract under it; ticker, name and copy; age, links and
@@ -25,15 +32,6 @@ const POOL: Record<string, [dot: string, name: string]> = {
 // Market cap reads by size: small is cool, mid is gold, large is green.
 const capTone = (n: number | null | undefined) => n == null ? "text-muted" : n < 30_000 ? "text-info" : n < 150_000 ? "text-warn" : "text-up";
 
-// A number that flashes once in the direction it moved.
-function Flash({ value, children, className }: { value: number | null | undefined; children: ReactNode; className?: string }) {
-  const prev = useRef(value), key = useRef(0);
-  const dir = value != null && prev.current != null && value !== prev.current ? (value > prev.current ? "up" : "down") : null;
-  if (dir) key.current++;
-  useEffect(() => { prev.current = value; });
-  return <b key={key.current} className={cn("num", dir === "up" && "animate-flash-up", dir === "down" && "animate-flash-down", className)}>{children}</b>;
-}
-
 function Age({ born }: { born: number }) {
   const now = useNow();
   return <span className={cn("num text-lg font-medium", ageTone(now - born))}>{ageStr(now - born)}</span>;
@@ -43,19 +41,19 @@ function Age({ born }: { born: number }) {
 function Avatar({ coin, ring }: { coin: Coin; ring: number }) {
   const pic = usePic(coin.mint);
   // Later columns often arrive without the launchpad; a pump.fun coin still shows by its dex or its "…pump" mint.
-  const pad = (coin.pool || "").toLowerCase() || (/^pump(fun|swap)$/.test(coin.dex || "") || coin.mint.endsWith("pump") ? "pump" : "");
-  const pool = POOL[pad];
+  const pad = padOf(coin), pool = PADS[pad] ? [null, PADS[pad].name] as const : POOL[pad];
   return (
-    <Tip tip={`${ring}% of the way to bonding${pool ? ` · launched on ${pool[1]}` : ""}${coin.mayhem ? " · Mayhem Mode: pump.fun's AI agent trades it for its first 24 hours" : ""}`} side="right">
+    // Resting the pointer on it shows the logo big, with what the frame means underneath (PicPreview).
+    <span className="block shrink-0" {...previewHandlers(coin.mint, { caption: `${ring}% of the way to bonding${pool ? ` · ${pool[1]}` : ""}${coin.mayhem ? " · Mayhem Mode" : ""}` })}>
       {/* Mayhem Mode coins wear gold, like Axiom; every other coin's frame fills green with its bonding progress. */}
       <span className="relative block size-17 shrink-0 rounded-control p-0.5" style={{ background: coin.mayhem ? `conic-gradient(var(--color-warn) ${Math.max(ring, 0)}%, color-mix(in oklch, var(--color-warn) 35%, var(--color-rule-2)) 0)` : `conic-gradient(var(--color-up) ${ring}%, var(--color-rule-2) 0)` }}>
         <span className="relative grid size-full place-items-center overflow-hidden rounded-chip bg-paper-3 text-sm font-semibold text-muted uppercase">
           {(coin.symbol || "?").slice(0, 4)}
-          {pic.src && <img key={pic.key} src={pic.src} alt="" decoding="async" className={cn("absolute inset-0 size-full object-cover", !pic.ok && "invisible")} onLoad={pic.onLoad} onError={pic.onError} />}
+          {pic.src && <img key={pic.key} src={pic.src} alt="" decoding="async" loading="lazy" fetchPriority="low" className={cn("absolute inset-0 size-full object-cover", !pic.ok && "invisible")} onLoad={pic.onLoad} onError={pic.onError} />}
         </span>
-        {pool && <span className={cn("absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border bg-paper", coin.mayhem ? "border-warn bg-warn/25 [&_img]:[filter:sepia(1)_saturate(4)_hue-rotate(-12deg)_brightness(1.15)]" : "border-rule-2")}>{pad === "pump" ? <PumpLogo className="size-3" /> : <i className={cn("size-2 rounded-full", pool[0])} />}</span>}
+        {pool && <span className={cn("absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border bg-paper", coin.mayhem ? "border-warn bg-warn/25 [&_img]:[filter:sepia(1)_saturate(4)_hue-rotate(-12deg)_brightness(1.15)]" : "border-rule-2")}>{PADS[pad] ? <PadLogo pad={pad} className="size-3 rounded-full" /> : <i className={cn("size-2 rounded-full", pool[0])} />}</span>}
       </span>
-    </Tip>
+    </span>
   );
 }
 
@@ -121,27 +119,29 @@ function AiCall({ coin }: { coin: Coin }) {
 
 function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: number }) {
   const t = usePulse((s) => s.coins[mint]);
+  const hover = useRef(0);
+  // Every hook before the early return: a mounted row whose coin leaves the store must not change the hook count.
+  const paper = useTrade((st) => st.paper), prefs = usePrefs();
+  const isHidden = useHidden((s) => s.showing && s.mints.includes(mint));
+  const [buying, setBuying] = useState<null | "busy" | "filled">(null);
   if (!t) return null;
   const migrated = col === "migrated", curve = !t.graduated && !migrated;
   const prog = migrated || t.graduated ? 100 : t.progress != null ? Math.round(t.progress * 100) : 0;
   const H = t.hl || {};
-  // On the curve the live trade ledger is fresher; after bonding the safety report is.
-  const holders = curve ? (H.h ?? t.holders) : (t.holders ?? H.h);
-  const top10 = curve ? (H.t10 ?? t.top10) : (t.top10 ?? H.t10);
-  const dev = curve ? (H.dev ?? t.dev) : (t.dev ?? H.dev);
+  // The live ledger (trades, seeded from the chain) is fresher than the safety report wherever the radar has it;
+  // the server already puts RugCheck's count in its place when the ledger is known to undercount.
+  const holders = H.h ?? t.holders;
+  const top10 = H.t10 ?? t.top10;
+  const dev = H.dev ?? t.dev;
   const tx = (t.buys || 0) + (t.sells || 0);
   const vol = t.vol ?? t.liveVol;
   const chg = t.chg1m ?? t.chg5;
   const mcap = t.mcap || (t.startMcapSol ? t.startMcapSol * (usePulse.getState().live.solUsd || 150) : null);
   const a = t.ai, rated = a?.verdict && ["done", "deep"].includes(a.status || "");
   const note = rated ? `${a!.tag ? `${a!.tag} · ` : ""}${a!.verdict}` : col === "new" ? [t.tri?.why, t.desc].filter(Boolean).join(" · ") : "";
-  const slop = t.tri?.label === "slop" && !a;
   const handle = xHandle(t.x);
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
-  const paper = useTrade((st) => st.paper), prefs = usePrefs();
-  const isHidden = useHidden((s) => s.showing && s.mints.includes(mint));
-  const [buying, setBuying] = useState<null | "busy" | "filled">(null);
   const buy = async () => {
     if (buying) return;
     setBuying("busy");
@@ -152,9 +152,11 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const copy = () => { navigator.clipboard?.writeText(mint); toast("Contract copied"); };
 
   return (
-    <div onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) location.hash = `#/coin/${mint}`; }}
+    <div {...rowLink(`#/coin/${mint}`)}
+      onPointerEnter={() => { hover.current = window.setTimeout(() => prefetchCoin(mint), 150); }}
+      onPointerLeave={() => clearTimeout(hover.current)}
       className={cn("group relative flex h-full cursor-pointer gap-3.5 border-b border-rule px-3.5 py-2.5 transition-colors duration-100 hover:bg-paper-3/60",
-        a?.status === "running" && "bg-ink/[0.03]", (t.state === "faded" || slop) && "opacity-55")}>
+        a?.status === "running" && "bg-ink/[0.03]")}>
       <Tip tip={isHidden ? "Unhide" : "Hide this coin"}>
         <button onClick={() => (isHidden ? unhideCoin(mint) : hideCoins([mint]))} aria-label={isHidden ? "Unhide coin" : "Hide coin"}
           className={cn("absolute top-1.5 left-1.5 z-10 grid size-6 place-items-center rounded-full border border-rule-2 bg-paper-2 text-ink-2 shadow-[var(--shadow-raised)] transition-opacity duration-100 hover:text-ink", isHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}>
@@ -167,27 +169,34 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col justify-between">
-        <div className="flex items-center gap-1.5">
-          <b className="text-lg leading-tight font-bold whitespace-nowrap text-ink">{(t.symbol || "").trim() || "?"}</b>
-          <span className="min-w-0 truncate text-lg leading-tight text-muted">{t.name}</span>
-          <Tip tip="Copy contract address"><button onClick={copy} aria-label="Copy contract address" className="shrink-0 text-muted hover:text-ink [&_svg]:size-3.5"><Icon.copy /></button></Tip>
-          <span className="ml-auto flex shrink-0 items-baseline gap-2.5 pl-2 whitespace-nowrap">
-            {vol != null && <span className="flex items-baseline gap-1"><span className="text-xs text-muted">V</span><b className="num text-lg leading-tight font-semibold text-ink">{compact(vol)}</b></span>}
-            <span className="flex items-baseline gap-1"><span className="text-xs text-muted">MC</span>
-              <Flash value={mcap} className={cn("text-xl leading-tight font-semibold", capTone(mcap), t.warn && t.warn.kind !== "odd-curve" && "opacity-45")}>{compact(mcap)}</Flash></span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <b className="min-w-0 truncate text-lg leading-tight font-bold text-ink">{(t.symbol || "").trim() || "?"}</b>
+          <span className="min-w-0 truncate text-lg leading-tight text-muted @max-[580px]:hidden">{t.name}</span>
+          <Tip tip="Copy contract address"><button onClick={copy} aria-label="Copy contract address" className="shrink-0 text-muted hover:text-ink @max-[480px]:hidden [&_svg]:size-3.5"><Icon.copy /></button></Tip>
+          </div>
+          {/* No known Fomo holder: the coin's own holder count there instead of a 0 (live from the trades stream). */}
+          <KnownHolders mint={mint} total={holders} />
+          <span className="ml-auto flex shrink-0 items-baseline gap-2.5 pl-1 whitespace-nowrap">
+            {t.liq != null && t.liq > 0 && <Tip tip="Liquidity: both sides of the pool (on the curve, its SOL reserve), from the chain"><span className="hidden items-baseline gap-1 @min-[580px]:flex"><span className="text-xs text-muted">L</span><b className="num text-lg leading-tight font-semibold text-ink">{compact(t.liq)}</b></span></Tip>}
+            {vol != null && <span className="hidden items-baseline gap-1 @min-[480px]:flex"><span className="text-xs text-muted">V</span><b className="num text-lg leading-tight font-semibold text-ink">{compact(vol)}</b></span>}
+            <span title={`Market cap ${compact(mcap)} · Liquidity ${compact(t.liq)} · Volume ${compact(vol)}`} className="flex items-baseline gap-1"><span className="text-xs text-muted">MC</span>
+              <Flash value={mcap} className={cn("text-xl leading-tight font-semibold", capTone(mcap))}>{compact(mcap)}</Flash></span>
           </span>
         </div>
 
         <div className="flex items-center gap-3 text-md whitespace-nowrap">
-          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
+          <div className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-4 overflow-hidden">
             <Age born={t.born} />
             <span className="flex items-center gap-2.5">
-              <IconLink href={`https://pump.fun/coin/${mint}`} icon={<Icon.link />} label="Open on the launchpad" />
+              {PADS[padOf(t)] && <IconLink href={PADS[padOf(t)].url(mint)} icon={<PadLogo pad={padOf(t)} className="size-4" />} label={`Open on ${PADS[padOf(t)].name}`} />}
+              {safeHref(xUrl(t.x)) && <XHover href={safeHref(xUrl(t.x))!}><a href={safeHref(xUrl(t.x))!} target="_blank" rel="noopener noreferrer nofollow" aria-label="X (set by the creator, unverified)" className="text-ink-2 transition-colors duration-100 hover:text-ink [&_svg]:size-3.5"><Icon.x /></a></XHover>}
               <IconLink href={t.web} icon={<Icon.web />} label="Website (set by the creator, unverified)" />
               <IconLink href={t.tg} icon={<Icon.tg />} label="Telegram" />
+              <IconLink href={t.tiktok} icon={<Icon.tiktok />} label="TikTok" />
               <IconLink href={`https://x.com/search?q=${mint}`} icon={<Icon.search />} label="Search the contract on X" />
             </span>
-            {holders != null && <Count icon={<Icon.users />} value={holders} tip={curve ? "Holders now, from the live trade feed" : "Holders (RugCheck)"} />}
+            {holders != null && <Count icon={<Icon.users />} value={holders} tip={H.h != null ? "Holders now, from the chain's trades" : "Holders (RugCheck)"} />}
             {t.traders != null && <Count icon={<Icon.candles />} value={t.traders} tip="Wallets seen trading it live" />}
             {t.tr != null && <Count icon={<Icon.rank />} value={t.tr} tip="Live rank 0–100: real demand this second. 60+ is the pick line." className={t.tr >= 60 ? "text-up" : undefined} />}
             {prefs.compact && <span className="text-sm"><AiCall coin={t} /></span>}
@@ -209,7 +218,8 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
         </div>}
 
         <div className="flex items-center gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
+          {/* one line of whole chips: one that does not fit wraps onto a second line that is clipped away, never cut in half */}
+          <div className="flex h-6 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-2 overflow-hidden">
             {prefs.pills && <>
             {t.warn && <Chip icon={<Icon.ghost />} text={t.warn.kind === "emptied" ? "emptied" : t.warn.kind === "stale" ? "stale price" : "check price"} state="bad" tip={t.warn.text} />}
             {top10 != null && <Chip icon={<Icon.userStar />} text={`${Math.round(top10)}%`} state={top10 > 45 ? "bad" : "ok"} tip="Top 10 holders' share of the supply" />}
