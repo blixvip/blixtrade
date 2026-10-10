@@ -226,7 +226,7 @@ function Card({ r, tf }: { r: Row; tf: Tf }) {
         <dl className="flex flex-col gap-2 text-sm">
           <Line k={`Volume ${tf}`} v={compact(vol)} />
           <Line k="Liquidity" v={compact(r.liquidity)} />
-          {r.fees != null && r.fees > 0 && <Line k="Fees paid" v={<span className="flex items-center gap-1"><SolMark className="text-ink-2" />{r.fees.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span>} />}
+          {r.fees != null && r.fees > 0 && <Line k="Fees paid" v={<span className="flex items-center gap-1"><SolMark />{r.fees.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span>} />}
           <Line k="Holders" v={s.totalHolders != null ? compactCount(s.totalHolders) : "—"} />
           <Line k="Top 10 holding" v={s.top10 != null ? `${s.top10.toFixed(2)}%` : "—"} tone={s.top10 != null && s.top10 > 30 ? "text-down" : undefined} />
           <Line k="Dev holding" v={s.devPct != null ? `${s.devPct.toFixed(2)}%` : "—"} tone={s.devPct != null && s.devPct > 5 ? "text-down" : undefined} />

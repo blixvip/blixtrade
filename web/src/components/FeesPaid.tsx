@@ -1,13 +1,10 @@
 import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { SolanaLogo } from "@/components/brand";
 
-// Solana's mark (three slanted bars), the "≡" in Axiom's "F ≡ 4.832".
+// Solana's official logomark (public/brand/solana.svg), the "≡" in Axiom's "F ≡ 4.832".
 export function SolMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 16 14" aria-hidden="true" className={cn("size-3 shrink-0", className)} fill="currentColor">
-      <path d="M3.2 0h12.3l-2.7 3H.5zM.5 5.5h12.3l2.7 3H3.2zM3.2 11h12.3l-2.7 3H.5z" />
-    </svg>
-  );
+  return <SolanaLogo className={cn("w-3", className)} />;
 }
 
 const amount = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}K` : n >= 100 ? n.toFixed(1) : n >= 10 ? n.toFixed(2) : n.toFixed(3);
@@ -21,7 +18,7 @@ export function FeesPaid({ sol, since, born, className }: { sol?: number | null;
   return (
     <Tip tip={`Fees paid${from}: ${sol.toLocaleString(undefined, { maximumFractionDigits: 3 })} SOL in network, priority and tip fees by everyone trading it (estimated from the blocks Blix reads)`}>
       <span className={cn("flex shrink-0 items-center gap-1 text-xs text-muted", className)}>
-        F<SolMark className="text-ink-2" /><b className="num text-md font-semibold text-ink">{amount(sol)}</b>
+        F<SolMark /><b className="num text-md font-semibold text-ink">{amount(sol)}</b>
       </span>
     </Tip>
   );
