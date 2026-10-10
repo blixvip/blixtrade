@@ -38,6 +38,15 @@ type Src = "tv" | "gecko" | "fomo" | "blix";
 // TradingView chart. The GeckoTerminal embed and Fomo mode stay in the code, not offered.
 // GeckoTerminal candles already drawn, per coin and size, so a chart opened again draws on its first frame.
 const gmemo = new Map<string, { raw: Row[]; at: number }>();
+// A chart is always on screen (the owner, 2026-10-10: the chart being shown is the most important thing). Each source
+// that has nothing hands over to the other once per coin (fellBack); with nothing anywhere, one flat candle at the
+// coin's current market cap stands in while the reads keep trying.
+const fellBack = new Set<string>();
+async function nowMc(mint: string): Promise<number | null> {
+  const p = usePulse.getState().coins[mint]?.mcap;
+  if (p && p > 0) return p;
+  try { const d = await api<{ mc: number | null }>(`gecko/price/${mint}`); return d.mc && d.mc > 0 ? d.mc : null; } catch { return null; }
+}
 // Per coin: what Jupiter's market caps are multiplied by to sit on the header's level (1: the same supply).
 const tvLevel = {
   m: new Map<string, number>(),
@@ -570,8 +579,13 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
           if (!got.rows.length) {
             first = false;
             if (rows.length) return;
-            if (!geckoOnlyNow()) { setSrcState("blix"); return; }
-            setMeta({ tf, source: "TradingView", note: "No candles for this coin yet", empty: true, last: null }); return;
+            if (!geckoOnlyNow() && !fellBack.has(`${mint}:blix`)) { fellBack.add(`${mint}:tv`); setSrcState("blix"); return; }
+            const trades = fromTrades(mint, tf);
+            if (trades?.length) { rows = trades; source = "trades"; paint(rows, true); setMeta({ tf, source: "TradingView", live: true, empty: false, last }); return; }
+            const mc = await nowMc(mint);
+            if (!alive) return;
+            if (mc) { const t0 = Math.floor(Date.now() / 1000 / tf) * tf; rows = [{ time: t0, open: mc, high: mc, low: mc, close: mc, value: 0 }]; source = "price"; paint(rows, true); setMeta({ tf, source: "TradingView", live: true, empty: false, last }); return; }
+            setMeta({ tf, source: "TradingView", note: "busy", empty: true, last: null }); return;
           }
           loaded = true; first = false;
           rows = scaled(got.rows); paint(rows, true); keep(); keepBars(mint, tf, rows);
@@ -629,10 +643,14 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
           catch (e) {
             gfails++;
             if (box.current) box.current.dataset.err = (e as Error).message;
-            if (alive && !loaded && !rows.length) setMeta({ tf, source: "TradingView", note: "The chart's sources are busy", empty: true, last: null });
+            if (alive && !loaded && !rows.length) {
+              const trades = fromTrades(mint, tf);
+              if (trades?.length) { rows = trades; paint(rows, true); setMeta({ tf, source: "TradingView", live: true, empty: false, last }); }
+              else setMeta({ tf, source: "TradingView", note: "The chart's sources are busy", empty: true, last: null });
+            }
           }
         }
-        if (alive) timer = window.setTimeout(gtick, gfails ? Math.min(10_000, 1000 * 2 ** gfails) : !loaded ? 800 : tf < 60 ? 2000 : 3000);
+        if (alive) timer = window.setTimeout(gtick, gfails ? Math.min(10_000, 1000 * 2 ** gfails) : !loaded ? (rows.length ? 5000 : 800) : tf < 60 ? 2000 : 3000);
       };
       gtick(); price();
       return () => { alive = false; unframe(); clearTimeout(timer); clearTimeout(ptimer); removeChart(); s.current = {}; setHover(null); setTip(null); };
@@ -748,6 +766,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       // What the chart holds, readable from outside (scripts/chart-probe.mjs measures the live chart with it).
       if (box.current) Object.assign(box.current.dataset, { last: String(last?.time ?? ""), n: String(rows.length), first: String(firstTime ?? ""), src: d.source || "", polls: String(polls), close: String(last?.close ?? "") });
       remember(key, raw);
+      if (!rows.length && first && !replayOn && !fellBack.has(`${mint}:tv`)) { fellBack.add(`${mint}:blix`); setSrcState("tv"); return; }
       setMeta({ tf, source: d.source, live: d.live, note: d.note, empty: !rows.length, last });
       first = false;
     };
@@ -758,7 +777,13 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       catchUp = false;
       if (!document.hidden) {
         try { await load(++polls % 20 === 0); fails = 0; if (box.current) box.current.dataset.err = ""; }
-        catch (e) { fails++; if (box.current) box.current.dataset.err = (e as Error).message; if (alive && first && !framed) setMeta({ tf, note: (e as Error).message, empty: true, last: null }); }
+        catch (e) {
+          fails++; if (box.current) box.current.dataset.err = (e as Error).message;
+          if (alive && first && !framed) {
+            if (fails >= 2 && !replayOn && !fellBack.has(`${mint}:tv`)) { fellBack.add(`${mint}:blix`); setSrcState("tv"); return; }
+            setMeta({ tf, note: (e as Error).message, empty: true, last: null });
+          }
+        }
       }
       // Faster polls on every size: a coin with no stream (a non-pump pool) moves on the poll alone, and the
       // poll is cheap for the radar (the store answers from the last candle on).
