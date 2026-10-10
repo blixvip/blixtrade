@@ -1,7 +1,8 @@
-// The card that opens when the pointer rests on a Discover coin's picture or name, like Axiom's: the coin's
+// The card that opens when the pointer rests on a Discover coin's pair cell, like Axiom's: the coin's
 // DexScreener banner (its own picture, blurred, when it has none), picture, ticker, market cap and change, then
 // volume, liquidity, holders, top 10, dev, age and the contract with a copy button, and a watchlist star.
-// It opens 220 ms after the pointer arrives, stays while the pointer is on the trigger or the card, and closes
+// It opens 220 ms after the pointer rests on the pair cell (not on its own links, buttons or faces), beside it, stays while
+// the pointer is on the cell or the card, and closes
 // 150 ms after it has left both. One card at a time on the page; scrolling closes it.
 import { cloneElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -14,34 +15,44 @@ import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { pick, type Row, type Tf } from "./parts";
 
-const W = 300, H = 330;
+const W = 300, H = 400;   // the card's width and (about) its height
 let closeOthers: (() => void) | null = null;
 
-type Trigger = ReactElement<{ onPointerEnter?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; ref?: unknown }>;
+type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; ref?: unknown }>;
+// Inside the trigger, these keep their own hover (links, the X card, buttons, the known-holder faces): no coin card there.
+const OWN = "a, button, [data-known-holders]";
 export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigger }) {
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
-  const anchor = useRef<HTMLElement | null>(null), timer = useRef(0);
+  const anchor = useRef<HTMLElement | null>(null), timer = useRef(0), waiting = useRef(false), open = useRef(false);
+  open.current = pos != null;
   useEffect(() => () => clearTimeout(timer.current), []);
-  const close = () => { clearTimeout(timer.current); setPos(null); };
-  const show = (e: unknown) => {
-    if ((e as PointerEvent)?.pointerType && (e as PointerEvent).pointerType !== "mouse") return;
-    clearTimeout(timer.current);
+  const close = () => { clearTimeout(timer.current); waiting.current = false; setPos(null); };
+  // Every move over the trigger: on one of its own controls the card goes away; anywhere else it opens after a pause.
+  const move = (e: unknown) => {
+    const ev = e as PointerEvent;
+    if (ev?.pointerType && ev.pointerType !== "mouse") return;
+    if ((ev?.target as Element | null)?.closest?.(OWN)) { if (open.current || waiting.current) close(); return; }
+    if (open.current) { clearTimeout(timer.current); return; }
+    if (waiting.current) return;
+    waiting.current = true;
     timer.current = window.setTimeout(() => {
+      waiting.current = false;
       const el = anchor.current;
       if (!el) return;
       if (closeOthers && closeOthers !== close) closeOthers();
       closeOthers = close;
+      // Beside the cell, level with its row, so moving down the column goes from coin to coin (not onto the card).
       const b = el.getBoundingClientRect();
-      const left = Math.max(10, Math.min(b.left, innerWidth - W - 10));
-      setPos(b.bottom + H + 10 > innerHeight && b.top > H ? { left, bottom: innerHeight - b.top + 8 } : { left, top: b.bottom + 8 });
+      const left = b.right + 8 + W <= innerWidth - 10 ? b.right + 8 : Math.max(10, b.left - W - 8);
+      setPos({ left, top: Math.max(10, Math.min(b.top - 6, innerHeight - H - 10)) });
     }, 220);
   };
-  const leave = () => { clearTimeout(timer.current); timer.current = window.setTimeout(close, 150); };
+  const leave = () => { clearTimeout(timer.current); waiting.current = false; timer.current = window.setTimeout(close, 150); };
   useEffect(() => { if (!pos) return; const s = () => close(); addEventListener("scroll", s, true); return () => removeEventListener("scroll", s, true); }, [pos]);
   const p = children.props;
   const trigger = cloneElement(children, {
     ref: (el: HTMLElement | null) => { anchor.current = el; },
-    onPointerEnter: (e: unknown) => { p.onPointerEnter?.(e); show(e); },
+    onPointerMove: (e: unknown) => { p.onPointerMove?.(e); move(e); },
     onPointerLeave: (e: unknown) => { p.onPointerLeave?.(e); leave(); },
   });
   return (

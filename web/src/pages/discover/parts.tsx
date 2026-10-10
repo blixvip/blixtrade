@@ -110,7 +110,8 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
     // so the scrollbar does not jump): opening and scrolling a 50-row list costs only the rows on screen.
     className={cn(grid, "group cursor-pointer border-b border-rule px-4 py-2.5 transition-colors duration-100 [contain-intrinsic-size:auto_74px] [content-visibility:auto] hover:bg-paper-3/60", fresh && "animate-row-in")}>
       {lead}
-      {/* pair info */}
+      {/* pair info: resting anywhere on it opens the coin card (hovercard.tsx), except on its own buttons and faces */}
+      {(() => { const cell = (
       <div className="flex min-w-0 items-center gap-3">
         <span className="relative shrink-0">
           {onHide && (
@@ -128,21 +129,20 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
                 {ext ? ext.img && <img src={ext.img} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <CoinImg mint={r.mint} fallback={r.image} preview={false} />}
               </span>
             );
-            return ext ? pic : <CoinHover r={r} tf={tf}>{pic}</CoinHover>;
+            return pic;
           })()}
           <span className="absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border border-paper-2 bg-paper-2">
             {ext ? <Tip tip={ext.chain}><span className="text-[7px] leading-none font-bold text-ink-2">{ext.tag}</span></Tip> : r.dex === "pumpswap" || r.dex === "pumpfun" ? <PumpLogo className="size-3" /> : <SolanaLogo className="w-2.5" />}
           </span>
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          {/* the ticker and name line opens the coin card too (as the picture does) */}
           {(() => { const line = (
           <span className="flex min-w-0 items-baseline gap-1.5">
             <b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b>
             <span className="truncate text-md text-muted">{r.name}</span>
             {(r.dupes || 1) > 1 && <Tip tip={`${r.dupes} tracked coins use this ticker${r.dupTop ? "; this is the biggest" : ""}`}><span className={cn("shrink-0 rounded-sm px-1 text-2xs font-semibold", r.dupTop ? "bg-up/15 text-up" : "bg-ink/10 text-muted")}>×{r.dupes}</span></Tip>}
           </span>
-          ); return ext ? line : <CoinHover r={r} tf={tf}>{line}</CoinHover>; })()}
+          ); return line; })()}
           <span className="flex min-w-0 items-center gap-2.5 text-sm text-muted">
             <span className={cn("num font-semibold", ageTone(Date.now() - born))}>{ageStr(Date.now() - born)}</span>
             {links.length > 0 && <span className="flex items-center gap-1">{links.map((l) => { const I = LINK_ICON[l.type]; const a = <a href={l.url} target="_blank" rel="noopener noreferrer" className="grid size-5 place-items-center rounded-full bg-paper-4 text-ink-2 transition-colors hover:bg-paper-5 hover:text-ink" aria-label={l.type}><I className="size-3" /></a>; return l.type === "twitter" || l.type === "x" ? <XHover key={l.url} href={l.url}>{a}</XHover> : <Tip key={l.url} tip={l.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48)}>{a}</Tip>; })}</span>}
@@ -152,6 +152,7 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
         </div>
         <KnownHolders mint={r.mint} network={ext?.network} total={s.totalHolders ?? null} />
       </div>
+      ); return ext ? cell : <CoinHover r={r} tf={tf}>{cell}</CoinHover>; })()}
       <Spark v={r.spark} chg={chg} k={`${r.mint}:${tf}`} end={liveEnd ?? r.mc_live} />
       {/* market cap */}
       <div className="flex flex-col items-end"><LiveMc mint={r.mint} value={r.mc_live ?? r.mcap} className="text-md font-semibold text-ink" /><span className={cn("num text-sm", tone(chg))}>{pct(chg)}</span></div>
