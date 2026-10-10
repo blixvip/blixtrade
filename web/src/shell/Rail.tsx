@@ -10,6 +10,7 @@ import { usePulse } from "@/lib/pulse";
 import { loadMe, useDesktop, useMe } from "@/lib/ui";
 import { depositPaper, loadPaperWallet, setPaper, setPaperBalance, useTrade, type PaperWallet } from "@/lib/mode";
 import { toast } from "@/components/ui/toast";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { PoweredBy, SolanaLogo } from "@/components/brand";
@@ -28,15 +29,23 @@ function AccountIcon({ className }: SVGProps<SVGSVGElement>) {
   return <AccountAvatar me={me} className={cn(className, "size-5 ring-1 ring-rule-2")} />;
 }
 const MAIN: Item[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse], ["feed", "Feed", NavIcon.feed], ["narratives", "Narratives", NavIcon.narratives],
-  ["traders", "Top traders", NavIcon.traders], ["launch", "Create", NavIcon.launch], ["ai-picks", "AI picks", NavIcon.picks], ["account", "Portfolio", AccountIcon]];
+  ["traders", "Top traders", NavIcon.traders], ["launch", "Create", NavIcon.launch], ["ai-picks", "AI early picks", NavIcon.picks], ["account", "Portfolio", AccountIcon]];
 const MORE: Item[] = [["health", "Health", NavIcon.health], ["api", "API", NavIcon.api], ["mcp", "MCP", NavIcon.mcp], ["settings", "Settings", NavIcon.settings]];
 // Every page, for anything that needs a page's name (main.tsx).
 export const NAV: { group: string; items: Item[] }[] = [{ group: "Main", items: MAIN }, { group: "More", items: MORE }];
 
-// Static wordmark: no idle glow, blur, or continuous sheen animation.
-const MARK_MASK = { maskImage: "url(brand/blix-chrome-sm.webp)", maskMode: "luminance", maskSize: "100% 100%", WebkitMaskImage: "url(brand/blix-chrome-sm.webp)", WebkitMaskSize: "100% 100%" } as const;
+// The rail's lockup: the eye (Blix's app icon) on a raised tile, then the chrome BLIX wordmark (brand art, black
+// background masked away by its own brightness). Static: no idle glow, blur or sheen.
+const WORD_MASK = { maskImage: "url(brand/blix-chrome-sm.webp)", maskMode: "luminance", maskSize: "100% 100%", WebkitMaskImage: "url(brand/blix-chrome-sm.webp)", WebkitMaskSize: "100% 100%" } as const;
 function Mark() {
-  return <span style={MARK_MASK} className="block aspect-[300/130] w-full"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} decoding="async" draggable={false} className="block size-full select-none" /></span>;
+  return (
+    <span className="flex items-center gap-2">
+      <span className="relative grid size-9 shrink-0 place-items-center overflow-hidden rounded-[11px] bg-black shadow-[inset_0_1px_0_oklch(100%_0_0/0.16),0_0_0_1px_oklch(100%_0_0/0.09),0_6px_14px_-6px_oklch(0%_0_0/0.7)]">
+        <img src="brand/blix-eye.webp" alt="" width={96} height={96} decoding="async" draggable={false} className="size-full scale-[1.08] object-cover select-none" />
+      </span>
+      <span style={WORD_MASK} className="block aspect-[300/130] h-10 shrink-0"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} decoding="async" draggable={false} className="block size-full select-none" /></span>
+    </span>
+  );
 }
 
 // Solana's own logomark, wherever an amount is in SOL (components/brand.tsx).
@@ -107,39 +116,70 @@ function TapeRow() {
 // tooltip) so the bar never runs off a phone.
 const paperSol = (n: number) => { const a = Math.abs(n); return a >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : a >= 1e3 ? `${(n / 1e3).toFixed(a >= 1e4 ? 1 : 2)}K` : n.toFixed(2); };
 
-// The rail: Discover, Pulse and Narratives first (the owner's order), then the rest. API, MCP, Account and
+// The rail: Discover, Pulse and Feed first (the owner's order), then the rest, Narratives under Create. API, MCP, Account and
 // Settings sit apart at the bottom. Health is off the rail (still at #/health).
-const SIDE: (Item | [...Item, string])[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse, "LIVE"], ["feed", "Feed", NavIcon.feed], ["narratives", "Narratives", NavIcon.narratives],
+const SIDE: (Item | [...Item, string])[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse, "LIVE"], ["feed", "Feed", NavIcon.feed],
   ["traders", "Top traders", NavIcon.traders],
   ["launch", "Create", NavIcon.launch, "NEW"],
-  ["ai-picks", "AI picks", NavIcon.picks]];
+  ["ai-picks", "AI early picks", NavIcon.picks],
+  // Under Create (the owner, 2026-10-10); AI early picks stays right under Create as its sub-item.
+  ["narratives", "Narratives", NavIcon.narratives],
+  ["practice", "Practice", NavIcon.replay]];
 const FOOT: Item[] = [["api", "API", NavIcon.api], ["mcp", "MCP", NavIcon.mcp], ["account", "Account", AccountIcon], ["settings", "Settings", NavIcon.settings]];
 
-function RailLink({ item: [route, label, Ic, badge], active, sub }: { item: Item | [...Item, string]; active: boolean; sub?: boolean }) {
+// One page in the rail. The page you are on sits on a raised tile with its icon filled in; the rest are outlines.
+function RailLink({ item: [route, label, Ic, badge], active }: { item: Item | [...Item, string]; active: boolean }) {
   return (
     <a href={pageHref(route)} aria-current={active ? "page" : undefined}
-      className={cn("group flex h-9 min-w-0 items-center gap-3 rounded-control px-3 text-lg whitespace-nowrap transition-colors duration-100",
-        active ? "bg-paper-4 font-semibold text-ink shadow-raised" : "text-ink-2 hover:bg-paper-3 hover:text-ink")}>
-      <Ic className={cn("size-5 shrink-0 transition-colors duration-100 [&_.duo]:transition-opacity", active ? "text-ink [&_.duo]:opacity-35" : "text-muted group-hover:text-ink-2")} />
+      className={cn("group relative flex h-9 min-w-0 items-center gap-2.5 rounded-[10px] px-2.5 text-[0.9375rem] font-medium tracking-[-0.01em] whitespace-nowrap transition-[background-color,color] duration-150",
+        active ? "bg-paper-4 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.06),0_1px_2px_oklch(0%_0_0/0.35)]" : "text-ink-2 hover:bg-paper-3/70 hover:text-ink")}>
+      <Ic className={cn("size-[18px] shrink-0 transition-colors duration-150 [&_.duo]:transition-opacity [&_.duo]:duration-150", active ? "text-ink [&_.duo]:opacity-25" : "text-muted group-hover:text-ink-2")} />
       <span className="min-w-0 truncate">{label}</span>
-      {badge && <em className={cn("ml-auto shrink-0 rounded-chip border px-1.5 text-2xs font-semibold not-italic", badge === "LIVE" ? "border-up/40 text-up" : "border-rule-2 text-muted")}>{badge}</em>}
+      {badge === "LIVE" ? (
+        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] font-bold tracking-[0.06em] text-up">
+          <i className="relative flex size-1.5"><i className="absolute inset-0 animate-ping rounded-full bg-up/60 motion-reduce:animate-none" /><i className="relative size-1.5 rounded-full bg-up" /></i>LIVE
+        </span>
+      ) : badge ? (
+        <span className="ml-auto shrink-0 rounded-full bg-ink/[0.08] px-1.5 py-px text-[10px] font-bold tracking-[0.06em] text-ink-2 shadow-[inset_0_0_0_1px_oklch(100%_0_0/0.08)]">{badge}</span>
+      ) : null}
     </a>
   );
 }
 
-// The chart replay for practising trades: its own page at blixvip.com/demo (the Worker, behind a password), so a
-// plain link out of the terminal. Everyone sees it; the page asks for the key.
-function ReplayLink({ compact }: { compact?: boolean }) {
-  if (compact) return (
+// The rail's foot: who is signed in (to the account page), then API, MCP and Settings as a row of icon buttons.
+function RailFoot({ route, owner }: { route: string; owner: boolean }) {
+  const me = useMe((s) => s.me);
+  const tools = shown(FOOT.filter(([r]) => r !== "account"), owner);
+  const name = me?.signedIn ? me.name || me.email?.split("@")[0] || "Account" : "Sign in";
+  return (
+    <div className="mt-auto flex flex-col gap-1.5 border-t border-rule pt-2.5">
+      <a href={pageHref("account")} aria-current={route === "account" ? "page" : undefined}
+        className={cn("flex min-w-0 items-center gap-2.5 rounded-[10px] px-2 py-1.5 transition-colors duration-150", route === "account" ? "bg-paper-4" : "hover:bg-paper-3/70")}>
+        <AccountIcon className="size-7 shrink-0 text-muted" />
+        <span className="flex min-w-0 flex-col leading-tight">
+          <b className="truncate text-sm font-semibold text-ink">{name}</b>
+          <span className="truncate text-xs text-muted">{me?.signedIn ? "Portfolio & wallet" : "Save trades and theses"}</span>
+        </span>
+      </a>
+      <div className="flex items-center gap-1 px-0.5">
+        {tools.map(([r, label, Ic]) => (
+          <Tip key={r} tip={label}>
+            <a href={pageHref(r)} aria-label={label} aria-current={route === r ? "page" : undefined}
+              className={cn("grid h-8 flex-1 place-items-center rounded-[9px] transition-colors duration-150", route === r ? "bg-paper-4 text-ink" : "text-muted hover:bg-paper-3/70 hover:text-ink")}>
+              <Ic className="size-[17px]" />
+            </a>
+          </Tip>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Practice on phones, at the end of the bottom bar (on desktop it is a rail item).
+function ReplayLink() {
+  return (
     <a href="#/practice" className="flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 py-2 text-2xs whitespace-nowrap text-muted">
       <NavIcon.replay className="size-4.5" />Practice
-    </a>
-  );
-  return (
-    <a href="#/practice" title="Practise a trade on a real chart, replayed"
-      className="group flex h-9 items-center gap-3 rounded-control px-3 text-lg whitespace-nowrap text-ink-2 transition-colors duration-100 hover:bg-paper-3 hover:text-ink">
-      <NavIcon.replay className="size-5 shrink-0 text-muted transition-colors duration-100 group-hover:text-ink-2" />
-      <span>Practice</span>
     </a>
   );
 }
@@ -150,18 +190,13 @@ const shown = <T extends Item | [...Item, string]>(items: T[], owner: boolean) =
 export function Rail({ route }: { route: string }) {
   const owner = useRole() === "owner";
   return (
-    <aside className="flex h-dvh w-48 shrink-0 flex-col gap-1 border-r border-rule bg-paper/80 px-2 py-3 max-md:hidden">
-      <a href="#/" aria-label="Blix, home" className="mt-1 mb-3 block w-[136px] px-2.5"><Mark /></a>
+    <aside className="flex h-dvh w-52 shrink-0 flex-col border-r border-rule bg-paper/80 px-2.5 pt-4 pb-2.5 max-md:hidden">
+      <a href="#/" aria-label="Blix, home" className="mb-3 block self-start rounded-[10px] px-1.5 py-0.5"><Mark /></a>
       <PoweredBy />
       <nav aria-label="Pages" className="flex min-h-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto [scrollbar-width:none]">
-        {shown(SIDE, owner).map((it, i, list) => <RailLink key={it[0]} item={it} active={route === it[0]} sub={it[0] === "ai-picks" && list[i - 1]?.[0] === "launch"} />)}
-        <ReplayLink />
+        {shown(SIDE, owner).map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
       </nav>
-      <div className="mt-auto flex flex-col gap-2 pt-2">
-        <div className="flex flex-col gap-0.5 border-t border-rule pt-2">
-          {shown(FOOT, owner).map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
-        </div>
-      </div>
+      <RailFoot route={route} owner={owner} />
     </aside>
   );
 }
@@ -221,7 +256,7 @@ function PaperBalance({ w, onDone }: { w: PaperWallet; onDone: () => void }) {
   };
   const target = Number(v), ok = v.trim() !== "" && Number.isFinite(target) && target >= 0 && Math.abs(target - +w.cash.toFixed(3)) > 1e-9;   // the box shows 3 decimals
   const set = () => { if (ok) run(() => setPaperBalance(target), (x) => `Paper balance set to ${+x.cash.toFixed(3)} SOL`).then(onDone); };
-  const usdOf = (sol: number) => (w.solUsd > 0 ? `≈ $${(sol * w.solUsd).toLocaleString("en-US", { maximumFractionDigits: sol * w.solUsd >= 100 ? 0 : 2 })}` : null);
+  const usdOf = (sol: number) => (w.solUsd > 0 ? `$${(sol * w.solUsd).toLocaleString("en-US", { maximumFractionDigits: sol * w.solUsd >= 100 ? 0 : 2 })}` : null);
   const dollars = usdOf(w.cash);
   return (
     <div role="dialog" aria-label="Paper balance"
@@ -304,7 +339,7 @@ export function BottomBar({ route }: { route: string }) {
           <Ic className="size-4.5" />{label}
         </a>
       ))}
-      <ReplayLink compact />
+      <ReplayLink />
     </nav>
   );
 }
