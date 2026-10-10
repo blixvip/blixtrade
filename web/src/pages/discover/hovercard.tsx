@@ -1,7 +1,7 @@
 // The card that opens when the pointer rests on a Discover coin's picture or name, like Axiom's: the coin's
 // DexScreener banner (its own picture, blurred, when it has none), picture, ticker, market cap and change, then
 // volume, liquidity, holders, top 10, dev, age and the contract with a copy button, and a watchlist star.
-// It opens 300 ms after the pointer arrives, stays while the pointer is on the trigger or the card, and closes
+// It opens 220 ms after the pointer arrives, stays while the pointer is on the trigger or the card, and closes
 // 150 ms after it has left both. One card at a time on the page; scrolling closes it.
 import { cloneElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -34,7 +34,7 @@ export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigg
       const b = el.getBoundingClientRect();
       const left = Math.max(10, Math.min(b.left, innerWidth - W - 10));
       setPos(b.bottom + H + 10 > innerHeight && b.top > H ? { left, bottom: innerHeight - b.top + 8 } : { left, top: b.bottom + 8 });
-    }, 300);
+    }, 220);
   };
   const leave = () => { clearTimeout(timer.current); timer.current = window.setTimeout(close, 150); };
   useEffect(() => { if (!pos) return; const s = () => close(); addEventListener("scroll", s, true); return () => removeEventListener("scroll", s, true); }, [pos]);

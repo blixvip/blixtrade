@@ -10,7 +10,8 @@
 // Signed out (the fresh /app is a redirect to /start): the kept page is dropped and the open page reloads.
 // To switch it off for everyone: replace this file with one that calls self.registration.unregister() and
 // deletes the blix-* caches, and deploy web/dist.
-const PAGE = "blix-page-v1", FILES = "blix-files-v1", META = "blix-meta-v1";
+// blix-page-v2 (2026-10-10): every kept page dropped once; old builds had an Update bar that could not leave them.
+const PAGE = "blix-page-v2", FILES = "blix-files-v1", META = "blix-meta-v1";
 const FRESH_MS = 15 * 60_000;   // under blix_m's 20 minutes (worker/index.js memberCookie)
 const MAX_FILES = 400;
 const ASSET = /^\/assets\/[\w.-]+$/;

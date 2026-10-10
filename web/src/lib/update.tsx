@@ -32,7 +32,7 @@ async function update() {
     } catch { /* reload anyway */ }
     await new Promise((ok) => setTimeout(ok, 1500));
   }
-  try { await caches.delete("blix-page-v1"); } catch { /* no service worker here */ }
+  try { await caches.delete("blix-page-v2"); } catch { /* no service worker here */ }
   location.reload();
 }
 

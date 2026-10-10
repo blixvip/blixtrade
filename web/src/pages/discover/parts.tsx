@@ -135,12 +135,14 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
           </span>
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
+          {/* the ticker and name line opens the coin card too (as the picture does) */}
+          {(() => { const line = (
           <span className="flex min-w-0 items-baseline gap-1.5">
-            {ext ? <b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b>
-              : <CoinHover r={r} tf={tf}><b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b></CoinHover>}
+            <b className="max-w-36 shrink-0 truncate text-lg font-semibold text-ink">{r.symbol || "?"}</b>
             <span className="truncate text-md text-muted">{r.name}</span>
             {(r.dupes || 1) > 1 && <Tip tip={`${r.dupes} tracked coins use this ticker${r.dupTop ? "; this is the biggest" : ""}`}><span className={cn("shrink-0 rounded-sm px-1 text-2xs font-semibold", r.dupTop ? "bg-up/15 text-up" : "bg-ink/10 text-muted")}>×{r.dupes}</span></Tip>}
           </span>
+          ); return ext ? line : <CoinHover r={r} tf={tf}>{line}</CoinHover>; })()}
           <span className="flex min-w-0 items-center gap-2.5 text-sm text-muted">
             <span className={cn("num font-semibold", ageTone(Date.now() - born))}>{ageStr(Date.now() - born)}</span>
             {links.length > 0 && <span className="flex items-center gap-1">{links.map((l) => { const I = LINK_ICON[l.type]; const a = <a href={l.url} target="_blank" rel="noopener noreferrer" className="grid size-5 place-items-center rounded-full bg-paper-4 text-ink-2 transition-colors hover:bg-paper-5 hover:text-ink" aria-label={l.type}><I className="size-3" /></a>; return l.type === "twitter" || l.type === "x" ? <XHover key={l.url} href={l.url}>{a}</XHover> : <Tip key={l.url} tip={l.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48)}>{a}</Tip>; })}</span>}
