@@ -27,19 +27,20 @@
    the light goes through the same mask, so only the chrome is lit. When the app has drawn its first frame the
    screen fades and lifts away (the script after it); colours are the page's own (src/styles/app.css). */
 html,body{height:100%;margin:0;background:oklch(18% 0 0)}
-#boot{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;overflow:hidden;
+.blix-load{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px}
+#boot{position:fixed;inset:0;z-index:2147483000;overflow:hidden;
   background:radial-gradient(120% 90% at 50% 46%,oklch(21% 0 0) 0%,oklch(16.5% 0 0) 55%,oklch(13% 0 0) 100%);
   transition:opacity .5s cubic-bezier(.16,1,.3,1),visibility .5s}
-#boot .b-glow{position:absolute;left:50%;top:46%;width:min(560px,120vw);aspect-ratio:1;translate:-50% -50%;border-radius:50%;
+.blix-load .b-glow{position:absolute;left:50%;top:46%;width:min(560px,120vw);aspect-ratio:1;translate:-50% -50%;border-radius:50%;
   background:radial-gradient(closest-side,oklch(100% 0 0/.075),oklch(100% 0 0/.02) 55%,transparent);filter:blur(18px);animation:b-glow 3.6s ease-in-out infinite}
-#boot .b-mark{position:relative;width:min(232px,56vw);aspect-ratio:600/260;
+.blix-load .b-mark{position:relative;width:min(232px,56vw);aspect-ratio:600/260;
   -webkit-mask:url(brand/blix-chrome.webp) center/100% 100% no-repeat;mask:url(brand/blix-chrome.webp) luminance center/100% 100% no-repeat;
   animation:b-in 1s cubic-bezier(.16,1,.3,1) both;transition:transform .5s cubic-bezier(.16,1,.3,1),filter .5s}
-#boot .b-mark::before{content:"";position:absolute;inset:0;background:url(brand/blix-chrome.webp) center/100% 100% no-repeat}
-#boot .b-mark::after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 38%,oklch(100% 0 0/.18) 45%,oklch(100% 0 0/.95) 50%,oklch(100% 0 0/.18) 55%,transparent 62%) no-repeat;
+.blix-load .b-mark::before{content:"";position:absolute;inset:0;background:url(brand/blix-chrome.webp) center/100% 100% no-repeat}
+.blix-load .b-mark::after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 38%,oklch(100% 0 0/.18) 45%,oklch(100% 0 0/.95) 50%,oklch(100% 0 0/.18) 55%,transparent 62%) no-repeat;
   background-size:260% 100%;animation:b-sheen 2.6s cubic-bezier(.45,0,.25,1) .55s infinite}
-#boot .b-bar{position:relative;width:104px;height:2px;border-radius:2px;overflow:hidden;background:oklch(100% 0 0/.08);animation:b-fade .7s .45s cubic-bezier(.16,1,.3,1) both}
-#boot .b-bar i{position:absolute;inset:0 auto 0 0;width:42%;border-radius:2px;background:linear-gradient(90deg,transparent,oklch(100% 0 0/.9),transparent);animation:b-run 1.3s cubic-bezier(.65,0,.35,1) infinite}
+.blix-load .b-bar{position:relative;width:104px;height:2px;border-radius:2px;overflow:hidden;background:oklch(100% 0 0/.08);animation:b-fade .7s .45s cubic-bezier(.16,1,.3,1) both}
+.blix-load .b-bar i{position:absolute;inset:0 auto 0 0;width:42%;border-radius:2px;background:linear-gradient(90deg,transparent,oklch(100% 0 0/.9),transparent);animation:b-run 1.3s cubic-bezier(.65,0,.35,1) infinite}
 #boot.out{opacity:0;visibility:hidden}
 #boot.out .b-mark{transform:scale(1.06);filter:blur(6px)}
 @keyframes b-in{from{opacity:0;transform:translateY(8px) scale(.94);filter:blur(12px)}}
@@ -47,7 +48,7 @@ html,body{height:100%;margin:0;background:oklch(18% 0 0)}
 @keyframes b-glow{0%,100%{opacity:.55;scale:.92}50%{opacity:1;scale:1.05}}
 @keyframes b-run{from{translate:-110% 0}to{translate:250% 0}}
 @keyframes b-fade{from{opacity:0;transform:scaleX(.4)}}
-@media (prefers-reduced-motion:reduce){#boot *,#boot *::before,#boot *::after{animation:none!important}#boot .b-bar i{translate:70% 0}}
+@media (prefers-reduced-motion:reduce){.blix-load *,.blix-load *::before,.blix-load *::after{animation:none!important}.blix-load .b-bar i{translate:70% 0}}
 </style>
 <script>
 // The reads the page on screen makes, started now, before its scripts have loaded. src/lib/api.ts remembers them
@@ -87,10 +88,12 @@ html,body{height:100%;margin:0;background:oklch(18% 0 0)}
 </head>
 <body>
 <div id="root"></div>
-<div id="boot" role="status" aria-label="Loading Blix"><span class="b-glow"></span><span class="b-mark"></span><span class="b-bar"><i></i></span></div>
+<div id="boot" class="blix-load" role="status" aria-label="Loading Blix"><span class="b-glow"></span><span class="b-mark"></span><span class="b-bar"><i></i></span></div>
 <script>
-// Lift the loading screen once the app has drawn: when React first puts something in #root, two frames later (it is
-// painted by then), after at least a short beat so the wordmark is not a flash. Fifteen seconds at most whatever happens.
+// Lift the loading screen once the app has drawn: when React has put something in #root that is not itself still
+// loading (a page showing the same wordmark loader, components/page.tsx BrandLoader, keeps this one up instead, so
+// there is one loader, never two in a row), two frames later (painted by then), after at least a short beat so the
+// wordmark is not a flash. Fifteen seconds at most whatever happens.
 (function () {
   var boot = document.getElementById("boot"), root = document.getElementById("root"), t0 = Date.now(), gone = false;
   if (!boot || !root) return;
@@ -103,9 +106,10 @@ html,body{height:100%;margin:0;background:oklch(18% 0 0)}
       }); });
     }, Math.max(0, 420 - (Date.now() - t0)));
   }
-  if (root.firstElementChild) return lift();
-  var watch = new MutationObserver(function () { if (root.firstElementChild) { watch.disconnect(); lift(); } });
-  watch.observe(root, { childList: true });
+  var ready = function () { return root.firstElementChild && !root.querySelector("[data-brand-loader]"); };
+  if (ready()) return lift();
+  var watch = new MutationObserver(function () { if (ready()) { watch.disconnect(); lift(); } });
+  watch.observe(root, { childList: true, subtree: true });
   setTimeout(lift, 15000);
 })();
 </script>
