@@ -270,6 +270,15 @@ async function handleMember(req, env, ctx, url, member, owner) {
       else { await env.REG.put("origin", origin); cached = { origin, t: Date.now() }; }
       return new Response(JSON.stringify({ ok: true, origin }), { headers: { "content-type": "application/json" } });
     }
+    // The server's own read of every member's sign-up record (name, photo, joined, last seen, where from), for the
+    // owner's wallet dashboard (server/vaultpeople.js, every few minutes): the edge key only, never a browser.
+    if (url.pathname === "/__edge/members") {
+      if (req.method !== "GET" || !env.EDGE_KEY || !timingSafeEqual(req.headers.get("x-blix-edge") || "", env.EDGE_KEY)) return new Response("no", { status: 403 });
+      try {
+        const { results } = await env.DB.prepare("SELECT email, name, picture, created, last_seen, logins, country, city, referrer, ua, status, handle, ref FROM accounts ORDER BY created DESC LIMIT 5000").all();
+        return new Response(JSON.stringify({ now: Date.now(), accounts: results }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+      } catch (e) { return new Response(JSON.stringify({ error: "D1 unavailable" }), { status: 503, headers: { "content-type": "application/json" } }); }
+    }
     // The registered origins, re-read every 20 s; a KV read that fails keeps the last known one (and is not retried
     // on every request).
     // Both at once, from KV's edge copy (cacheTtl 60 s): read one after the other they were two waits in a row.
