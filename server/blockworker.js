@@ -177,7 +177,10 @@ async function block(slot) {
 // about as many blocks a second as the chain makes (2026-10-09), so after a restart or a rate-limited stretch the
 // backlog can stay. A slot that leaves the backlog unread (older than BACK_MAX, or refused 40 times) is said as
 // "lost": the radar records that moment as a gap, and a chart opened on it reads its coin back from the chain.
-const LAG_MAX = 60, BACK_MAX = 2800;   // slots (~13 s, ~10 min at ~215 ms a slot)
+// LAG_MAX: the free sources read ~2 of the chain's ~4.6 blocks a second (2026-10-11), so the follower can never
+// catch up; chasing in order it fell 60 slots (~13 s) behind before jumping, and every fee (coinfees.js) and missed
+// trade was that late. It now jumps after 10 slots (~2 s): the same share of blocks is read, always the newest.
+const LAG_MAX = 10, BACK_MAX = 2800;   // slots (~2 s, ~10 min at ~215 ms a slot)
 const inflight = new Set();
 const backlog = [];                    // [from, to] slot ranges (inclusive), oldest first
 const retry = new Map();               // slot -> { n: tries, at: when to try again }
