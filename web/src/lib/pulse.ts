@@ -46,7 +46,13 @@ export const usePulse = create<PulseState>(() => ({
   coins: {}, cols: { new: [], running: [], stretch: [], migrated: [] }, live: {}, pressure: 0, connected: false, polling: false, loaded: false,
 }));
 
-const withBorn = (c: Coin, prev?: Coin): Coin => ({ ...c, born: prev?.born ?? Date.now() - (c.age || 0) });
+// A coin keeps the `born` it was given (so its age never jitters between polls), except when the board's own
+// clock moved it: a coin that migrates is born again at its pool's creation (server/pulse.js row age), so in
+// Migrated it reads "1s" and sits on top, not its launch age halfway down.
+const withBorn = (c: Coin, prev?: Coin): Coin => {
+  const fromAge = Date.now() - (c.age || 0);
+  return { ...c, born: prev && (prev.graduated === c.graduated || Math.abs(prev.born - fromAge) < 30_000) ? prev.born : fromAge };
+};
 
 // The figures the trade stream keeps current. A poll is older than the stream, so for a coin the stream
 // touched in the last few seconds these stay as they are instead of jumping back and flashing.
