@@ -38,6 +38,19 @@ const CHECKS = [
   ["disk", 1, async () => { const st = fs.statfsSync(DATA), free = (st.bavail * st.bsize) / 1e9; return free < 5 ? `Only ${free.toFixed(1)} GB free on the VM's disk (a full disk stops the site)` : null; }],
   ["services", 2, async () => { const down = ["blix", "blix-vault", "cloudflared"].filter((u) => unit(u) !== "active"); return down.length ? `Not running: ${down.join(", ")}` : null; }],
   ["backup", 1, async () => (failed("blix-backup") ? "Last night's backup failed (journalctl -u blix-backup on the VM says why)" : null)],
+  // The one thing on the VM a person has to renew: its Fomo login (a copy of the owner's, bin/fomo-session.mjs).
+  // When it runs out, Fomo charts, holders and the Fomo lists stop; the health text says so and how to put it back.
+  ["fomo-login", 3, async () => {
+    const r = await get("http://127.0.0.1:4420/api/health", { host: "localhost:4420" }, 30000);
+    if (r.status !== 200) return null;   // the "prices" check reports an unreachable radar
+    let j; try { j = JSON.parse(r.body); } catch { return null; }
+    for (const key of ["fomo", "fomochart", "browser"]) {
+      const p = j.parts?.find((x) => x.key === key);
+      const text = `${p?.summary || ""} ${p?.lastError || ""}`;
+      if (p && (p.state === "down" || /login has run out|signed out|No Fomo sign-in token/i.test(text))) return `Fomo login on the VM needs renewing (${key}): ${text.slice(0, 300)}`;
+    }
+    return null;
+  }],
 ];
 
 async function mail(subject, text) {
