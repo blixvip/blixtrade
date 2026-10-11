@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { api, apiAged, streamFailed, streamInit, streamUrl } from "./api";
 import { picReady } from "./pics";
 import { setPx } from "./livepx";
+import { store } from "./utils";
 import { receiveMetrics, metricSession, metricReplayGuard } from './metrics';
 import type { Trade } from "./coin";
 
@@ -40,10 +41,33 @@ interface PulseState {
   // live stream): the figures are still current, just refreshed by polling.
   polling: boolean;
   loaded: boolean;
+  // The board this browser last had on screen, back before the radar has answered (a refresh paints the columns
+  // as they were, ages still right, instead of a skeleton; the first real board then replaces them).
+  restored: boolean;
+}
+
+// The board as it was when the page was last left or 30 s before: ~200 KB, this browser's localStorage, taken
+// back for 15 minutes. `lt` (the browser's own trade clock) is dropped so a stale figure never outranks the board's.
+const SNAP = "pulse:board", SNAP_TTL = 15 * 60_000;
+function readSnapshot(): Pick<PulseState, "coins" | "cols" | "live" | "restored"> {
+  const empty = { coins: {}, cols: { new: [], running: [], stretch: [], migrated: [] }, live: {}, restored: false };
+  const v = store.get<{ t: number; coins: Record<string, Coin>; cols: Record<ColKey, string[]>; live: Live } | null>(SNAP, null);
+  if (!v || !v.coins || !v.cols || Date.now() - v.t > SNAP_TTL) return empty;
+  const coins: Record<string, Coin> = {};
+  for (const m in v.coins) { const { lt: _lt, live: _live, ...c } = v.coins[m] as Coin & { lt?: number }; coins[m] = c as Coin; }
+  const cols = { new: v.cols.new || [], running: v.cols.running || [], stretch: v.cols.stretch || [], migrated: v.cols.migrated || [] };
+  return { coins, cols, live: v.live || {}, restored: Object.values(cols).some((l) => l.length > 0) };
+}
+export function saveSnapshot() {
+  const s = usePulse.getState();
+  if (!s.loaded) return;
+  const coins: Record<string, Coin> = {};
+  for (const list of Object.values(s.cols)) for (const m of list) if (s.coins[m]) coins[m] = s.coins[m];
+  store.set(SNAP, { t: Date.now(), coins, cols: s.cols, live: s.live });
 }
 
 export const usePulse = create<PulseState>(() => ({
-  coins: {}, cols: { new: [], running: [], stretch: [], migrated: [] }, live: {}, pressure: 0, connected: false, polling: false, loaded: false,
+  ...readSnapshot(), pressure: 0, connected: false, polling: false, loaded: false,
 }));
 
 // A coin keeps the `born` it was given (so its age never jitters between polls), except when the board's own
@@ -395,5 +419,10 @@ export function startPulse() {
     setTimeout(poll, usePulse.getState().connected ? (onPulse ? 15_000 : 60_000) : 2000);
   };
   poll();
-  return () => { stopped = true; clearInterval(watchdog); clearTimeout(retry); clearTimeout(parkTimer); document.removeEventListener("visibilitychange", onShow); es?.close(); };
+  // The board is kept for the next visit: when the page is left (a refresh included) and every 30 s meanwhile.
+  const onHide = () => { if (document.visibilityState === "hidden") saveSnapshot(); };
+  window.addEventListener("pagehide", saveSnapshot);
+  document.addEventListener("visibilitychange", onHide);
+  const keep = setInterval(saveSnapshot, 30_000);
+  return () => { stopped = true; clearInterval(watchdog); clearInterval(keep); clearTimeout(retry); clearTimeout(parkTimer); document.removeEventListener("visibilitychange", onShow); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", saveSnapshot); es?.close(); };
 }

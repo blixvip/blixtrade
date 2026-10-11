@@ -100,7 +100,8 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   // Normal view: hidden coins drop out. Hidden view: only the hidden ones, filters off, so each can be brought back.
   const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf))))));
   const hideAll = () => { if (!mints.length) return; hideCoins(mints); toast(`${mints.length} coin${mints.length === 1 ? "" : "s"} hidden from ${title}. The eye button up top brings them back.`); };
-  const loaded = usePulse((s) => s.loaded);
+  // Rows show from the radar's board, or from the one this browser kept (lib/pulse.ts readSnapshot) until it answers.
+  const loaded = usePulse((s) => s.loaded || s.restored);
   const scroller = useRef<HTMLDivElement>(null);
 
   // Like Padre's and Axiom's trenches: while the pointer is over a column, or it is scrolled down, its order
@@ -204,7 +205,7 @@ function ColumnEmpty({ title, showing, q, own, clearOwn, colFilters, resetCol, s
   const showAll = { label: "Show all coins", onClick: () => setShow("all") };
   if (showing) return <EmptyState brand icon="eye" title="No hidden coins here" hint="Coins you hide from this column show up here, so you can bring them back." />;
   if (q) return <EmptyState brand icon="search" title="No matches" hint={`Nothing in ${title} matches "${q}".`} action={own ? { label: "Clear search", onClick: clearOwn } : null} />;
-  if (colFilters) return <EmptyState brand icon="filter" title="No coins match this column's filters" hint="Loosen them, or reset to see every coin again." action={{ label: "Reset filters", onClick: resetCol }} />;
+  if (colFilters) return <EmptyState brand icon="filter" badge={colFilters} title="No coins match this column's filters" hint={`${colFilters} filter${colFilters === 1 ? " is" : "s are"} on. Loosen ${colFilters === 1 ? "it" : "them"}, or reset to see every coin again.`} action={{ label: "Reset filters", onClick: resetCol }} />;
   if (show === "buy") return <EmptyState brand icon="bolt" title="No buy calls yet" hint={`The AI hasn't called a buy in ${title}. Calls land here the moment it makes one.`} action={showAll} />;
   if (show === "rated") return <EmptyState brand icon="spark" title="No AI-rated coins yet" hint={`Coins in ${title} show here once the AI has rated them.`} action={showAll} />;
   if (show === "noslop") return <EmptyState brand icon="filter" title="Only slop right now" hint={`Every coin in ${title} was flagged as slop. Better ones show up as they launch.`} action={showAll} />;
