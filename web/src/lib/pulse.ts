@@ -229,14 +229,30 @@ function applyLaunch(l: Coin & { mcapSol?: number; solUsd?: number }) {
 
 // The stream sends several trade batches a second. Each one used to be its own store update (and its own render
 // of every column); now they are queued and applied together once per animation frame.
-let queue: { live: LiveRow[]; mig: [string, number][] } = { live: [], mig: [] }, flushing = 0;
+let queue: { live: LiveRow[]; mig: [string, number][]; fees: [string, number][] } = { live: [], mig: [], fees: [] }, flushing = 0;
 function flush() {
   flushing = 0;
   const q = queue;
-  queue = { live: [], mig: [] };
+  queue = { live: [], mig: [], fees: [] };
   // A replayed coin's live market cap (lib/livepx.ts) is the replay's (lib/replay.ts), not the stream's.
   if (q.live.length) { applyLive(q.live); setPx(q.live.filter((r) => !replayed(r[0])).map((r) => [r[0], r[1]]), true); }
   if (q.mig.length) { applyMig(q.mig); setPx(q.mig.filter((r) => !replayed(r[0]))); }
+  if (q.fees.length) applyFees(q.fees);
+}
+
+// Fees paid, the moment the radar's block follower counts them (server.js "fees"): only a coin on the board whose
+// figure grew makes a new store, so the columns re-decide their fee floors at once and nothing else re-renders.
+function applyFees(u: [string, number][]) {
+  usePulse.setState((s) => {
+    let coins: typeof s.coins | null = null;
+    for (const [mint, fees] of u) {
+      const c = (coins || s.coins)[mint];
+      if (!c || !(fees > (c.fees ?? 0))) continue;
+      coins ??= { ...s.coins };
+      coins[mint] = { ...c, fees };
+    }
+    return coins ? { coins } : s;
+  });
 }
 const later = () => { if (!flushing) flushing = document.hidden ? window.setTimeout(flush, 250) : requestAnimationFrame(flush); };
 
@@ -366,6 +382,7 @@ export function startPulse() {
     on("hello"); on("tick");
     on("live", (d) => { for (const r of d.u) queue.live.push(r); later(); });
     on("mig", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
+    on("fees", (d) => { for (const r of d.u) queue.fees.push(r); later(); });
     // Every coin that traded in the last 100 ms, curve or pool: the live figure everywhere a market cap shows.
     on("px", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
     on('metrics', (d) => receiveMetrics(d, replayed));
