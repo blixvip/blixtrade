@@ -87,12 +87,8 @@ export function fitsColumn(t: Coin, f: Filters, col?: Col): boolean {
     peak: t.peak, liq: t.liq, traders: t.traders, chg1m: t.chg1m, chg5: t.chg5, chg1h: t.chg1h,
   };
   if (!feesFit(t, f.feesMin, f.feesMax, col)) return false;
-  // Fees are counted from the chain a little behind the launch: a coin under 5 minutes old with none counted yet
-  // is not held back by a fee floor (it would be hidden exactly while it is new).
-  const young = Date.now() - t.born < 5 * 60_000;
   for (const [stem, v] of Object.entries(figure)) {
     const lo = f[`${stem}Min`], hi = f[`${stem}Max`];
-    if (stem === "fees" && v == null && young && isSet(lo)) continue;
     if (isSet(lo) && (v == null || v < +lo)) return false;
     if (isSet(hi) && v != null && v > +hi) return false;
   }
