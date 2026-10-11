@@ -301,7 +301,6 @@ export function Settings() {
     <div ref={top} className="mx-auto flex w-full max-w-[880px] flex-col gap-5 px-4 pt-6 pb-24 max-md:px-3 max-md:pt-4">
       <header>
         <h1 className="text-3xl leading-none font-bold tracking-[-0.03em]">Settings</h1>
-        <p className="mt-2 text-md text-muted">Your paper wallet and how Blix looks and trades in this browser.</p>
       </header>
       <PaperCard /><DisplayCard /><BrowserCard />
       {/members can|sign in|401|403|forbidden|refused/i.test(error)
@@ -344,7 +343,6 @@ export function Settings() {
     <div ref={top} className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-4 pt-6 pb-3 max-md:px-3 max-md:pt-4 max-md:pb-6">
       <header>
         <h1 className="text-3xl leading-none font-bold tracking-[-0.03em]">Settings</h1>
-        <p className="mt-2 text-md text-muted">How Blix finds, rates, alerts on and trades coins. Changes apply as soon as they are saved.</p>
       </header>
       <div className="grid grid-cols-[15rem_minmax(0,1fr)] items-start gap-8 max-lg:grid-cols-1 max-lg:gap-4">
         <aside className="sticky top-4 flex flex-col gap-3 max-lg:static">

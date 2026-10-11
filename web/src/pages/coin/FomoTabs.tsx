@@ -93,7 +93,7 @@ export function KnownHolders({ f, mc, mint, supply }: { f: CoinFomo | null; mc: 
   if (!f.holders.length) return <Empty title="No Fomo traders hold this coin" text="Known holders are traders on Fomo who hold it now." />;
   const rows = f.holders.map((x) => {
     const move = x.value != null ? x.value * (scale - 1) : 0;
-    const value = x.value != null ? x.value * scale : null, pnl = x.pnl != null || x.value != null ? (x.pnl ?? 0) + move : null;
+    const value = x.value != null ? x.value * scale : null, pnl = x.pnl != null ? x.pnl + move : null;
     return { x, value, pnl, ret: x.cost && pnl != null ? (pnl / x.cost) * 100 : null };
   });
   const top = Math.max(1, ...rows.map((r) => r.value || 0));

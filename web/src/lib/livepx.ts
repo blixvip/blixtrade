@@ -10,11 +10,14 @@ const subs = new Map<string, Set<() => void>>();
 // sit a few percent off it: a coin getting both flipped between the two ($9.8K, $10.3K, $9.8K...) on every page.
 // A weak figure only counts for a coin no trade price has come for in the last 30 s.
 const strongAt = new Map<string, number>();
-export function setPx(u: [mint: string, mc: number][], weak = false) {
-  if (px.size > 30_000) { px.clear(); strongAt.clear(); }
+const canonicalAt = new Map<string, number>();
+export function setPx(u: [mint: string, mc: number][], weak = false, canonical = false) {
+  if (px.size > 30_000) { px.clear(); strongAt.clear(); canonicalAt.clear(); }
   const now = Date.now();
   for (const [m, mc] of u) {
     if (!(mc > 0)) continue;
+    if (canonical) canonicalAt.set(m, now);
+    else if (now - (canonicalAt.get(m) ?? 0) < 10_000) continue;
     if (weak) { if (now - (strongAt.get(m) ?? 0) < 30_000) continue; } else strongAt.set(m, now);
     if (px.get(m) === mc) continue;
     px.set(m, mc);

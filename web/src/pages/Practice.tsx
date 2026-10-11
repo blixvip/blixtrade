@@ -53,7 +53,6 @@ export function Practice() {
     <div className="flex min-w-0 flex-col gap-3 p-3 max-md:pb-20">
       <div>
         <h1 className="chrome-text font-display text-2xl font-semibold tracking-tight">Practice</h1>
-        <p className="mt-1 text-sm text-ink-2">Pick a coin and it opens as its normal page, replayed from its last 24 hours. Rewind to any moment on 1s candles, buy at that market cap with fake SOL, and watch it play out. Space plays or pauses, → steps one trade, H hides the controls.</p>
       </div>
       <form onSubmit={(e) => { e.preventDefault(); go(); }} className="flex gap-2">
         <input value={ca} onChange={(e) => setCa(e.target.value)} placeholder="Paste a coin's address (CA)" spellCheck={false}

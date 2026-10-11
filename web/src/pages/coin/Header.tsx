@@ -3,7 +3,7 @@
 // figures a tile each; the coin's DexScreener banner faint behind it when it has one. Also the switch for the
 // floating instant trade panel (./QuickTrade.tsx).
 import { useChartMc } from "@/lib/chartMc";
-import { XHover } from "@/components/XCard";
+import { XHover, XLinkIcon, xKind, xKindLabel } from "@/components/XCard";
 import { PadLogo, PADS, padOf, SiteLogo } from "@/components/logos";
 import { useEffect, type ReactNode } from "react";
 import { PumpLogo } from "@/components/brand";
@@ -121,7 +121,7 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
                 const key = SOCIAL[l.type || ""] || "link";
                 const I = Icon[key];
                 const site = !SOCIAL[l.type || ""] || l.type === "website";
-                const a = <a href={href} target="_blank" rel="noopener noreferrer nofollow" aria-label={key === "x" ? "X" : key === "tg" ? "Telegram" : key === "web" ? "Website" : key} className={cn(link, BRAND[key])}><I /></a>;
+                const a = <a href={href} target="_blank" rel="noopener noreferrer nofollow" aria-label={key === "x" ? xKindLabel(xKind(href)) : key === "tg" ? "Telegram" : key === "web" ? "Website" : key} className={cn(link, BRAND[key])}>{key === "x" ? <XLinkIcon href={href} /> : <I />}</a>;
                 return key === "x" ? <XHover key={href} href={href}>{a}</XHover> : <Tip key={href} tip={site ? `Website, set by the coin's creator (unverified): ${href}` : href}>{a}</Tip>;
               })}
               <Tip tip="Open on DexScreener"><a href={`https://dexscreener.com/solana/${t.pair || t.mint}`} target="_blank" rel="noreferrer" aria-label="Open on DexScreener" className={link}><SiteLogo site="dexscreener" className="size-3.5" /></a></Tip>

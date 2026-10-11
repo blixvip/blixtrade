@@ -230,13 +230,11 @@ export function Launch() {
   return (
     <div className="mx-auto flex w-full max-w-[1264px] flex-col gap-4 p-3 pb-16">
       <header className="relative overflow-hidden rounded-card border border-rule bg-gradient-to-br from-paper-3 via-paper-2 to-paper-2 p-5 max-sm:p-4">
-        <div aria-hidden className="pointer-events-none absolute -top-24 -right-16 size-72 rounded-full bg-up/10 blur-3xl" />
         <div className="relative flex flex-wrap items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
             <span className="grid size-14 shrink-0 place-items-center rounded-[16px] border border-rule-2 bg-paper shadow-raised max-sm:size-12"><PumpLogo className="size-8 max-sm:size-7" /></span>
             <div className="min-w-0">
               <h1 className="text-2xl leading-none font-bold tracking-tight">Create a coin</h1>
-              <p className="mt-1.5 max-w-xl text-md text-muted">Live on pump.fun in under a minute. It trades on the bonding curve right away and moves to its own pool when the curve fills.</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-sm">
@@ -327,7 +325,7 @@ export function Launch() {
                 <input type="text" inputMode="decimal" autoFocus aria-label="First buy in SOL" value={customText} placeholder="0.00"
                   onChange={(e) => { const t = e.target.value.replace(",", ".").replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1"); setCustomText(t); set("sol", Math.max(0, +t || 0)); }}
                   className="num min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted/60" /></span>}
-              {d.sol > 0 && solUsd > 0 && <span className="num text-sm text-muted">≈ {usd(d.sol * solUsd)}</span>}
+              {d.sol > 0 && solUsd > 0 && <span className="num text-sm text-muted">{usd(d.sol * solUsd)}</span>}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Fig label="Starts at" value={startUsd ? usd(startUsd) : `${fmt(c.mcSol, 1)} SOL`} sub="market cap" />

@@ -1,4 +1,4 @@
-import { XHover } from "@/components/XCard";
+import { XHover, XLinkIcon, xKind, xKindLabel } from "@/components/XCard";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { padOf, PadLogo, PADS } from "@/components/logos";
 // X links arrive as a URL or a bare handle.
@@ -21,6 +21,9 @@ import { Icon } from "@/shell/icons";
 import { Flash } from "@/components/Live";
 import { KnownHolders } from "@/components/KnownHolders";
 import { FeesPaid } from "@/components/FeesPaid";
+import { useMetrics, useMetricVisibility, metricNumber, metricDescription } from '@/lib/metrics';
+import { MigratingChip, migratingNow } from "@/components/Migrating";
+import { ChartHover } from "./pulse/ChartHover";
 
 // One Pulse row, laid out like the terminal in the owner's mockup (design.md "Pulse rows"): a large
 // picture framed by bonding progress with the contract under it; ticker, name and copy; age, links and
@@ -45,7 +48,7 @@ function Avatar({ coin, ring }: { coin: Coin; ring: number }) {
   const pad = padOf(coin), pool = PADS[pad] ? [null, PADS[pad].name] as const : POOL[pad];
   return (
     // Resting the pointer on it shows the logo big, with what the frame means underneath (PicPreview).
-    <span className="block shrink-0" {...previewHandlers(coin.mint, { caption: `${ring}% of the way to bonding${pool ? ` · ${pool[1]}` : ""}${coin.mayhem ? " · Mayhem Mode" : ""}` })}>
+    <span data-coin-pic className="block shrink-0" {...previewHandlers(coin.mint, { caption: `${ring}% of the way to bonding${pool ? ` · ${pool[1]}` : ""}${coin.mayhem ? " · Mayhem Mode" : ""}` })}>
       {/* Mayhem Mode coins wear gold, like Axiom; every other coin's frame fills green with its bonding progress. */}
       <span className="relative block size-17 shrink-0 rounded-control p-0.5" style={{ background: coin.mayhem ? `conic-gradient(var(--color-warn) ${Math.max(ring, 0)}%, color-mix(in oklch, var(--color-warn) 35%, var(--color-rule-2)) 0)` : `conic-gradient(var(--color-up) ${ring}%, var(--color-rule-2) 0)` }}>
         <span className="relative grid size-full place-items-center overflow-hidden rounded-chip bg-paper-3 text-sm font-semibold text-muted uppercase">
@@ -119,12 +122,17 @@ function AiCall({ coin }: { coin: Coin }) {
 }
 
 function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: number }) {
-  const t = usePulse((s) => s.coins[mint]);
+  const raw = usePulse((s) => s.coins[mint]);
+  const metrics = useMetrics(mint), visibleRef = useMetricVisibility(mint);
+  const t = raw ? { ...raw, mcap: metricNumber(metrics, 'mc', raw.mcap), liq: metricNumber(metrics, 'liq', raw.liq), progress: metricNumber(metrics, 'progress', raw.progress),
+    vol: metricNumber(metrics, 'vol1h', raw.vol), buys: metricNumber(metrics, 'buys1h', raw.buys) ?? undefined, sells: metricNumber(metrics, 'sells1h', raw.sells) ?? undefined,
+    hl: { ...raw.hl, h: metricNumber(metrics, 'holders', raw.hl?.h ?? raw.holders), t10: metricNumber(metrics, 'top10', raw.hl?.t10 ?? raw.top10), dev: metricNumber(metrics, 'dev', raw.hl?.dev ?? raw.dev) } } : raw;
   const hover = useRef(0);
   // Every hook before the early return: a mounted row whose coin leaves the store must not change the hook count.
   const paper = useTrade((st) => st.paper), prefs = usePrefs();
   const isHidden = useHidden((s) => s.showing && s.mints.includes(mint));
   const [buying, setBuying] = useState<null | "busy" | "filled">(null);
+  const pending = useRef(0);
   if (!t) return null;
   const migrated = col === "migrated", curve = !t.graduated && !migrated;
   const prog = migrated || t.graduated ? 100 : t.progress != null ? Math.round(t.progress * 100) : 0;
@@ -143,17 +151,22 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
   const handle = xHandle(t.x);
   const devSold = H.ds === "all" || H.ds === 2, devSelling = Boolean(H.ds) && !devSold;
 
+  // Every press is a buy (spam buying: lib/trade.ts lines them up); busy while any are going, "filled" after the last.
   const buy = async () => {
-    if (buying) return;
+    pending.current++;
     setBuying("busy");
     const ok = await trade({ side: "buy", mint, symbol: t.symbol || "", sol }, () => post("paper/quoted", { mint, sol }));
+    if (--pending.current > 0) return;
     setBuying(ok ? "filled" : null);
-    if (ok) setTimeout(() => setBuying(null), 900);
+    if (ok) setTimeout(() => { if (!pending.current) setBuying(null); }, 900);
   };
   const copy = () => { navigator.clipboard?.writeText(mint); toast("Contract copied"); };
 
   return (
-    <div {...rowLink(`#/coin/${mint}`)}
+    // Resting the pointer anywhere on the row (not on its links, buttons, picture or faces, which have their own
+    // hover) opens the coin's live chart in a card (pulse/ChartHover.tsx).
+    <ChartHover coin={t}>
+    <div ref={visibleRef} {...rowLink(`#/coin/${mint}`)}
       onPointerEnter={() => { hover.current = window.setTimeout(() => prefetchCoin(mint), 150); }}
       onPointerLeave={() => clearTimeout(hover.current)}
       className={cn("group relative flex h-full cursor-pointer gap-3.5 border-b border-rule px-3.5 py-2.5 transition-colors duration-100 hover:bg-paper-3/60",
@@ -180,8 +193,8 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
           <KnownHolders mint={mint} total={holders} />
           <span className="ml-auto flex shrink-0 items-baseline gap-2.5 pl-1 whitespace-nowrap">
             {t.liq != null && t.liq > 0 && <Tip tip="Liquidity: both sides of the pool (on the curve, its SOL reserve), from the chain"><span className="hidden items-baseline gap-1 @min-[580px]:flex"><span className="text-xs text-muted">L</span><b className="num text-lg leading-tight font-semibold text-ink">{compact(t.liq)}</b></span></Tip>}
-            {vol != null && <span className="hidden items-baseline gap-1 @min-[480px]:flex"><span className="text-xs text-muted">V</span><b className="num text-lg leading-tight font-semibold text-ink">{compact(vol)}</b></span>}
-            <span title={`Market cap ${compact(mcap)} · Liquidity ${compact(t.liq)} · Volume ${compact(vol)}`} className="flex items-baseline gap-1"><span className="text-xs text-muted">MC</span>
+            {vol != null && <span title={metricDescription(metrics?.fields.vol1h)} className="hidden items-baseline gap-1 @min-[480px]:flex"><span className="text-xs text-muted">V</span><b className="num text-lg leading-tight font-semibold text-ink">{metrics?.fields.vol1h?.partial ? '≥' : ''}{compact(vol)}</b></span>}
+            <span title={`Market cap ${compact(mcap)} · ${metricDescription(metrics?.fields.mc)} · Liquidity ${compact(t.liq)} · Volume ${compact(vol)}`} className="flex items-baseline gap-1"><span className="text-xs text-muted">MC</span>
               <Flash value={mcap} className={cn("text-xl leading-tight font-semibold", capTone(mcap))}>{compact(mcap)}</Flash></span>
           </span>
         </div>
@@ -191,7 +204,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             <Age born={t.born} />
             <span className="flex items-center gap-2.5">
               {PADS[padOf(t)] && <IconLink href={PADS[padOf(t)].url(mint)} icon={<PadLogo pad={padOf(t)} className="size-4" />} label={`Open on ${PADS[padOf(t)].name}`} />}
-              {safeHref(xUrl(t.x)) && <XHover href={safeHref(xUrl(t.x))!}><a href={safeHref(xUrl(t.x))!} target="_blank" rel="noopener noreferrer nofollow" aria-label="X (set by the creator, unverified)" className="text-ink-2 transition-colors duration-100 hover:text-ink [&_svg]:size-3.5"><Icon.x /></a></XHover>}
+              {safeHref(xUrl(t.x)) && <XHover href={safeHref(xUrl(t.x))!}><a href={safeHref(xUrl(t.x))!} target="_blank" rel="noopener noreferrer nofollow" aria-label={`${xKindLabel(xKind(safeHref(xUrl(t.x))!))} (set by the creator, unverified)`} className="text-ink-2 transition-colors duration-100 hover:text-ink [&_svg]:size-3.5"><XLinkIcon href={safeHref(xUrl(t.x))!} /></a></XHover>}
               <IconLink href={t.web} icon={<Icon.web />} label="Website (set by the creator, unverified)" />
               <IconLink href={t.tg} icon={<Icon.tg />} label="Telegram" />
               <IconLink href={t.tiktok} icon={<Icon.tiktok />} label="TikTok" />
@@ -203,7 +216,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {prefs.compact && <span className="text-sm"><AiCall coin={t} /></span>}
           </div>
           {chg != null && <span className={cn("num shrink-0 font-medium", tone(chg))}>{pct(chg)}</span>}
-          <FeesPaid sol={t.fees} since={t.feesSince} born={t.born} />
+          <FeesPaid mint={mint} sol={t.fees} since={t.feesSince} born={t.born} />
           {tx > 0 && (
             <Tip tip={`${t.buys || 0} buys / ${t.sells || 0} sells`}>
               <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted">TX<Flash value={tx} className="text-md font-semibold text-ink">{tx}</Flash>
@@ -235,7 +248,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             {t.win && <Chip icon={<Icon.curve />} text={`${t.win.netSol >= 0 ? "+" : ""}${t.win.netSol}`} state={t.win.netSol < 0 ? "bad" : "ok"} tip={`Last 5 minutes: ${t.win.trades} trades by ${t.win.traders} wallets, net SOL bought`} />}
             </>}
           </div>
-          {prefs.buy && <Tip tip={paper ? `Paper buy ${sol} SOL at the price this second. Nothing is really bought.` : `Buy ${sol} SOL of it now with real SOL from your wallet.`}>
+          {prefs.buy && migratingNow(t.migrating) ? <MigratingChip /> : prefs.buy && <Tip tip={paper ? `Paper buy ${sol} SOL at the price this second. Nothing is really bought.` : `Buy ${sol} SOL of it now with real SOL from your wallet.`}>
             <button onClick={buy} aria-busy={buying === "busy"} className={cn(buying === "filled" && "animate-tx-fill", buying === "busy" && "[&_svg]:animate-pulse", "num flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink-2 px-3 text-md font-bold whitespace-nowrap text-on-fill transition-[background-color,transform] duration-100 hover:bg-ink active:scale-95 [&_svg]:size-3.5 [&_svg]:fill-current")}>
               <Icon.bolt />{sol} SOL
             </button>
@@ -243,6 +256,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
         </div>
       </div>
     </div>
+    </ChartHover>
   );
 }
 

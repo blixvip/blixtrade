@@ -18,6 +18,7 @@ import { Icon } from "@/shell/icons";
 import { CIcon, copy, SolAmt } from "./parts";
 import type { Pos } from "./position";
 import { usePositionCard } from "./PnlShare";
+import { MigratingNote, MIGRATING_TIP } from "@/components/Migrating";
 
 const card = "surface p-3";
 const H = ({ children }: { children: ReactNode }) => <h3 className="label mb-2 flex items-center gap-1.5">{children}</h3>;
@@ -64,7 +65,7 @@ export function Flow({ c }: { c: CoinData | null }) {
 // Paper buys and sells filled at the real quote (Jupiter, or the curve's own math). Nothing is really bought.
 const SLIPS: [number, string][] = [[100, "1%"], [300, "3%"], [500, "5%"], [1000, "10%"]];
 const PCTS = [25, 50, 100];
-export function TradePanel({ mint, symbol, r, onDone, pos, solUsd }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void; pos: Pos; solUsd?: number | null }) {
+export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = null }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void; pos: Pos; solUsd?: number | null; migrating?: number | null }) {
   // The live PnL card (./PnlShare.tsx), from the icon by the paper/real tag.
   const pnlCard = usePositionCard(pos, mint, symbol, solUsd);
   // Blix's fee on real-money trades (blix-vault feeBps), out of the SOL spent or received: less for an invited trader.
@@ -175,7 +176,7 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd }: { mint: str
           <>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-xs font-medium text-muted">You get</span>
-              {quote.usdIn != null && <span className="num text-xs text-muted">≈ {usdK(buy ? quote.usdIn : quote.usdOut)}</span>}
+              {quote.usdIn != null && <span className="num text-xs text-muted">{usdK(buy ? quote.usdIn : quote.usdOut)}</span>}
             </div>
             <b className="num mt-0.5 mb-2.5 block truncate text-xl font-semibold tracking-tight text-ink">{buy ? <>{tokN(quote.outTokens)} <span className="text-ink-2">{symbol}</span></> : <SolAmt v={quote.outSol} />}</b>
             <div className="num grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/[0.06] pt-2.5 text-xs">
@@ -188,8 +189,10 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd }: { mint: str
           </>
         )}
       </div>
+      {/* Curve full, pool not live yet: nothing trades until it is (components/Migrating.tsx). */}
+      {migrating ? <MigratingNote since={migrating} /> : null}
       {/* Paper fills at once (the server prices it itself), so it never waits for the preview; real money does. */}
-      <button onClick={submit} disabled={busy || (!quote && !realSell && !paperOn)}
+      <button onClick={submit} disabled={busy || Boolean(migrating) || (!quote && !realSell && !paperOn)} title={migrating ? MIGRATING_TIP : undefined}
         className={cn("group relative h-12 overflow-hidden rounded-xl text-md font-bold text-on-fill transition-[transform,filter] duration-150 hover:brightness-110 active:scale-[0.985] disabled:opacity-45 disabled:hover:brightness-100",
           buy ? "bg-gradient-to-b from-up to-[color-mix(in_oklch,var(--color-up)_82%,black)] shadow-[0_8px_24px_-10px_var(--color-up),inset_0_1px_0_oklch(100%_0_0/0.25)]"
             : "bg-gradient-to-b from-down to-[color-mix(in_oklch,var(--color-down)_82%,black)] shadow-[0_8px_24px_-10px_var(--color-down),inset_0_1px_0_oklch(100%_0_0/0.25)]")}>
@@ -222,8 +225,8 @@ export function Position({ pos, mint, symbol, solUsd }: { pos: Pos; mint: string
       </H>
       {pnlCard.dialog}
       <div className="grid grid-cols-4 gap-1.5">
-        {cell("Bought", <SolAmt v={bought} />)}{cell("Sold", <SolAmt v={sold} />)}{cell("Holding", holding == null ? "—" : <SolAmt v={holding} />)}
-        <button onClick={pnlCard.open} title="Open your PnL card" className="min-w-0 text-left hover:opacity-80">{cell("PnL", pnl == null ? "—" : <><SolAmt v={pnl} signed />{bought ? <span className="text-xs font-normal"> {Math.round((pnl / bought) * 100)}%</span> : null}</>, pnl == null ? "" : pnl >= 0 ? "text-up" : "text-down")}</button>
+        {cell("Bought", <SolAmt v={bought} />)}{cell("Sold", <SolAmt v={sold} />)}{cell("Holding", holding == null ? "—" : <><SolAmt v={holding} /></>)}
+        <button onClick={pnlCard.open} title={pos.estimated ? "Estimated at the current price; sale proceeds depend on liquidity and fees. Open your PnL card." : "Open your PnL card"} className="min-w-0 text-left hover:opacity-80">{cell("PnL", pnl == null ? "—" : <><SolAmt v={pnl} signed />{bought ? <span className="text-xs font-normal"> {Math.round((pnl / bought) * 100)}%</span> : null}</>, pnl == null ? "" : pnl >= 0 ? "text-up" : "text-down")}</button>
       </div>
       {has && (
         <Tip tip="Market caps. Averages are per token: all the SOL paid (or got) over all the tokens bought (or sold).">

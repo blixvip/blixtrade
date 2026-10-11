@@ -6,6 +6,7 @@ import type { CoinData, Paper, TokenDetail } from "@/lib/coin";
 import { useTrade } from "@/lib/mode";
 import { usePulse } from "@/lib/pulse";
 import { useMe } from "@/lib/ui";
+import { markValue } from '@/lib/position-value';
 
 interface RealTx { kind: string; mint: string | null; sol: number | null; tokens: string | null; status: string }
 export interface Pos {
@@ -20,6 +21,7 @@ export interface Pos {
   open: Paper[];             // paper: the open rows (a sell goes through each)
   tokens: number | null;     // tokens held (paper: quoted rows only; real: the wallet's)
   canSell: boolean;
+  estimated: boolean;
 }
 
 export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | null): Pos {
@@ -36,12 +38,13 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
   }, [paper, walletKey, mint]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const mcapNow = c?.mcUsd ?? r?.live?.mcap ?? r?.token?.mcap ?? null;
-  const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false };
+  const solUsd = usePulse.getState().live.solUsd || (me?.wallet && me.wallet.sol > 0 && me.wallet.solUsd ? me.wallet.solUsd / me.wallet.sol : 0);
+  const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false, estimated: false };
   if (paper) {
     // A partial sell splits a row: the sold part becomes a closed row with the same entry, so summing every
     // row counts each buy once. Tokens per row are SOL over entry market cap (the same units throughout).
     const ps = r?.paper || [], open = ps.filter((p) => p.status === "open");
-    const valueOf = (p: Paper) => p.valueSol ?? (p.mult != null ? p.sol * p.mult : null);
+    const valueOf = (p: Paper) => (p.status === 'open' ? markValue(p.tokens, c?.priceUsd, solUsd, c?.priceAgeMs) : null) ?? p.valueSol ?? (p.mult != null ? p.sol * p.mult : null);
     pos.open = open;
     pos.bought = ps.reduce((a, p) => a + (p.sol || 0), 0);
     pos.sold = ps.filter((p) => p.status === "closed").reduce((a, p) => a + (p.exit_sol ?? valueOf(p) ?? 0), 0);
@@ -49,6 +52,7 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
     pos.tokens = open.length && open.every((p) => (p.tokens || 0) > 0) ? open.reduce((a, p) => a + (p.tokens || 0), 0) : null;
     pos.has = ps.length > 0;
     pos.canSell = open.length > 0;
+    pos.estimated = open.length > 0;
     const w = (p: Paper) => (p.sol > 0 && (p.mcap0 || 0) > 0 ? p.sol / (p.mcap0 as number) : 0);
     const bw = ps.reduce((a, p) => a + w(p), 0), paid = ps.reduce((a, p) => a + (w(p) ? p.sol : 0), 0);
     pos.entry = bw ? paid / bw : null;
@@ -62,9 +66,10 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
     pos.bought = buys.reduce((a, t) => a + (t.sol || 0), 0); pos.sold = sells.reduce((a, t) => a + (t.sol || 0), 0);
     const boughtRaw = buys.reduce((a, t) => a + raw(t), 0), soldRaw = sells.reduce((a, t) => a + raw(t), 0), heldRaw = boughtRaw - soldRaw;
     const held = me?.wallet?.tokens?.find((x) => x.mint === mint);
-    const solUsd = me?.wallet && me.wallet.sol > 0 && me.wallet.solUsd ? me.wallet.solUsd / me.wallet.sol : usePulse.getState().live.solUsd || 0;
-    pos.holding = !held ? 0 : held.usd != null && solUsd ? held.usd / solUsd : null;
-    pos.tokens = held?.ui ?? 0;
+    pos.holding = !held ? Array.isArray(me?.wallet?.tokens) ? 0 : null
+      : markValue(held.ui, c?.priceUsd, solUsd, c?.priceAgeMs) ?? (held.usd != null && solUsd ? held.usd / solUsd : null);
+    pos.estimated = Boolean(held && held.ui > 0);
+    pos.tokens = held?.ui ?? (Array.isArray(me?.wallet?.tokens) ? 0 : null);
     pos.has = list.length > 0 || Boolean(held);
     pos.canSell = (held?.ui ?? 0) > 0;
     // What was paid (or got) per token against what a token is worth now, applied to the cap now.

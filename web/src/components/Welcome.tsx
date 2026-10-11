@@ -69,7 +69,6 @@ function ClaimHandle() {
         <button type="submit" disabled={busy || value.length < 3 || check.state === "taken" || (editing && value === h?.handle)} className="h-10 rounded-full bg-ink px-5 text-md font-semibold text-on-fill hover:bg-focus disabled:opacity-50">{busy ? "Saving…" : editing ? "Save" : "Claim"}</button>
       </div>
       <HandleStatus check={check} value={value} error={error} />
-      {editing && !error && <p className="text-xs text-muted">You can change your handle once a day. Your old one stays reserved for you for 30 days, so nobody else can take it.</p>}
     </form>
   );
 }

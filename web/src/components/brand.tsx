@@ -28,22 +28,14 @@ function GrokMark({ className }: { className?: string }) {
 // running out from it, the two marks under it as equal chips that come in one after the other. A glint travels the
 // strip's top edge now and then; a chip lights up in its own colour under the pointer.
 export function PoweredBy() {
-  const chip = "group/chip flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-rule-2 bg-paper-3/70 px-2 text-[11.5px] font-semibold tracking-[-0.01em] whitespace-nowrap text-ink-2 transition-[border-color,box-shadow,color] duration-200 animate-chip-in motion-reduce:animate-none hover:text-ink";
+  // One quiet line under the logo: the label, then each partner's mark and name. No box, no animation.
+  const chip = "flex items-center gap-1 font-semibold text-ink-2";
   return (
-    <div aria-label="Powered by Jev and Grok" className="relative mx-1 mb-3 flex flex-col gap-1.5 overflow-hidden rounded-card border border-rule bg-gradient-to-b from-paper-3/60 to-paper-2/40 p-1.5 pt-2">
-      <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,oklch(100%_0_0/0.55),transparent)] bg-size-[45%_100%] bg-no-repeat bg-position-[-60%_0] animate-glint motion-reduce:animate-none" />
-      <span className="flex items-center gap-2 px-1">
-        <small className="text-[9px] font-semibold tracking-[0.16em] whitespace-nowrap text-muted uppercase">Powered by</small>
-        <span aria-hidden className="h-px flex-1 bg-gradient-to-r from-rule-2 to-transparent" />
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className={cn(chip, "hover:border-[oklch(70%_0.2_340/0.6)] hover:shadow-[0_0_12px_-2px_oklch(70%_0.2_340/0.55)]")} style={{ animationDelay: "250ms" }}>
-          <img src="brand/jev.png" alt="" width={16} height={16} className="size-4 shrink-0 rounded-full transition-transform duration-300 group-hover/chip:scale-110 group-hover/chip:rotate-[-8deg]" />Jev
-        </span>
-        <span className={cn(chip, "hover:border-ink/40 hover:shadow-[0_0_12px_-2px_oklch(100%_0_0/0.35)]")} style={{ animationDelay: "380ms" }}>
-          <GrokMark className="size-4 shrink-0 transition-transform duration-300 group-hover/chip:scale-110 group-hover/chip:rotate-[8deg]" />Grok
-        </span>
-      </span>
+    <div aria-label="Powered by Jev and Grok" className="mx-1.5 mb-4 flex items-center gap-2 text-[11px] whitespace-nowrap">
+      <span className="text-muted">Powered by</span>
+      <span className={chip}><img src="brand/jev.png" alt="" width={14} height={14} className="size-3.5 shrink-0 rounded-full" />Jev</span>
+      <span aria-hidden className="size-0.5 rounded-full bg-muted/60" />
+      <span className={chip}><GrokMark className="size-3.5 shrink-0" />Grok</span>
     </div>
   );
 }

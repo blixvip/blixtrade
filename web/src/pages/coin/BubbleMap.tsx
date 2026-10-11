@@ -18,10 +18,14 @@ type Kind = "transfer" | "funded" | "launch" | "block";
 interface Person { src: "fomo" | "pump"; name: string; handle: string; pic: string | null; followers: number; verified?: boolean; link: string; how: "wallet" | "amount"; usd?: number | null; pnl?: number | null; dev?: boolean; thesis?: string | null; x?: string | null }
 interface Node { w: string; pct: number; tokens: number | null; tag: string | null; label: string | null; kind: "holder" | "pool" | "exchange"; cluster: number | null; via: string | null; traced: boolean; untraceable: boolean; rank?: number; person?: Person | null }
 interface Link { a: number; b: number; hops: number; kinds: Kind[]; dir: number; via: string[] }
+// A wallet outside the holders that sent the coin to many of them (server/bubblemap.js): not counted as a link.
+const distributorNote = (d: { w: string; holders: number }[]) => d.length === 1
+  ? `${d[0].w.slice(0, 4)}…${d[0].w.slice(-4)} sent the coin to ${d[0].holders} holders (an airdrop or rewards wallet, most likely), so that alone doesn't link them.`
+  : `${d.length} wallets each sent the coin to many holders (airdrop or rewards wallets, most likely), so those alone don't link them.`;
 interface Cluster { n: number; pct: number; members: number[]; why: Kind[] }
 interface Answer {
   mint: string; t: number; pending?: boolean; error?: string;
-  nodes: Node[]; links: Link[]; clusters: Cluster[];
+  nodes: Node[]; links: Link[]; clusters: Cluster[]; distributors?: { w: string; holders: number }[];
   sources: { fomo?: { holders: number; placed: number; read: number | null }; people?: number; holders: string | null; holderCount: number | null; rugcheck: { t: number | null; busy: boolean; error: string | null; networks: number; wallets: number }; trace: { traced: number; of: number; busy: boolean; done: number; total: number; resting?: boolean } };
 }
 
@@ -134,7 +138,9 @@ function place(sim: Sim, map: Answer) {
   const sig = map.clusters.map((c) => c.members.map((i) => map.nodes[i].w.slice(0, 6)).sort().join(",")).sort().join("|");
   const regroup = sim.sig != null && sig !== sim.sig;
   sim.sig = sig;
-  sim.alpha = Math.max(sim.alpha, many > n / 2 ? 1 : regroup ? 0.7 : many ? 0.35 : 0.15);
+  // A read that brought nothing new (the usual one, every 8 s) leaves a settled map alone: waking it on every
+  // read kept the simulation, and a re-render of every bubble, running most of the time on every coin page.
+  sim.alpha = Math.max(sim.alpha, many > n / 2 ? 1 : regroup ? 0.7 : many ? 0.35 : 0);
 }
 
 function tick(sim: Sim, map: Answer) {
@@ -165,7 +171,8 @@ function tick(sim: Sim, map: Answer) {
     p.x -= dx * s * wp; p.y -= dy * s * wp; q.x += dx * s * wq; q.y += dy * s * wq;
   }
   for (const p of ps) { if (p.held) continue; p.x = Math.min(sim.w - p.r - 2, Math.max(p.r + 2, p.x)); p.y = Math.min(sim.h - p.r - 2, Math.max(p.r + 2, p.y)); }
-  sim.alpha *= ps.some((p) => p.held) ? 1 : 0.985;
+  // Cools in about four seconds from a fresh map (30 steps a second), two from a new wallet or two.
+  sim.alpha *= ps.some((p) => p.held) ? 1 : 0.97;
   return moving || sim.alpha > 0.02;
 }
 
@@ -197,8 +204,12 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
     if (s.w && (s.w !== size.w || s.h !== size.h)) { const fx = size.w / s.w, fy = size.h / s.h; for (const p of s.ps.values()) { p.x *= fx; p.y *= fy; } s.alpha = Math.max(s.alpha, 0.3); }
     s.w = size.w; s.h = size.h;
     place(s, map);
-    let raf = 0;
-    const loop = () => { const more = tick(s, map); setFrame((f) => f + 1); raf = more ? requestAnimationFrame(loop) : 0; };
+    // 30 steps a second: the motion reads the same and each step re-renders every bubble.
+    let raf = 0, lastT = 0;
+    const loop = (t: number) => {
+      if (t - lastT >= 30) { lastT = t; const more = tick(s, map); setFrame((f) => f + 1); if (!more) { raf = 0; return; } }
+      raf = requestAnimationFrame(loop);
+    };
     wake.current = () => { if (!raf) raf = requestAnimationFrame(loop); };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); raf = 0; };
@@ -288,7 +299,7 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
   return (
     <div className={cn("flex flex-col", compact ? "h-full" : "lg:flex-row")}>
       <div className={cn("relative min-w-0 flex-1", compact && "min-h-0")}>
-        <div ref={box} className={cn("relative cursor-grab touch-none overflow-hidden bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--color-paper-3)_70%,transparent),transparent_70%)] active:cursor-grabbing", compact ? "h-full" : "h-[min(460px,62vh)] sm:h-[600px]")}
+        <div ref={box} className={cn("relative cursor-grab touch-none overflow-hidden will-change-transform bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--color-paper-3)_70%,transparent),transparent_70%)] active:cursor-grabbing", compact ? "h-full" : "h-[min(460px,62vh)] sm:h-[600px]")}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={(e) => { lift(e); drag.current = null; }} onDoubleClick={() => ease({ x: 0, y: 0, k: 1 })} onMouseLeave={() => setHover(null)}>
           {size.w > 0 && (
             <svg width={size.w} height={size.h} className="block select-none">
@@ -309,7 +320,7 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
                   return (
                     <g key={`halo${k}`} opacity={on ? 1 : 0.15} className="transition-opacity duration-300">
                       <circle cx={cx} cy={cy} r={R} fill={hue(k)} fillOpacity={hiCluster === k ? 0.07 : 0.035} stroke={hue(k)} strokeOpacity={0.35} strokeWidth={1 / cam.k} strokeDasharray={`${4 / cam.k} ${5 / cam.k}`} />
-                      {(hiCluster === k || (hiCluster == null && k < 3 && R * cam.k > 50)) && <text x={cx} y={cy - R - 6 / cam.k} stroke="#0b0c0f" strokeWidth={3 / cam.k} paintOrder="stroke" textAnchor="middle" className="pointer-events-none font-semibold" fill={hue(k)} style={{ fontSize: 11 / cam.k }}>{`Cluster ${k + 1} · ${pctStr(c.pct)}`}</text>}
+                      {(hiCluster === k || (hiCluster == null && k < 3 && R * cam.k > 50)) && <text x={cx} y={cy - R - 6 / cam.k} stroke="#0b0c0f" strokeWidth={3 / cam.k} paintOrder="stroke" textAnchor="middle" className="pointer-events-none font-semibold" fill={hue(k)} style={{ fontSize: 11 / cam.k }}>{`Possible cluster ${k + 1} · ${pctStr(c.pct)}`}</text>}
                     </g>
                   );
                 })}
@@ -364,13 +375,14 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
           {/* What is connected, at a glance. */}
           {compact ? (
             <div className="pointer-events-none absolute top-1.5 left-1.5 rounded-full border border-rule bg-paper/85 px-2 py-0.5 text-2xs text-muted backdrop-blur">
-              <b className="num font-semibold text-ink">{linked.toFixed(linked >= 10 ? 1 : 2)}%</b> connected{map.clusters.length ? ` · ${map.clusters.length} cluster${map.clusters.length === 1 ? "" : "s"}` : ""}
+              <b className="num font-semibold text-ink">{linked.toFixed(linked >= 10 ? 1 : 2)}%</b> possibly connected{map.clusters.length ? ` · ${map.clusters.length} possible cluster${map.clusters.length === 1 ? "" : "s"}` : ""}
             </div>
           ) : (
             <div className="pointer-events-none absolute top-3 left-3 rounded-control border border-rule bg-paper/85 px-3 py-2 backdrop-blur">
-              <p className="label text-muted">Connected supply</p>
+              <p className="label text-muted">Possibly connected supply</p>
               <p className="num text-xl font-bold text-ink">{linked.toFixed(linked >= 10 ? 1 : 2)}%</p>
-              <p className="text-xs text-muted">{map.clusters.length ? `${map.clusters.length} cluster${map.clusters.length === 1 ? "" : "s"} · ${map.clusters.reduce((t, c) => t + c.n, 0)} wallets` : "No clusters among the top holders"}</p>
+              <p className="text-xs text-muted">{map.clusters.length ? `${map.clusters.length} possible cluster${map.clusters.length === 1 ? "" : "s"} · ${map.clusters.reduce((t, c) => t + c.n, 0)} wallets` : "No clusters among the top holders"}</p>
+              {map.distributors?.length ? <p className="mt-1 max-w-56 text-xs leading-snug text-muted">{distributorNote(map.distributors)}</p> : null}
             </div>
           )}
           <div className={cn("absolute top-3 right-3 flex flex-col gap-1", compact && "hidden")}>
@@ -402,7 +414,7 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
                     <Face p={x.person!} ring={x.cluster == null ? null : hue(x.cluster)} />
                     <span className="flex min-w-0 flex-col">
                       <span className="flex items-center gap-1.5 text-sm"><span className="truncate font-semibold text-ink-2">{x.person!.name}</span><SiteLogo site={x.person!.src === "fomo" ? "fomo" : "pumpfun"} className="size-3" /></span>
-                      <span className="truncate text-xs text-muted">#{rankOf(x, i)} · {x.cluster != null ? <span style={{ color: hue(x.cluster) }}>Cluster {x.cluster + 1}</span> : "not linked"}{x.person!.usd != null ? ` · ${usdStr(x.person!.usd)}` : ""}</span>
+                      <span className="truncate text-xs text-muted">#{rankOf(x, i)} · {x.cluster != null ? <span style={{ color: hue(x.cluster) }}>Possible cluster {x.cluster + 1}</span> : "not linked"}{x.person!.usd != null ? ` · ${usdStr(x.person!.usd)}` : ""}</span>
                     </span>
                     <span className="num ml-auto shrink-0 text-sm font-semibold text-ink">{pctStr(x.pct)}</span>
                   </button>
@@ -417,7 +429,7 @@ function MapView({ map, compact }: { map: Answer; compact?: boolean }) {
                     className={cn("flex cursor-pointer flex-col gap-1 rounded-control px-2.5 py-2 text-left transition-colors", focus === k ? "bg-paper-4" : "hover:bg-paper-3")}>
                     <span className="flex items-center gap-2 text-sm">
                       <i className="size-2.5 shrink-0 rounded-full" style={{ background: hue(k) }} />
-                      <span className="font-semibold text-ink-2">Cluster {k + 1}</span><span className="text-muted">{c.n} wallets</span>
+                      <span className="font-semibold text-ink-2">Possible cluster {k + 1}</span><span className="text-muted">{c.n} wallets</span>
                       <b className="num ml-auto font-semibold text-ink">{pctStr(c.pct)}</b>
                     </span>
                     <span className="flex flex-wrap gap-1 pl-4.5">{c.why.map((y) => <span key={y} title={WHY[y]} className="rounded-full bg-paper-3 px-1.5 py-px text-2xs text-muted">{WHY_SHORT[y]}</span>)}</span>
@@ -520,7 +532,7 @@ function Tip({ map, i, x, y, w, h }: { map: Answer; i: number; x: number; y: num
       <p className="mt-1.5 text-xs font-medium leading-snug" style={{ color: c ? hue(n.cluster) : undefined }}>
         {n.kind === "pool" ? <span className="text-up">✓ The coins sitting in the market for anyone to buy or sell, not a person. {n.pct >= 5 ? "A big pool is normal and safe." : "Normal and safe."}</span>
           : n.kind === "exchange" ? <span className="text-muted">An exchange's wallet, holding for many customers. Never joins a cluster.</span>
-          : c ? `Cluster ${n.cluster! + 1}: ${c.n} connected wallets holding ${pctStr(c.pct)} together`
+          : c ? `Possible cluster ${n.cluster! + 1}: ${c.n} possibly connected wallets holding ${pctStr(c.pct)} together`
           : n.via ? <span className="text-muted">Funded from {n.via}, which doesn't link wallets</span>
           : <span className="text-muted">{n.untraceable ? "Busy wallet, no links to other holders found" : "Not linked to any other top holder"}</span>}
       </p>
@@ -564,7 +576,7 @@ function Wallet({ map, i, onPick, onClose }: { map: Answer; i: number; onPick: (
       </div>
       {c ? (
         <div className="flex flex-col gap-1.5">
-          <p className="flex items-center gap-2 text-sm"><i className="size-2.5 rounded-full" style={{ background: hue(n.cluster) }} /><span className="font-semibold text-ink-2">Cluster {n.cluster! + 1}</span><span className="text-xs text-muted">{c.n} wallets</span><span className="num ml-auto font-semibold text-ink">{pctStr(c.pct)}</span></p>
+          <p className="flex items-center gap-2 text-sm"><i className="size-2.5 rounded-full" style={{ background: hue(n.cluster) }} /><span className="font-semibold text-ink-2">Possible cluster {n.cluster! + 1}</span><span className="text-xs text-muted">{c.n} wallets</span><span className="num ml-auto font-semibold text-ink">{pctStr(c.pct)}</span></p>
           <p className="label mt-1 text-muted">Directly linked to</p>
           {mine.map((l, k) => {
             const j = l.a === i ? l.b : l.a, m = map.nodes[j];
@@ -641,7 +653,7 @@ export function SafetyConnections({ mint, withMap }: { mint: string; withMap: bo
     const holders = map.nodes.filter((n) => n.kind === "holder");
     const linked = map.clusters.reduce((t, c) => t + c.pct, 0), big = map.clusters[0];
     checks.push({ name: "Connected wallets", value: pctStr(linked), bar: linked, tone: ctone(linked < 10, linked < 25),
-      note: map.clusters.length ? `${map.clusters.length} cluster${map.clusters.length === 1 ? "" : "s"} · biggest holds ${pctStr(big.pct)} across ${big.n} wallets` : "None of the top holders are linked to each other" });
+      note: map.clusters.length ? `${map.clusters.length} possible cluster${map.clusters.length === 1 ? "" : "s"} · biggest holds ${pctStr(big.pct)} across ${big.n} wallets` : "None of the top holders are linked to each other" });
     const dev = holders.find((n) => n.tag === "dev");
     if (dev) {
       const dc = dev.cluster != null ? map.clusters[dev.cluster] : null;

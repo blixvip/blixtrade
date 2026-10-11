@@ -12,11 +12,12 @@ export const mult = (x?: number | null) => (x == null ? "—" : `${x >= 10 ? x.t
 export const toneX = (x?: number | null) => (x == null ? "text-muted" : x > 1.001 ? "text-up" : x < 0.999 ? "text-down" : "text-ink-2");
 export const share = (n: number, of: number) => (of ? `${Math.round((n / of) * 100)}%` : "—");
 
-export function Page({ title, sub, right, children }: { title: string; sub?: ReactNode; right?: ReactNode; children: ReactNode }) {
+// `sub` is no longer shown: every page is its title alone (the user, 2026-10-10). Kept so callers still compile.
+export function Page({ title, right, children }: { title: string; sub?: ReactNode; right?: ReactNode; children: ReactNode }) {
   return (
     <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-3 p-3 max-md:pb-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-2xl leading-none font-bold tracking-tight">{title}</h1>{sub && <p className="mt-1.5 text-md text-muted">{sub}</p>}</div>
+        <h1 className="text-2xl leading-none font-bold tracking-tight">{title}</h1>
         {right && <div className="flex flex-wrap items-center gap-2">{right}</div>}
       </header>
       {children}
@@ -76,33 +77,66 @@ export const Spinner = ({ className }: { className?: string }) => (
 const StateGlyph = ({ icon, className }: { icon: StateIcon; className?: string }) => (
   <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[icon]}</svg>
 );
-export function EmptyState({ title, hint, icon = "inbox", loading, action, brand, className }: {
-  title: ReactNode; hint?: ReactNode; icon?: StateIcon; loading?: boolean;
-  action?: { label: string; onClick: () => void } | null; brand?: boolean; className?: string;
-}) {
-  // brand (Pulse columns): the state's glyph on a lit tile, title, hint and one way out. The action row is kept
-  // even when empty, so columns side by side line their empty states up at the same height.
-  if (brand) return (
-    <div role="status" className={cn("flex h-full min-h-56 w-full flex-col items-center justify-center px-6 py-10 text-center animate-brand-in", className)}>
-      <div className="relative mb-4 grid size-14 place-items-center">
-        <span aria-hidden="true" className="absolute -inset-6 rounded-full bg-[radial-gradient(closest-side,oklch(100%_0_0/0.06),transparent)]" />
-        <span className="relative grid size-14 place-items-center rounded-2xl border border-rule-2 bg-[linear-gradient(180deg,var(--color-paper-4),var(--color-paper-2))] text-ink-2 shadow-[inset_0_1px_0_oklch(100%_0_0/0.08),0_8px_20px_-8px_oklch(0%_0_0/0.7)]">
-          {loading ? <Spinner /> : <StateGlyph icon={icon} className="size-6" />}
-        </span>
-      </div>
-      <b className="text-md font-semibold tracking-tight text-ink">{title}</b>
-      {hint && <span className="mt-1.5 max-w-64 text-sm leading-snug text-balance text-muted">{hint}</span>}
-      <div className="mt-4 flex h-8 items-center">
-        {action && (
-          <button onClick={action.onClick}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper-3/70 pr-3.5 pl-3 text-xs font-semibold text-ink-2 transition-[color,border-color,background-color,scale] duration-150 hover:border-ink/35 hover:bg-paper-3 hover:text-ink active:scale-[0.97]">
-            <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.5-3.6" /><path d="M3 2.5v2.8h2.8" /></svg>
-            {action.label}
-          </button>
-        )}
-      </div>
+// The way out of an empty state, drawn to match what it does: start over, show everything, or clear a search.
+const ACTION_ICON: [RegExp, ReactNode][] = [
+  [/clear search/i, <path key="x" d="m4.5 4.5 7 7m0-7-7 7" />],
+  [/show all/i, <><rect key="a" x="2.5" y="2.5" width="4.5" height="4.5" rx="1" /><rect key="b" x="9" y="2.5" width="4.5" height="4.5" rx="1" /><rect key="c" x="2.5" y="9" width="4.5" height="4.5" rx="1" /><rect key="d" x="9" y="9" width="4.5" height="4.5" rx="1" /></>],
+  [/./, <><path key="a" d="M3 8a5 5 0 1 0 1.5-3.6" /><path key="b" d="M3 2.5v2.8h2.8" /></>],
+];
+// Faint coin rows behind a Pulse column's empty state, fading out toward its middle: the column's shape stays, so
+// an empty column still reads as a list waiting for coins rather than a blank box.
+function GhostRows() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-x-3 top-3 bottom-3 flex flex-col gap-2 overflow-hidden opacity-55 [mask-image:radial-gradient(ellipse_70%_55%_at_50%_50%,transparent_35%,black_80%)]">
+      {Array.from({ length: 9 }, (_, i) => (
+        <div key={i} className="flex shrink-0 items-center gap-3 rounded-lg border border-rule/50 bg-paper-3/25 px-3 py-2.5">
+          <span className="size-9 shrink-0 rounded-md bg-paper-4/70" />
+          <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span className="h-2 rounded-full bg-paper-4/80" style={{ width: `${38 + ((i * 17) % 30)}%` }} />
+            <span className="h-1.5 rounded-full bg-paper-4/50" style={{ width: `${22 + ((i * 11) % 24)}%` }} />
+          </span>
+          <span className="flex flex-col items-end gap-1.5"><span className="h-2 w-10 rounded-full bg-paper-4/70" /><span className="h-1.5 w-7 rounded-full bg-paper-4/45" /></span>
+        </div>
+      ))}
     </div>
   );
+}
+export function EmptyState({ title, hint, icon = "inbox", loading, action, brand, badge, className }: {
+  title: ReactNode; hint?: ReactNode; icon?: StateIcon; loading?: boolean;
+  action?: { label: string; onClick: () => void } | null; brand?: boolean; badge?: ReactNode; className?: string;
+}) {
+  // brand (Pulse columns): faint coin rows behind, the state's glyph on a lit tile (a small count on it when
+  // filters are the reason), title, hint and one way out. The action row is kept even when empty, so columns side
+  // by side line their empty states up at the same height.
+  if (brand) {
+    const glyph = action ? ACTION_ICON.find(([re]) => re.test(action.label))![1] : null;
+    return (
+      <div role="status" className={cn("relative flex h-full min-h-64 w-full flex-col items-center justify-center overflow-hidden px-6 py-10 text-center", className)}>
+        <GhostRows />
+        <div className="relative flex flex-col items-center animate-brand-in">
+          <div className="relative mb-5 grid size-[52px] place-items-center">
+            <span aria-hidden="true" className="absolute -inset-10 rounded-full bg-[radial-gradient(closest-side,var(--color-paper-2)_45%,transparent)]" />
+            <span aria-hidden="true" className="absolute -inset-[7px] rounded-[20px] border border-dashed border-rule-2/70" />
+            <span className="relative grid size-[52px] place-items-center rounded-2xl border border-rule-2 bg-[linear-gradient(180deg,var(--color-paper-5),var(--color-paper-3))] text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.1),0_10px_24px_-10px_oklch(0%_0_0/0.8)]">
+              {loading ? <Spinner /> : <StateGlyph icon={icon} className="size-[22px]" />}
+            </span>
+            {badge != null && <span className="num absolute -top-2 -right-2.5 grid h-5 min-w-5 place-items-center rounded-full bg-ink px-1.5 text-2xs font-bold text-paper ring-[3px] ring-paper-2">{badge}</span>}
+          </div>
+          <b className="max-w-64 text-[15px] leading-snug font-semibold tracking-[-0.01em] text-balance text-ink">{title}</b>
+          {hint && <span className="mt-1.5 max-w-60 text-sm leading-relaxed text-balance text-muted">{hint}</span>}
+          <div className="mt-5 flex h-8 items-center">
+            {action && (
+              <button onClick={action.onClick}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-ink pr-4 pl-3 text-xs font-semibold text-paper shadow-[0_6px_16px_-8px_oklch(0%_0_0/0.9)] transition-[opacity,scale] duration-150 hover:opacity-90 active:scale-[0.97]">
+                <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{glyph}</svg>
+                {action.label}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div role="status" className={cn("flex h-full min-h-40 w-full flex-col items-center justify-center gap-2.5 px-6 py-8 text-center", className)}>
       <span className="grid size-11 place-items-center rounded-full border border-rule-2 bg-paper-3/60 text-muted">
@@ -114,24 +148,17 @@ export function EmptyState({ title, hint, icon = "inbox", loading, action, brand
     </div>
   );
 }
-// The full-page loading screen: Blix's chrome wordmark with a light sweeping across it, a slow glow behind and a
-// thin bar under it. The wordmark is drawn through a luminance mask of itself, so its black backdrop is fully
-// transparent on any page colour, and the sheen goes through the same mask, lighting only the chrome.
-const LOGO_MASK: CSSProperties = { maskImage: "url(brand/blix-chrome.webp)", maskMode: "luminance", maskSize: "100% 100%", WebkitMaskImage: "url(brand/blix-chrome.webp)", WebkitMaskSize: "100% 100%" } as CSSProperties;
+// A page still loading: the same wordmark loader as the loading screen before the app (web/index.html #boot, whose
+// .blix-load styles both use): the chrome BLIX blurring in, a light across it, a breathing glow, a thin running bar.
+// While the loading screen is still up, it stays up over a page showing this (data-brand-loader), so the two never
+// play one after the other. The label is for screen readers only (the owner: just the wordmark, 2026-10-10).
 export function BrandLoader({ label, className }: { label?: ReactNode; className?: string }) {
   return (
-    <div role="status" aria-live="polite" className={cn("flex flex-col items-center justify-center gap-5 animate-brand-in", className)}>
-      <div className="relative w-44 sm:w-52">
-        <span aria-hidden="true" className="absolute inset-[-35%] rounded-full bg-[radial-gradient(closest-side,oklch(100%_0_0/0.09),transparent)] blur-2xl animate-brand-glow motion-reduce:animate-none" />
-        <div className="relative aspect-[600/260]" style={LOGO_MASK}>
-          <img src="brand/blix-chrome.webp" crossOrigin="anonymous" alt="Blix" width={600} height={260} draggable={false} className="block size-full select-none" />
-          <span aria-hidden="true" className="absolute inset-0 animate-brand-sheen motion-reduce:animate-none bg-[linear-gradient(100deg,transparent_42%,oklch(100%_0_0/0.75)_50%,transparent_58%)] bg-size-[250%_100%] bg-no-repeat" />
-        </div>
-      </div>
-      <div className="h-0.5 w-28 overflow-hidden rounded-full bg-paper-4">
-        <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-transparent via-ink to-transparent animate-brand-bar motion-reduce:animate-none" />
-      </div>
-      {label && <span className="text-xs font-medium tracking-[0.18em] text-muted uppercase">{label}</span>}
+    <div role="status" aria-live="polite" data-brand-loader className={cn("blix-load", className)}>
+      <span aria-hidden="true" className="b-glow" />
+      <span role="img" aria-label="Blix" className="b-mark" />
+      <span aria-hidden="true" className="b-bar"><i /></span>
+      {label && <span className="sr-only">{label}</span>}
     </div>
   );
 }

@@ -26,8 +26,8 @@ import { freshest, takeSnapshot, takeSparks } from "./discover/fresh";
 type Tab = "top" | "held" | "trending" | "hot" | "surge" | "new" | "bonded";
 type Section = "audits" | "metrics" | "socials";
 const TABS: [Tab, string, string][] = [
-  ["top", "Top", "Fomo's trending coins, exactly as fomo.family shows them"], ["trending", "Trending", "Most traded in the window"],
-  ["hot", "Hot", "The coins Fomo and pump.fun traders are posting about most, from the Feed"], ["surge", "Surge", "Biggest movers in the window, with real volume"],
+  ["top", "Top", "Fomo's trending coins, exactly as fomo.family shows them"],
+  ["hot", "Trending", "The coins Fomo and pump.fun traders are posting about most, from the Feed"],
   ["new", "New pairs", "Newest pools first"], ["bonded", "Bonded", "Coins that finished their curve, newest first"],
 ];
 const SORT: Record<Tab, Record<Tf, string>> = {
@@ -63,7 +63,8 @@ const STEP = 50, MAX_HIDDEN = 500;
 // handful of wallets hold nearly all of it. These never show on Discover; searching a ticker or contract
 // (or the hidden view) still finds one.
 type ListTab = "trending" | "surge" | "new" | "bonded";
-const TFS: Tf[] = ["5m", "1h", "24h"];
+// The 5m / 1h / 24h picker is off since 2026-10-10 (only New pairs and Bonded still used it): those lists show 1h.
+const TF: Tf = "1h";
 type Snapshot = { tf: Tf; t: number; tabs: Record<ListTab, { rows: Row[]; total: number }> };
 // The last shared snapshot per window, kept in this browser (fine to lose: a private window, cleared data). Only
 // one under ten minutes old is drawn; the coins in it are still the list's, and their figures go live at once.
@@ -126,8 +127,9 @@ export const isRug = (r: Row) => {
 };
 
 export function Coins() {
-  // (Most held is off the tab strip since 2026-10-10; a saved "held" opens Top.)
-  const [tab, setTab] = useState<Tab>(() => { const t = store.get<Tab>("discover:tab", "trending"); return TABS.some(([k]) => k === t) ? t : "top"; });
+  // (Most held is off the tab strip since 2026-10-10; a saved "held" opens Top. The old most-traded Trending list
+  // is off too: Hot took its name, so a saved "trending" opens it. Surge is off as well and opens Trending.)
+  const [tab, setTab] = useState<Tab>(() => { const t = store.get<Tab>("discover:tab", "hot"); return t === "trending" || t === "surge" ? "hot" : TABS.some(([k]) => k === t) ? t : "top"; });
   const [hotWin, setHotWin] = useState<HotWin>(() => { const w = store.get<HotWin>("discover:hotwin", "30"); return HOT_WINS.some(([k]) => k === w) ? w : "30"; });
   // Every tab and window ready before it is opened: Fomo's two lists and the shared lists for all three windows are
   // read every 12 s while Discover is open (inside lib/coin.ts SHOW_MS, so a switch draws them at once), and the
@@ -140,13 +142,13 @@ export function Coins() {
       if (document.hidden) return;
       for (const [w] of HOT_WINS) prefetch<HotAnswer>(hotPath(w))?.then((d) => pics(d?.top));
       for (const kind of ["trending", "held"]) prefetch<{ rows: { mint: string }[] | null }>(`fomo/list?kind=${kind}`)?.then((d) => pics(d?.rows));
-      for (const w of TFS) prefetch<Snapshot>(`discover?tf=${w}`)?.then((s) => { noteSnap(s); if (s?.tabs) Object.values(s.tabs).forEach((t) => pics(t.rows)); });
+      prefetch<Snapshot>(`discover?tf=${TF}`)?.then((s) => { noteSnap(s); if (s?.tabs) Object.values(s.tabs).forEach((t) => pics(t.rows)); });
     };
     warm();
     const id = setInterval(warm, 12_000);
     return () => clearInterval(id);
   }, []);
-  const [tf, setTf] = useState<Tf>(() => store.get<Tf>("discover:tf", "1h"));
+  const tf = TF;
   const [f, setF] = useState<Filters>(() => store.get<Filters>("discover:filters", {}));
   const [hidden, setHidden] = useState<string[]>(() => store.get<string[]>("discover:hidden", []));
   const [showHidden, setShowHidden] = useState(false);
@@ -275,7 +277,6 @@ export function Coins() {
           ))}
         </nav>
         {hot && <Segmented label="Window" value={hotWin} onChange={(v) => { setHotWin(v); store.set("discover:hotwin", v); eagerAgain(); }} options={HOT_WINS} />}
-        {!fomo && <Segmented label="Window" value={tf} onChange={save("tf", setTf)} options={[["5m", "5m"], ["1h", "1h"], ["24h", "24h"]]} />}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <label className="flex h-8 w-60 items-center gap-2 rounded-full border border-rule-2 bg-paper px-3 text-muted focus-within:border-accent-dim">
             <Icon.search className="size-3.5" /><input value={q} onChange={(e) => { setQ(e.target.value); setLimit(STEP); }} placeholder="Ticker, name or contract" aria-label="Search coins" className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
@@ -325,7 +326,7 @@ export function Coins() {
           <div className="min-w-[1240px]">
             <div className={cn(GRID, "metal-bar sticky top-0 z-10 px-4 py-2 text-sm font-medium text-muted")}>
               <span>Pair info</span><span>Price {tf}</span><span className="text-right">Market cap</span><span className="text-right">Liquidity</span>
-              <span className="text-right">Volume {tf}</span><span className="text-right">Txns {tf === "24h" ? "1h" : tf}</span><span>Token info</span>
+              <span className="text-right">Volume {tf}</span><span className="text-right">Txns {tf}</span><span>Token info</span>
               <span className="flex items-center justify-end gap-2">
                 {!showHidden && rows && rows.length > 0 && <Tip tip="Hide every coin on screen"><button onClick={hideAll} className="flex items-center gap-1 rounded-chip px-1.5 py-0.5 text-xs text-muted hover:bg-paper-4 hover:text-ink"><Icon.eyeOff className="size-3.5" />Hide all</button></Tip>}
                 Action
@@ -423,7 +424,7 @@ function FilterPanel({ tf, value, onApply, onClose }: { tf: Tf; value: Filters; 
               <Ranges items={AUDITS} draft={draft} put={put} />
             </div>
           )}
-          {section === "metrics" && <Ranges items={metrics(tf)} draft={draft} put={put} note={tf === "24h" ? "Txns, buys and sells use the last hour; there is no 24h count." : undefined} />}
+          {section === "metrics" && <Ranges items={metrics(tf)} draft={draft} put={put} note={tf === "24h" ? "Count filters use the last hour. Table counts show the selected 24h window." : undefined} />}
           {section === "socials" && <Checks items={SOCIALS} draft={draft} put={put} />}
         </div>
       </div>

@@ -1,7 +1,7 @@
 export type Source = 'fomo' | 'pump';
 export interface Message {
   id: string; seq: number; source: Source; type: string; t: number; timelineAt: number; receivedAt: number; late?: boolean;
-  user?: { handle?: string | null; pump?: string | null; name?: string; pic?: string | null; verified?: boolean; fomo?: boolean } | null;
+  user?: { handle?: string | null; pump?: string | null; wallet?: string | null; name?: string; pic?: string | null; verified?: boolean; fomo?: boolean } | null;
   mint: string | null; chain?: number | null; ticker?: string | null; img?: string | null;
   comment?: string | null; text?: string | null; notes?: string | null; quoted?: string | null; media?: string | null; pinned?: boolean;
   side?: string; usd?: number | null; mc?: number | null; entryMc?: number | null; pnlUsd?: number | null; pnlPct?: number | null;

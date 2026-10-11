@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { amount, Avatar, Check, Chip, copy, count, exactUsd, hold, pct, QUOTES, RANGES, short, SOLANA, tone, TokenPic, usd, type Range } from "./traders/parts";
 import { thumb } from "@/lib/thumb";
+import { WalletTrader } from "./traders/WalletTrader";
 
 interface Best { mint: string; chain: number; symbol: string | null; img: string | null; opened: string; closed: string | null; realized: number | null; unrealized?: number | null; cost: number | null; entry: number | null; exit: number | null; price: number | null; comment: string | null }
 interface Pos { mint: string; chain: number; symbol: string | null; name: string | null; img: string | null; amount: number | null; price: number | null; mcap: number | null; change24: number | null; entry: number | null; cost: number | null; realized: number | null; since: string | null; launchpad: string | null }
@@ -25,12 +26,18 @@ interface Profile {
   clan: { id: string; name: string; icon: string | null } | null; badge: { title: string; rank: number | null; pnl: number | null } | null;
   best: Best[]; positions: Pos[]; recent: Swap[]; chart: Record<Range, [number, number, number][]>;
   read: number | null; ranks: Record<Range, { rank: number; pnl: number } | null>; day: string | null; history: { day: string; range: Range; rank: number; pnl: number }[];
-  wallet: string | null; walletVerified?: boolean; walletNote: string | null; tracked?: boolean; resolving: boolean;
+  wallet: string | null; walletVerified?: boolean; walletNote: string | null; tracked?: boolean; resolving: boolean; updating?: boolean;
 }
 
 const value = (p: Pos) => (p.amount != null && p.price != null ? p.amount * p.price : null);
 
+// A wallet address opens the wallet's own page, built from the chain (traders/WalletTrader.tsx); a handle, Fomo's.
+const isWallet = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
 export function Trader({ handle }: { handle: string }) {
+  return isWallet(handle) ? <WalletTrader wallet={handle} /> : <FomoTrader handle={handle} />;
+}
+
+function FomoTrader({ handle }: { handle: string }) {
   const [p, setP] = useState<Profile | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,6 +53,8 @@ export function Trader({ handle }: { handle: string }) {
     setBusy(false);
   };
   useEffect(() => { setP(null); setErr(null); load(); window.scrollTo(0, 0); }, [handle]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The server answers from its last read and reads Fomo again behind it when that is old: look back for the new one.
+  useEffect(() => { if (!p?.updating) return; const t = setTimeout(() => load(), 6000); return () => clearTimeout(t); }, [p?.updating, p?.read]);   // eslint-disable-line react-hooks/exhaustive-deps
   // While the wallet is being found, look again every 20 s.
   useEffect(() => { if (!p?.resolving) return; const t = setInterval(() => load(), 20_000); return () => clearInterval(t); }, [p?.resolving]);   // eslint-disable-line react-hooks/exhaustive-deps
 

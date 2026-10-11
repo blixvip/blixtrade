@@ -1,4 +1,6 @@
-// Narratives (#/narratives), in three tabs:
+// Narratives (#/narratives), in four tabs:
+//   Today         the day's narratives and runners researched by Grok and written up to read (narratives/desk.tsx,
+//                 server/desk.js); #/narratives/<id> opens one article.
 //   Running now   the stories running right now, where this hour's money is going, grouped by Claude or Blix's
 //                 themes (narratives/running.tsx, server/running.js): a list to move through and the picked story.
 //   Launch bursts new coins launched together around one word or X post, named by Grok when it can.
@@ -11,17 +13,24 @@ import { cn, store } from "@/lib/utils";
 import { FormingRow, NarrativeCard, ScannerBar, type Feed, type Item } from "./narratives/parts";
 import { LiveMc } from "@/components/Live";
 import { RunningNow, type Running } from "./narratives/running";
+import { ArticleView, DeskHome, type Desk } from "./narratives/desk";
+import { useRouteArg } from "@/lib/route";
 
 type J = any;
 type Filter = "all" | "grok" | "live";
-type TabId = "running" | "bursts" | "themes";
+type TabId = "today" | "running" | "bursts" | "themes";
 
 export function Narratives() {
-  const [tab, setTab] = useState<TabId>(() => store.get<TabId>("narratives:tab", "running"));
-  useEffect(() => { store.set("narratives:tab", tab); }, [tab]);
+  // Today opens first (a new key: the old one remembered Running now for everyone who had been here).
+  const [tab, setTab] = useState<TabId>(() => store.get<TabId>("narratives:view", "today"));
+  useEffect(() => { store.set("narratives:view", tab); }, [tab]);
+  const arg = useRouteArg();
+  useEffect(() => { if (arg) setTab("today"); }, [arg]);
+  const pickTab = (id: TabId) => { setTab(id); if (arg) location.hash = "#/narratives"; };
   // Each tab reads only what it shows (the running stories are cheap; bursts and themes poll on their own tab).
   const { data: run, error: runError } = usePoll<Running>("running", 10_000);
   const tabs: [TabId, ReactNode, ReactNode][] = [
+    ["today", "Today", null],
     ["running", <>Running<span className="max-sm:hidden"> now</span></>, run?.stories ? <Count n={run.stories.length} /> : null],
     ["bursts", <><span className="max-sm:hidden">Launch </span>Bursts</>, null],
     ["themes", <>Themes<span className="max-sm:hidden"> &amp; words</span></>, null],
@@ -30,13 +39,14 @@ export function Narratives() {
     <Page title="Narratives" sub="The stories Solana traders are playing right now: where this hour's money is going, the new launches forming around one idea, and the themes heating up.">
       <div role="tablist" aria-label="Narratives" className="sticky top-0 z-10 -mx-1 flex items-center gap-1 overflow-x-auto bg-paper/90 px-1 py-1.5 backdrop-blur">
         {tabs.map(([id, label, aside]) => (
-          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+          <button key={id} role="tab" aria-selected={tab === id} onClick={() => pickTab(id)}
             className={cn("flex h-9 shrink-0 items-center gap-2 rounded-full px-4 text-md font-semibold transition-colors",
               tab === id ? "bg-ink text-paper" : "text-muted hover:bg-paper-3 hover:text-ink")}>
             <span>{label}</span>{aside}
           </button>
         ))}
       </div>
+      {tab === "today" && <Today arg={arg} />}
       {tab === "running" && <RunningNow d={run} error={runError} />}
       {tab === "bursts" && <Bursts />}
       {tab === "themes" && <Themes />}
@@ -44,7 +54,19 @@ export function Narratives() {
   );
 }
 
-const Count = ({ n }: { n: number }) => <span className="num rounded-full bg-paper-5/80 px-1.5 text-xs font-semibold text-ink-2">{n}</span>;
+// Today: the desk's front page, or one article.
+function Today({ arg }: { arg: string }) {
+  const { data: raw, error } = usePoll<Desk>("desk", 15_000);
+  const d = raw && Array.isArray(raw.stories) && Array.isArray(raw.runners) && raw.writer ? { ...raw, earlier: Array.isArray(raw.earlier) ? raw.earlier : [] } : null;
+  if (!d) return error ? (/not found/i.test(error) ? <p className="surface px-4 py-3 text-md text-ink-2">Today's write-ups switch on at Blix's next server restart.</p> : <Problem text={error} />) : <Loading />;
+  if (arg) {
+    const e = [...d.stories, ...d.runners, ...d.earlier].find((x) => x.id === arg);
+    return e ? <ArticleView e={e} d={d} /> : <div className="surface flex flex-col gap-2 px-4 py-6 text-md text-ink-2">This story is no longer on today's page.<a href="#/narratives" className="text-muted hover:text-ink">← All of today's narratives</a></div>;
+  }
+  return <DeskHome d={d} />;
+}
+
+const Count =({ n }: { n: number }) => <span className="num rounded-full bg-paper-5/80 px-1.5 text-xs font-semibold text-ink-2">{n}</span>;
 
 // Launch bursts: Grok's cards (the strongest big), with what is forming this minute alongside.
 function Bursts() {

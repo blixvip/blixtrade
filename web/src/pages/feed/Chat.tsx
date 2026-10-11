@@ -74,7 +74,7 @@ export function Feed() {
   const mode = held ? held.mode === 'paused' ? 'Paused' : 'Reading history' : 'Following live';
   return <div className="relative flex h-full min-h-0 w-full flex-col bg-paper">
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3">
-      <div><h1 className="text-xl font-semibold tracking-tight">Feed</h1><p className="mt-0.5 text-[13px] text-muted">Read-only live stream</p></div>
+      <div><h1 className="text-xl font-semibold tracking-tight">Feed</h1></div>
       <div className="flex flex-wrap items-center gap-2"><button onClick={() => held ? jump() : hold('paused')} aria-label={held ? 'Resume feed' : 'Pause feed'} className={control}>{held ? 'Resume' : 'Pause'}</button><button aria-pressed={focus} onClick={() => useUi.setState({ feedFocus: !focus })} className={control}>{focus ? 'Exit focus' : 'Focus chat'}</button><button onClick={() => setRanking(true)} className={cn(control, 'lg:hidden')}>Hot list</button></div>
     </header>
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-rule px-4 py-2">

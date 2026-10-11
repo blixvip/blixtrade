@@ -6,6 +6,7 @@
 // the stream, every trade the moment the radar reads it from the chain (`ctrade`) and the holder figures each
 // time the chain changes them (`cholders`).
 import { cn } from "@/lib/utils";
+import { useMetrics, useMetricVisibility, metricNumber } from '@/lib/metrics';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadPaperSizes } from "@/lib/mode";
 import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
@@ -22,6 +23,7 @@ import { Empty } from "./coin/parts";
 import { ReplayBar } from "./coin/Replay";
 import { useReplay } from "@/lib/replay";
 import { BrandLoader, EmptyState } from "@/components/page";
+import { migratingNow } from "@/components/Migrating";
 
 // DexScreener order types, as the chart's pills say them.
 const ORDER: Record<string, [string, string]> = {
@@ -45,6 +47,8 @@ const MIGRATE_MC_SOL = 410.9;   // pump.fun market cap at migration, in SOL (see
 const NO_INFO: CoinData["info"] = { holders: null, top10: null, devPct: null, snipers: null, bundle: null, insiders: null, lpLocked: null, safety: null, traders: null, source: null, checked: null };
 
 export function Coin({ mint }: { mint: string }) {
+  const metrics = useMetrics(mint);
+  useMetricVisibility(mint, true);
   const token = usePoll<TokenDetail>(`token/${mint}`, 15_000);
   // Every trade arrives on the stream the moment the radar reads it (ctrade, below); these reads fill in the rest.
   const coinPolled = usePoll<CoinData>(`coin/${mint}`, 3_000);
@@ -57,12 +61,14 @@ export function Coin({ mint }: { mint: string }) {
   const replayEpoch = useReplay((st) => (st.mint === mint ? st.epoch : 0));
   useEffect(() => {
     setPushed({ mint, rows: [] });
-    let raf = 0, wait: Trade[] = [];
+    // Rows landing in a burst (a replay at speed, a busy launch) reach the list a few times a second, not once a
+    // frame: each landing re-renders the list.
+    let timer = 0, wait: Trade[] = [], flushed = 0;
     const un = onCoinRows(mint, (rows) => {
       wait.push(...rows);
-      if (!raf) raf = requestAnimationFrame(() => { raf = 0; const add = wait.reverse(); wait = []; setPushed((s) => ({ mint, rows: [...add, ...(s.mint === mint ? s.rows : [])].slice(0, 300) })); });
+      if (!timer) timer = window.setTimeout(() => { timer = 0; flushed = performance.now(); const add = wait.reverse(); wait = []; setPushed((s) => ({ mint, rows: [...add, ...(s.mint === mint ? s.rows : [])].slice(0, 300) })); }, Math.max(0, 200 - (performance.now() - flushed)));
     });
-    return () => { un(); cancelAnimationFrame(raf); };
+    return () => { un(); clearTimeout(timer); };
   }, [mint, replayEpoch]);
   // Every trade with a signature that any read brought is kept while the page is open, so a read that comes back
   // short or empty (a pool source answering with nothing for a while) never takes rows off the list.
@@ -90,10 +96,17 @@ export function Coin({ mint }: { mint: string }) {
   const liveHolders = useCoinHolders(mint), liveH = replayEpoch ? null : liveHolders;
   const coin = useMemo(() => {
     // A partial answer (no `info`: a coin the server could not read yet) must not take the page down.
-    const raw = coinPolled.data, d = raw && !raw.info ? { ...raw, info: NO_INFO } : raw;
+    const raw = coinPolled.data;
+    let d = raw && !raw.info ? { ...raw, info: NO_INFO } : raw;
+    if (d && !replayEpoch && metrics) {
+      const mc = metricNumber(metrics, 'mc', d.mcUsd) ?? null, price = mc != null && d.supply > 0 ? mc / d.supply : d.priceUsd;
+      d = { ...d, mcUsd: mc, priceUsd: price, priceAgeMs: metrics.fields.mc ? Date.now() - metrics.fields.mc.observedAt : d.priceAgeMs,
+        info: { ...d.info, holders: metricNumber(metrics, 'holders', d.info.holders) ?? null, top10: metricNumber(metrics, 'top10', d.info.top10) ?? null, devPct: metricNumber(metrics, 'dev', d.info.devPct) ?? null },
+        holders: d.holders ? { ...d.holders, list: d.holders.list.map(h => h.tokens != null && price != null ? { ...h, valueUsd: h.tokens * price, valueSol: d!.solUsd ? h.tokens * price / d!.solUsd : null } : h) } : d.holders };
+    }
     if (!d || !liveH || liveH.holders == null) return d === raw ? coinPolled : { ...coinPolled, data: d };
     return { ...coinPolled, data: { ...d, info: { ...d.info, holders: liveH.holders, top10: liveH.top10 ?? d.info.top10, devPct: liveH.devPct ?? d.info.devPct, source: liveH.source ?? d.info.source } } };
-  }, [coinPolled, liveH]);
+  }, [coinPolled, liveH, metrics, replayEpoch]);
   // Trades of $1,000+ over the whole history, for the chart's big-trade bubbles.
   const big = usePoll<Trades>(`coin/${mint}/big`, 60_000);
   // Faces on the chart: pump.fun accounts and Fomo traders who traded or called this coin.
@@ -209,9 +222,9 @@ export function Coin({ mint }: { mint: string }) {
         <div className="flex min-w-0 flex-col gap-2.5 lg:col-start-1 lg:row-start-1">
           <CoinHeader r={r} c={c} sizes={sizes} onPaper={refresh} />
           {warn.map(([bad, text]) => <p key={text} className={bad ? "rounded-control border border-down/50 bg-down/10 px-3 py-2 text-sm text-ink-2" : "rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-sm text-ink-2"}>{text}</p>)}
-          <section className="surface min-w-0 overflow-hidden">
+          <section className="surface relative min-w-0 overflow-hidden">
             <ReplayBar mint={mint} symbol={symbol} onTick={() => { refresh(); polled.refresh(); big.refresh(); people.refresh(); }} />
-            <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
+            <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} exact={Boolean(r.token.asset_class && r.token.asset_class !== "meme")} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} migrating={migratingNow(c?.migrating?.since)} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
           </section>
         </div>
         {wide && (
@@ -227,16 +240,16 @@ export function Coin({ mint }: { mint: string }) {
         {/* The trade column scrolls on its own (screen height less the top bar, status bar and margins), so its lower
             cards are reachable without scrolling the chart and the holders away. */}
         <aside className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static lg:max-h-[calc(100dvh-6.75rem)] lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin] lg:[&>*]:shrink-0 lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
-          <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} />
+          <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} migrating={migratingNow(c?.migrating?.since)} />
           <Flow c={c} />
-          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} />
+          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} migrating={migratingNow(c?.migrating?.since)} />
           <Position pos={pos} mint={mint} symbol={symbol} solUsd={c?.solUsd} />
           <Info r={r} c={c} />
           <Addresses r={r} c={c} />
           <Links r={r} />
         </aside>
       </div>
-      <QuickTrade mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} />
+      <QuickTrade mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} migrating={migratingNow(c?.migrating?.since)} />
     </div>
   );
 }

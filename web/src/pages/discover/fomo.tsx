@@ -75,7 +75,7 @@ export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: numb
   const byMint = { get: (m: string) => keptRow<Row>(m) };
   const needle = q.trim().toLowerCase();
   const rows = shown?.filter((r) => !needle || `${r.symbol} ${r.name} ${r.mint}`.toLowerCase().includes(needle)).map((f) => {
-    const r = toRow(f, byMint.get(f.mint)), l = f.chain === SOL ? freshest(f.mint, "24h") : undefined;
+    const r = toRow(f, f.chain === SOL ? byMint.get(f.mint) : undefined), l = f.chain === SOL ? freshest(f.mint, "24h") : undefined;
     if (l) noteLive(`${f.mint}:24h`, l.chg);
     const e = f.chain !== SOL ? extLive?.rows[f.mint] : undefined;
     if (e) noteLive(`${f.mint}:24h`, e.chg);
@@ -85,7 +85,6 @@ export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: numb
       : { url: `https://dexscreener.com/search?q=${encodeURIComponent(f.mint)}`, chain: CHAINS[f.chain] || `Chain ${f.chain}`, network: f.chain, tag: CHAIN_TAG[f.chain] || "EVM", img: f.img };
     return { row, ext, key: `${f.chain}:${f.mint}`, blix: f.src === "blix" };
   }) || null;
-  const age = d?.t ? Math.max(0, Math.round((Date.now() - d.t) / 1000)) : null;
   // An older Fomo list is shown as it is, without a notice: prices and market caps under each coin move live anyway.
 
   return (
@@ -94,8 +93,8 @@ export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: numb
         <div className="min-w-[1240px]">
           <div className={cn(GRID, "metal-bar sticky top-0 z-10 px-4 py-2 text-sm font-medium text-muted")}>
             <span>Pair info</span><span>Price 24h</span><span className="text-right">Market cap</span><span className="text-right">Liquidity</span>
-            <span className="text-right">Volume 24h</span><span className="text-right">Txns 1h</span><span>Token info</span>
-            <span className="text-right text-xs" title="Fomo's list is read every few seconds; prices and market caps move live in between">{age != null ? `Live · ${age}s` : "Live"}</span>
+            <span className="text-right">Volume 24h</span><span className="text-right">Txns 24h</span><span>Token info</span>
+            <span />
           </div>
           {d?.signedOut ? <Problem text="Nothing to show right now. This list fills in by itself." />
             : !rows ? (error || d?.error ? <Problem text="Nothing to show right now. This list fills in by itself." /> : <div className="p-3"><Loading /><p className="px-1 pt-2 text-sm text-muted">Loading…</p></div>)

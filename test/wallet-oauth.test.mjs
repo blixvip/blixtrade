@@ -22,7 +22,7 @@ const baseClaims = () => ({ sub, email, email_verified: true, aud: 'fixture-goog
 function fixture(t, { existing, claims = {}, googleStatus = 200, googleError, dbDown = false } = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const db = new DatabaseSync(':memory:');
-  for (const file of ['0001_waitlist.sql', '0002_google.sql']) db.exec(readFileSync(new URL(`../worker/migrations/${file}`, import.meta.url), 'utf8'));
+  for (const file of ['0001_waitlist.sql', '0002_google.sql', '0003_live_admin.sql', '0004_handles.sql']) db.exec(readFileSync(new URL(`../worker/migrations/${file}`, import.meta.url), 'utf8'));
   t.after(() => db.close());
   if (existing) db.prepare('INSERT INTO accounts (email, google_sub, created, last_seen, status) VALUES (?,?,?,?,?)')
     .run(existing.email || email, existing.sub || sub, NOW - 1000, NOW - 1000, existing.status || 'member');

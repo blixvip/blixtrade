@@ -182,7 +182,7 @@ const mobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 function Steps({ items }: { items: ReactNode[] }) {
   return (
     <ol className="flex flex-col gap-2.5 text-sm text-ink-2">
-      {items.map((x, n) => <li key={n} className="flex gap-2.5"><span className="num grid size-5 shrink-0 place-items-center rounded-full bg-paper-4 text-2xs font-bold text-ink">{n + 1}</span><span>{x}</span></li>)}
+      {items.map((x, n) => <li key={n} className="flex gap-2.5"><span className="num grid size-5 shrink-0 place-items-center rounded-full bg-paper-4 text-2xs font-bold text-ink">{n + 1}</span><span className="min-w-0 flex-1">{x}</span></li>)}
     </ol>
   );
 }
@@ -309,7 +309,7 @@ function Deposit({ address, onBuy: _onBuy, stripe }: { address: string; onBuy: (
               <div className="mt-auto flex flex-col gap-1 text-xs text-muted">
                 {tok ? <>
                   <span>Arrives as <b className="font-semibold text-ink-2">SOL</b>, usually within {net.id === "bitcoin" ? "about 20 minutes" : "a minute"}</span>
-                  {route?.rate ? <span className="num">1 {tok.sym} ≈ {rateText(route.rate)} SOL</span> : null}
+                  {route?.rate ? <span className="num">1 {tok.sym} → {rateText(route.rate)} SOL</span> : null}
                 </> : <span>Lands in your wallet in seconds</span>}
               </div>
             </div>
@@ -364,9 +364,24 @@ const Mark = ({ m }: { m: PayMark }) => <span className="grid h-[18px] w-[30px] 
 // Card and bank payments are taken by a payment provider on its own page; the SOL it buys is sent to this wallet.
 // Interac e-Transfer (Canada) is the owner's own: CAD to ETRANSFER.email with the Blix address in the message, the
 // SOL sent by hand.
-interface Provider { id: string; name: string; logo: ReactNode; how: string; marks: PayMark[]; badge?: [string, string]; go: () => void }
+interface Provider { id: string; name: string; logo: ReactNode; how: string; marks: PayMark[]; badge?: "canada" | "best" | "fast"; go: () => void }
 const Tile = ({ children, className }: { children: ReactNode; className?: string }) =>
   <span className={cn("grid size-11 shrink-0 place-items-center overflow-hidden rounded-xl ring-1 ring-white/10 ring-inset", className)}>{children}</span>;
+// The small tag beside a provider's name: a hairline pill with its own mark, quiet enough to sit next to the name.
+const BADGES = {
+  canada: { label: "Canada", cls: "border-white/10 bg-white/[0.04] text-ink-2", mark: (
+    <svg viewBox="0 0 20 12" className="h-2.5 w-[17px] shrink-0 overflow-hidden rounded-[2px]" aria-hidden>
+      <rect width="20" height="12" fill="#fff" /><rect width="5" height="12" fill="#d52b1e" /><rect x="15" width="5" height="12" fill="#d52b1e" />
+      <path d="M10 2.2l.7 1.4.8-.4-.3 1.8 1-.9.2.7 1-.2-.4 1.2.5.3-2 1.5.2.8-1.5-.2V9.6h-.4V8.2l-1.5.2.2-.8-2-1.5.5-.3-.4-1.2 1 .2.2-.7 1 .9-.3-1.8.8.4z" fill="#d52b1e" />
+    </svg>) },
+  best: { label: "Best rate", cls: "border-up/25 bg-up/[0.08] text-up", mark: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="size-3 shrink-0" aria-hidden><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg>) },
+  fast: { label: "Fastest", cls: "border-up/25 bg-up/[0.08] text-up", mark: <Icon.bolt className="size-3 shrink-0" /> },
+} as const;
+const Badge = ({ kind }: { kind: keyof typeof BADGES }) => {
+  const b = BADGES[kind];
+  return <span className={cn("inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2 text-[11px] leading-none font-semibold tracking-[0.01em]", b.cls)}>{b.mark}{b.label}</span>;
+};
 const MoonPayMark = () => (
   <Tile className="bg-[#7715f5]"><svg viewBox="0 0 24 24" className="size-6" aria-hidden><circle cx="10.5" cy="13.5" r="7" fill="#fff" /><circle cx="18.5" cy="5.5" r="3" fill="#fff" /></svg></Tile>
 );
@@ -380,8 +395,8 @@ function ETransfer({ address }: { address: string }) {
           <button onClick={() => mail.copy(ETRANSFER.email, "Email copied")} className={cn("inline-flex h-7 items-center gap-1.5 rounded-lg px-2 font-semibold transition-colors", mail.done ? "bg-up/15 text-up" : "bg-paper-4 text-ink hover:bg-paper-5")}>
             {ETRANSFER.email}{mail.done ? <CheckIcon className="size-3.5" /> : <Icon.copy className="size-3.5" />}
           </button></span>,
-        <span key="2" className="flex flex-col gap-1.5">Paste your Blix address in the message:
-          <button onClick={() => addr.copy(address)} className={cn("flex h-8 min-w-0 items-center gap-2 rounded-lg px-2.5 text-left font-outlier text-xs transition-colors", addr.done ? "bg-up/15 text-up" : "bg-paper-4 text-ink hover:bg-paper-5")}>
+        <span key="2" className="flex min-w-0 flex-col gap-1.5">Put your wallet address in the message:
+          <button onClick={() => addr.copy(address)} className={cn("flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2.5 text-left font-outlier text-xs transition-colors", addr.done ? "bg-up/15 text-up" : "bg-paper-4 text-ink hover:bg-paper-5")}>
             <span className="min-w-0 flex-1 truncate">{address}</span>{addr.done ? <CheckIcon className="size-3.5 shrink-0" /> : <Icon.copy className="size-3.5 shrink-0" />}
           </button></span>,
         <>We send the SOL to your wallet {ETRANSFER.eta}, at the market price.</>,
@@ -401,16 +416,16 @@ function Buy({ address, stripe }: { address: string; stripe: boolean }) {
   };
   const cards: PayMark[] = ["visa", "mastercard", "applepay", "googlepay"];
   const providers: Provider[] = [
-    ...(ETRANSFER.email ? [{ id: "etransfer", name: "Interac e-Transfer", logo: <Tile className="bg-[#fdb913]"><img src="brand/pay/interac.webp" alt="" className="size-full object-cover" /></Tile>,
-      how: `From any Canadian bank · SOL in 1 to 2 hours`, marks: [] as PayMark[], badge: ["Canada", "bg-down/12 text-[#ff6b6b]"] as [string, string], go: () => setOpen(open === "etransfer" ? null : "etransfer") }] : []),
-    ...(stripe ? [{ id: "stripe", name: "Stripe", logo: <Tile className="bg-[#635bff] text-lg font-bold text-white">S</Tile>, how: "Card, Apple Pay, Google Pay", marks: cards, badge: ["Fastest", "bg-up/12 text-up"] as [string, string], go: async () => {
+    ...(ETRANSFER.email ? [{ id: "etransfer", name: "Interac e-Transfer", logo: <Tile className="bg-[#fdb913]"><img src="brand/pay/interac.webp" alt="" className="size-[86%] object-contain" /></Tile>,
+      how: `From any Canadian bank · SOL in 1 to 2 hours`, marks: [] as PayMark[], badge: "canada" as const, go: () => setOpen(open === "etransfer" ? null : "etransfer") }] : []),
+    ...(stripe ? [{ id: "stripe", name: "Stripe", logo: <Tile className="bg-[#635bff] text-lg font-bold text-white">S</Tile>, how: "Card, Apple Pay, Google Pay", marks: cards, badge: "fast" as const, go: async () => {
       setBusy(true);
       const tab = window.open("about:blank", "_blank");
       try { const { url } = await call<{ url: string }>("onramp", { provider: "stripe" }); if (tab) tab.location.href = url; else location.href = url; }
       catch (e) { tab?.close(); toast((e as Error).message); }
       setBusy(false);
     } }] : []),
-    { id: "onramper", name: "Onramper", logo: <Tile><img src="brand/pay/onramper-tile.webp" alt="" className="size-full object-cover" /></Tile>, how: "Compares Banxa, MoonPay and more", marks: cards, badge: ["Best rate", "bg-up/12 text-up"],
+    { id: "onramper", name: "Onramper", logo: <Tile><img src="brand/pay/onramper-tile.webp" alt="" className="size-full object-cover" /></Tile>, how: "Compares top providers for the best price", marks: cards, badge: "best",
       go: () => go(onramper(address), "the provider") },
     { id: "moonpay", name: "MoonPay", logo: <MoonPayMark />, how: "Card, PayPal or bank transfer", marks: cards,
       go: () => go(`https://buy.moonpay.com/?${new URLSearchParams({ currencyCode: "sol", walletAddress: address })}`, "MoonPay") },
@@ -431,7 +446,7 @@ function Buy({ address, stripe }: { address: string; stripe: boolean }) {
                 {p.logo}
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2"><b className="text-md font-semibold text-ink">{p.name}</b>
-                    {p.badge && <span className={cn("rounded-full px-2 py-0.5 text-2xs font-semibold", p.badge[1])}>{p.badge[0]}</span>}</span>
+                    {p.badge && <Badge kind={p.badge} />}</span>
                   <span className="mt-0.5 block truncate text-sm text-muted">{p.how}</span>
                 </span>
                 {p.marks.length > 0 && <span className="flex shrink-0 items-center gap-1 max-sm:hidden">{p.marks.map((m) => <Mark key={m} m={m} />)}</span>}
@@ -446,7 +461,7 @@ function Buy({ address, stripe }: { address: string; stripe: boolean }) {
         })}
       </div>
       <div className="mt-auto flex flex-col gap-3">
-        <AddressRow address={address} label="Your Blix wallet: providers ask for it" />
+        <AddressRow address={address} label="Your wallet" />
         <p className="flex items-center gap-1.5 text-xs text-muted"><Icon.shield className="size-3.5 shrink-0" />Card providers check your ID and set their own fee. Blix never sees your card.</p>
       </div>
     </div>

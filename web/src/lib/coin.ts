@@ -11,7 +11,7 @@ import { store } from "./utils";
 export type Tag = "dev" | "sniper" | "bundle" | null;
 export interface WalletTags { tag: Tag; top10: boolean; label: string | null; followed: boolean; fomo: boolean }
 export interface Holder extends WalletTags {
-  wallet: string; tokens: number; pct: number; maxPct: number;
+  wallet: string; tokens: number | null; pct: number | null; maxPct: number;
   boughtSol: number | null; soldSol: number | null; valueSol: number | null; pnlSol: number | null; realizedSol: number | null;
   boughtUsd: number | null; soldUsd: number | null; valueUsd: number | null; pnlUsd: number | null;
   avgBuyMc: number | null; avgSellMc: number | null; trades: number; first: number;
@@ -24,6 +24,8 @@ export type HolderFace = { src: "fomo" | "pump"; name: string; pic: string | nul
 export interface CoinData {
   mint: string; symbol: string | null; name: string | null; solUsd: number | null; live: boolean; onCurve: boolean;
   mcUsd: number | null; priceUsd: number | null; athUsd: number | null; progress: number | null; supply: number;
+  // Curve full, pool not trading yet: pump.fun is migrating it and every trade fails meanwhile (server livetrades.js).
+  migrating?: { since: number } | null;
   priceAgeMs?: number | null;   // how old mcUsd is (0 = priced this second by the Pulse)
   m5: { source: "live" | "tracked"; buys: number; sells: number; buyUsd: number | null; sellUsd: number | null; volUsd: number | null; netUsd: number | null; traders: number | null } | null;
   holders: { count: number; wallets: number; trades: number; since: number | null; last: number; genesis: boolean; partial: boolean; frozen: boolean; top10: number; list: Holder[]; source?: "jupiter" | "ledger" | "chain" | "rugcheck" } | null;
@@ -56,7 +58,7 @@ export interface Paper {
 export interface TokenDetail {
   token: {
     mint: string; symbol?: string | null; name?: string | null; description?: string | null; image?: string | null; first_seen?: number | null; pair?: string | null; dex?: string | null;
-    pair_created?: number | null; price?: number | null; mcap?: number | null; liquidity?: number | null; vol_m5?: number | null; chg_h1?: number | null;
+    pair_created?: number | null; price?: number | null; mcap?: number | null; liquidity?: number | null; vol_m5?: number | null; chg_h1?: number | null; chg_h24?: number | null; asset_class?: string | null;
     links?: { type?: string; url?: string }[]; boosts?: number | null; header?: string | null; safety?: { risks?: Risk[]; lpLockedPct?: number | null; totalHolders?: number | null; top10?: number | null; insiderPct?: number | null; devPct?: number | null } | null;
     safety_score?: number | null; safety_checked?: number | null; status?: string | null; graduated?: boolean | number | null; peak_mcap?: number | null; creator?: string | null; themes?: string[] | null;
     fresh?: { dead?: boolean; quarantine?: string | null; illiquid?: boolean; exitWhy?: string | null; stale?: boolean; ageMs?: number | null; source?: string | null } | null;
@@ -271,6 +273,16 @@ export function usePoll<T>(path: string | null, ms: number, keep = false) {
 }
 
 // ---------- formats (in the classic coin page's style) ----------
+// Prices on the chart need more digits than anywhere else, or every label on a quiet coin's axis reads the
+// same ("$3.5K" six times). Same steps as trade.js usdP; the coin's header uses it too, so header and chart print the same figure; never negative (the room left for the volume band).
+export const usdP = (n: number) => {
+  if (n == null || !isFinite(n)) return "—";
+  if (n < 0) return "";
+  // Trailing zeros go ("$7.100K" reads "$7.1K", "$9.000K" "$9K"): two different labels never become the same.
+  const t = (s: string) => s.replace(/(\.\d*?)0+(?=[KMB]?$)/, "$1").replace(/\.(?=[KMB]?$)/, "");
+  return n >= 1e9 ? `$${t((n / 1e9).toFixed(3) + "B")}` : n >= 1e6 ? `$${t((n / 1e6).toFixed(3) + "M")}` : n >= 1e5 ? `$${t((n / 1e3).toFixed(1) + "K")}` : n >= 1e4 ? `$${t((n / 1e3).toFixed(2) + "K")}`
+    : n >= 1e3 ? `$${t((n / 1e3).toFixed(3) + "K")}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toPrecision(3)}`;
+};
 export const usdK = (n: number | null | undefined) => {
   if (n == null || !isFinite(n)) return "—";
   const a = Math.abs(n);

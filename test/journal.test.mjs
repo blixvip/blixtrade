@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 process.env.RADAR_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "journal-test-"));
 const J = await import("../server/journal.js");
@@ -74,6 +75,81 @@ test("candles built live and candles rebuilt from the journal are identical", ()
 });
 
 // ---------- confirmation ----------
+test("malformed live trades cannot poison the candle book", () => {
+  const mint = "MalformedChart111111111111111111111111pump", t = Date.now();
+  C.addTrade(mint, 100, 1, true, t);
+  const before = C.series(mint, 0);
+  for (const [mc, usd, at] of [[Infinity, 1, t], [100, NaN, t], [100, -1, t], [100, 1, NaN], [100, 1, t + 120000]])
+    C.addTrade(mint, mc, usd, true, at);
+  assert.deepEqual(C.series(mint, 0), before);
+});
+
+test("restored candle buckets discard corrupt rows and restore chronological order", () => {
+  const mint = "RestoredChart111111111111111111111111pump", t = Math.floor(Date.now() / 1000) - 10;
+  const bar = (at, close) => [at, close, close, close, close, 1, 1, 0];
+  C.setBook(mint, [bar(t + 1, 110), bar(NaN, 999), bar(t, 100), bar(t + 1, 120), bar(t + 2, Infinity)]);
+  assert.deepEqual(C.series(mint, 0), [[t, 100], [t + 1, 120]]);
+});
+
+test("restart snapshots validate and bound restored candle history", () => {
+  const mint = "SnapshotChart111111111111111111111111pump", t = Math.floor(Date.now() / 1000) - 10;
+  const file = path.join(process.env.RADAR_DATA, 'candle-snapshot-test.json');
+  fs.writeFileSync(file, JSON.stringify({t: Date.now(), book: [null, [mint, Date.now(), [[t + 1, 110, 110, 110, 110], [null, 999, 999, 999, 999], [t, 100, 100, 100, 100]]]]}));
+  C.loadState(file);
+  assert.deepEqual(C.series(mint, 0), [[t, 100], [t + 1, 110]]);
+});
+
+test("late trades within the current second update range and volume without rewinding the close", () => {
+  const mint = "LateSameSecond11111111111111111111111pump", t = Math.floor(Date.now() / 1000) * 1000 - 2000;
+  C.addTrade(mint, 100, 1, true, t + 800);
+  C.addTrade(mint, 200, 2, true, t + 200);
+  C.addTrade(mint, 50, 1, true, t + 1100);
+  const stats = C.windowStats(mint, 0);
+  // The next bucket opens at the newest close (100), not the delayed trade (200).
+  assert.equal(C.series(mint, t / 1000 + 1)[0][1], 100);
+  assert.equal(stats.buys, 3);
+  assert.equal(stats.vol, 4);
+});
+
+test("malformed journal records cannot poison persisted chart history", () => {
+  const mint = "JournalBadChart1111111111111111111111pump", t = Date.now();
+  for (const bad of [{t: NaN}, {t: Infinity}, {t: t + 120000}, {usd: Infinity}, {usd: -1}])
+    J.record({ mint, sig: sig(), mcUsd: 100, usd: 1, t, venue: J.VENUE.curve, buy: true, ...bad });
+  J.flush();
+  assert.equal(J.trades(mint, t - 1).length, 0);
+});
+
+test("a rolled-back journal batch retries every trade with valid mint and wallet identities", () => {
+  const mint = "RollbackChart111111111111111111111111pump", t = Date.now(), before = J.stats.written;
+  J.record({ mint, sig: sig(), mcUsd: 100, usd: 1, t, venue: J.VENUE.curve, buy: true, wallet: 'test-wallet-a' });
+  J.record({ mint, sig: sig(), mcUsd: 666, usd: 1, t: t + 1, venue: J.VENUE.curve, buy: true, wallet: 'test-wallet-b' });
+  db.exec("CREATE TEMP TRIGGER fail_journal BEFORE INSERT ON j_trades WHEN NEW.mc = 666 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END");
+  try { assert.throws(() => J.flush(), /injected write failure/); }
+  finally { db.exec('DROP TRIGGER fail_journal'); }
+  J.flush();
+  assert.equal(J.trades(mint, t - 1).length, 2);
+  assert.equal(J.stats.written - before, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM j_trades t JOIN j_wallets w ON w.id = t.wid WHERE t.mid = ?').get(J.midOf(mint)).n, 2);
+});
+
+test("a competing database writer yields promptly and the journal retries without losing trades", () => {
+  const other = new DatabaseSync(path.join(process.env.RADAR_DATA, 'radar.db'));
+  const mint = 'BusyChart1111111111111111111111111111pump', t = Date.now();
+  const timeout = db.prepare('PRAGMA busy_timeout').get().timeout;
+  J.record({ mint, sig: sig(), mcUsd: 100, usd: 1, t, venue: J.VENUE.curve, buy: true });
+  let elapsed;
+  try {
+    other.exec('BEGIN IMMEDIATE');
+    const start = performance.now();
+    assert.throws(() => J.flush(), /locked|busy/);
+    elapsed = performance.now() - start;
+  } finally { other.exec('ROLLBACK'); other.close(); }
+  J.flush();
+  assert.equal(J.trades(mint, t - 1).length, 1);
+  assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout, timeout);
+  assert.ok(elapsed < 1000, `main thread blocked ${elapsed} ms`);
+});
+
 test("confirmed trades are marked; failed and never-landed ones are removed and their coin rebuilt", async () => {
   const coin = "ConfirmCoin11111111111111111111111111pump", t = Date.now() - 200_000;
   const [a, b, c, d] = [sig(), sig(), sig(), sig()];

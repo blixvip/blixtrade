@@ -32,7 +32,6 @@ const Ico = {
   trend: I(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />),
   alpha: I(<path d="M18 6c-2 0-3.5 2.5-5 6s-3 6-5.5 6A3.5 3.5 0 0 1 4 14.5C4 10 7 6 10.5 6c3 0 4 4 5 8s1.5 4 2.5 4" />),
   callout: I(<path d="M3 11l14-6v14L3 13zM11.6 16.8a3 3 0 1 1-5.8-1.6" />),
-  github: I(<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4M9 18c-4.51 2-5-2-7-2" />),
   docs: I(<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />),
   x: I(<path fill="currentColor" stroke="none" d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77zm-1.08 16.18h1.7L7.4 4.73H5.58z" />),
   discord: I(<path fill="currentColor" stroke="none" d="M20.32 4.37A19.8 19.8 0 0 0 15.4 2.85a13.7 13.7 0 0 0-.63 1.29 18.4 18.4 0 0 0-5.53 0 13 13 0 0 0-.64-1.29 19.7 19.7 0 0 0-4.92 1.52C.57 9.05-.27 13.6.15 18.1a19.9 19.9 0 0 0 6.03 3.05c.49-.66.92-1.36 1.29-2.1a12.9 12.9 0 0 1-2.03-.97c.17-.12.34-.25.5-.38a14.2 14.2 0 0 0 12.12 0c.16.13.33.26.5.38-.65.38-1.33.71-2.04.97.37.74.8 1.44 1.29 2.1a19.8 19.8 0 0 0 6.04-3.05c.5-5.2-.84-9.72-3.53-13.73M8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42s.96-2.42 2.16-2.42 2.18 1.09 2.16 2.42c0 1.34-.96 2.42-2.16 2.42m7.97 0c-1.18 0-2.15-1.08-2.15-2.42s.95-2.42 2.15-2.42 2.18 1.09 2.16 2.42c0 1.34-.95 2.42-2.16 2.42" />),
@@ -44,7 +43,7 @@ const Eth = () => <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden><pat
 
 // Blix's socials, at the end of the bar. The Discord invite is still to come: until then its icon only says so.
 const X_URL = "https://x.com/blix_vip";
-const DISCORD_URL = "";
+const DISCORD_URL = "https://discord.gg/3VWHBP6paA";
 const item = "flex h-full items-center gap-1.5 px-2 text-xs whitespace-nowrap text-ink-2 transition-colors duration-100 hover:bg-paper-3 hover:text-ink";
 
 // A small window that opens upward from its button and closes on a click anywhere else.
@@ -287,7 +286,7 @@ function DesktopStatusBar() {
     <Tip tip={tip}><a href={pageHref(route)} className={item}>{icon}<span className="max-xl:sr-only">{label}</span></a></Tip>
   );
   return (
-    // On a tablet the bar has ~580 px beside the rail: the launch rate and the docs and GitHub links step aside
+    // On a tablet the bar has ~580 px beside the rail: the launch rate and the documentation links step aside
     // below 1024 px, and anything still too wide is clipped rather than pushed past the edge.
     <footer className="flex h-8 shrink-0 items-stretch overflow-hidden border-t border-rule bg-paper-2 max-md:hidden">
       <Connection />
@@ -312,7 +311,6 @@ function DesktopStatusBar() {
         <Tip tip="New pump.fun coins per minute"><span className="num flex items-center gap-1 px-2 text-xs text-ink-2"><Icon.launch className="size-3.5" />{launchesPerMin != null ? `${Math.round(launchesPerMin)}/min` : "—"}</span></Tip>
         <span className="my-2 w-px bg-rule" />
         <Tip tip="API docs"><a href={pageHref("api")} aria-label="API docs" className={item}><Ico.docs className="size-3.5" /></a></Tip>
-        <Tip tip="Blix on GitHub"><a href="https://github.com/blixvip/blixtrade" target="_blank" rel="noopener noreferrer" aria-label="GitHub" className={item}><Ico.github className="size-3.5" /></a></Tip>
         <Tip tip="Blix on X"><a href={X_URL} target="_blank" rel="noopener noreferrer" aria-label="Blix on X" className={item}><Ico.x className="size-3.5" /></a></Tip>
         <Tip tip={DISCORD_URL ? "Blix Discord" : "Blix Discord: coming soon"}>{DISCORD_URL
           ? <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" aria-label="Blix Discord" className={item}><Ico.discord className="size-3.5" /></a>

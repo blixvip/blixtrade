@@ -1,97 +1,51 @@
 import type { ReactNode, SVGProps } from "react";
 import { cn } from "@/lib/utils";
 
-// The rail's icons: one two-tone set on a 24 px grid, all the same 1.8 stroke and round joins. Each has an
-// outline and a soft filled body (class "duo"); the rail lights the body up for the page you are on.
-// Shapes follow Lucide's metaphors (ISC licence) where one fits, redrawn to sit together.
+// The rail's icons: one set on a 24 px grid, all the same 1.75 stroke and round joins, drawn from Lucide's shapes
+// (ISC licence) so they sit together. Each has a soft filled body (class "duo") that the rail shows only for the
+// page you are on, so the current page reads as filled and the rest as outlines.
 const N = (duo: ReactNode, line: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("shrink-0", className)} {...p}>
-    <g className="duo" fill="currentColor" stroke="none" opacity="0.16">{duo}</g>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("shrink-0", className)} {...p}>
+    <g className="duo" fill="currentColor" stroke="none" opacity="0">{duo}</g>
     {line}
   </svg>
 );
 
+const COMPASS = "m16.24 7.76-1.8 5.41a2 2 0 0 1-1.27 1.27L7.76 16.24l1.8-5.41a2 2 0 0 1 1.27-1.27z";
+const ZAP = "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z";
+const BUBBLE_A = "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z";
+const PAPER = "M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2";
+const CUP = "M18 2H6v7a6 6 0 0 0 12 0V2Z";
+const ROCKET = "m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z";
+const SPARK = "M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z";
+const GEAR = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
+const HEART = "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z";
+
 export const NavIcon = {
-  // A stream of posts: the Fomo feed.
-  feed: N(
-    <rect x="3.25" y="3.75" width="17.5" height="16.5" rx="4" />,
-    <><rect x="3.25" y="3.75" width="17.5" height="16.5" rx="4" /><circle cx="7.75" cy="8.6" r="1.35" fill="currentColor" stroke="none" /><path d="M11 8.6h5.75M7 15.4h9.75M7 12h6" /></>,
-  ),
   // A compass: finding coins.
-  discover: N(
-    <circle cx="12" cy="12" r="9.25" />,
-    <><circle cx="12" cy="12" r="9.25" /><path d="M15.6 8.4l-1.9 5.3-5.3 1.9 1.9-5.3z" fill="currentColor" fillOpacity="0.9" /></>,
-  ),
-  // A live heartbeat on a screen.
-  pulse: N(
-    <rect x="2.75" y="4.25" width="18.5" height="15.5" rx="4" />,
-    <><rect x="2.75" y="4.25" width="18.5" height="15.5" rx="4" /><path d="M6 12h2.4l1.8-3.8 3.4 7.6 1.8-3.8H18" /></>,
-  ),
-  // A flame: what is running hot.
-  narratives: N(
-    <path d="M12 21.25a6.75 6.75 0 0 1-6.75-6.75c0-2.6 1.5-4.3 2.9-5.6.3 1.7 1.2 2.8 2.35 3.2-.4-3.1.9-6.4 3.9-8.85.3 2.9 2.05 4.7 3.6 6.5 1.4 1.6 2.75 3.1 2.75 4.75A6.75 6.75 0 0 1 12 21.25z" />,
-    <><path d="M12 21.25a6.75 6.75 0 0 1-6.75-6.75c0-2.6 1.5-4.3 2.9-5.6.3 1.7 1.2 2.8 2.35 3.2-.4-3.1.9-6.4 3.9-8.85.3 2.9 2.05 4.7 3.6 6.5 1.4 1.6 2.75 3.1 2.75 4.75A6.75 6.75 0 0 1 12 21.25z" />
-      <path d="M12 21.25c-1.8 0-3.1-1.3-3.1-2.95 0-1.7 1.4-2.6 2.2-3.9.4 1 1 1.5 1.7 1.7.7-.8 1-1.8 1-2.9 1.1 1.2 1.95 2.6 1.95 4.1 0 2.3-1.6 3.95-3.75 3.95z" /></>,
-  ),
-  // A star: the AI's picks.
-  picks: N(
-    <path d="M10.6 3.9a.7.7 0 0 1 1.25 0l2.05 4.15 4.6.67a.7.7 0 0 1 .39 1.2l-3.33 3.24.79 4.58a.7.7 0 0 1-1.02.74l-4.1-2.16-4.12 2.16a.7.7 0 0 1-1.01-.74l.78-4.58-3.33-3.24a.7.7 0 0 1 .39-1.2l4.6-.67z" />,
-    <><path d="M10.6 3.9a.7.7 0 0 1 1.25 0l2.05 4.15 4.6.67a.7.7 0 0 1 .39 1.2l-3.33 3.24.79 4.58a.7.7 0 0 1-1.02.74l-4.1-2.16-4.12 2.16a.7.7 0 0 1-1.01-.74l.78-4.58-3.33-3.24a.7.7 0 0 1 .39-1.2l4.6-.67z" /></>,
-  ),
-  // A magnifier over a page of notes.
-  research: N(
-    <circle cx="10.5" cy="10.5" r="6.75" />,
-    <><circle cx="10.5" cy="10.5" r="6.75" /><path d="M15.4 15.4l5.35 5.35M7.75 9h5.5M7.75 12h3.5" /></>,
-  ),
+  discover: N(<circle cx="12" cy="12" r="10" />, <><circle cx="12" cy="12" r="10" /><path d={COMPASS} /></>),
+  // A bolt: new coins, live, as they launch.
+  pulse: N(<path d={ZAP} />, <path d={ZAP} />),
+  // Two speech bubbles: the feed of trades and theses.
+  feed: N(<path d={BUBBLE_A} />, <><path d={BUBBLE_A} /><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" /></>),
+  // A newspaper: the day's narratives.
+  narratives: N(<path d={PAPER} />, <><path d={PAPER} /><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z" /></>),
   // A trophy: the best traders.
-  traders: N(
-    <path d="M7 3.75h10v5.5a5 5 0 0 1-10 0z" />,
-    <><path d="M7 3.75h10v5.5a5 5 0 0 1-10 0z" /><path d="M7 5.5H5.25a2.5 2.5 0 0 0 0 5H7.4M17 5.5h1.75a2.5 2.5 0 0 1 0 5H16.6M12 14.25v3.25M8.5 20.25h7M9.5 20.25c0-1.6 1.1-2.75 2.5-2.75s2.5 1.15 2.5 2.75" /></>,
-  ),
-  // The X mark in a rounded square: the X tracker.
-  xtracker: N(
-    <rect x="3" y="3" width="18" height="18" rx="5" />,
-    <><rect x="3" y="3" width="18" height="18" rx="5" /><path d="M8 8l8 8M16 8l-8 8" /></>,
-  ),
-  // Two people.
-  people: N(
-    <><circle cx="9" cy="8" r="3.75" /><path d="M2.75 20.25v-.75a5 5 0 0 1 5-5h2.5a5 5 0 0 1 5 5v.75z" /></>,
-    <><circle cx="9" cy="8" r="3.75" /><path d="M2.75 20.25v-.75a5 5 0 0 1 5-5h2.5a5 5 0 0 1 5 5v.75M15.75 4.4a3.75 3.75 0 0 1 0 7.2M18.25 14.7a5 5 0 0 1 3 4.8v.75" /></>,
-  ),
-  // A coin with a plus: make a coin.
-  launch: N(
-    <circle cx="10" cy="14" r="7.25" />,
-    <><circle cx="10" cy="14" r="7.25" /><circle cx="10" cy="14" r="3.75" /><path d="M19 2.75v5.5M16.25 5.5h5.5" /></>,
-  ),
-  // Code brackets in a window: the API.
-  api: N(
-    <rect x="2.75" y="4.25" width="18.5" height="15.5" rx="4" />,
-    <><rect x="2.75" y="4.25" width="18.5" height="15.5" rx="4" /><path d="M9.25 9.5L6.75 12l2.5 2.5M14.75 9.5l2.5 2.5-2.5 2.5M12.75 8.75l-1.5 6.5" /></>,
-  ),
+  traders: N(<path d={CUP} />, <><path d={CUP} /><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" /></>),
+  // A rocket: launch a coin.
+  launch: N(<path d={ROCKET} />, <><path d={ROCKET} /><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></>),
+  // Sparkles: the AI's early picks.
+  picks: N(<path d={SPARK} />, <><path d={SPARK} /><path d="M20 3v4M22 5h-4M4 17v2M5 18H3" /></>),
+  // A rewind loop around a play mark: practice on a replayed chart.
+  replay: N(<path d="M10 8.75v6.5l5-3.25z" />, <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M10 8.75v6.5l5-3.25z" /></>),
+  // Code brackets: the API.
+  api: N(null, <path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16" />),
   // A plug: connect an AI over MCP.
-  mcp: N(
-    <path d="M6.25 8.25h11.5v4a5 5 0 0 1-5 5h-1.5a5 5 0 0 1-5-5z" />,
-    <><path d="M6.25 8.25h11.5v4a5 5 0 0 1-5 5h-1.5a5 5 0 0 1-5-5zM9 8.25V2.75M15 8.25V2.75M12 17.25v4" /></>,
-  ),
+  mcp: N(<path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />, <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />),
   // A person in a circle: your account.
-  account: N(
-    <circle cx="12" cy="12" r="9.25" />,
-    <><circle cx="12" cy="12" r="9.25" /><circle cx="12" cy="10" r="3.25" /><path d="M6.6 19.3a5.75 5.75 0 0 1 10.8 0" /></>,
-  ),
+  account: N(<circle cx="12" cy="12" r="10" />, <><circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66" /></>),
   // A gear.
-  settings: N(
-    <path d="M10.3 2.75h3.4l.55 2.6 1.55.9 2.5-.85 1.7 2.95-2 1.75v1.8l2 1.75-1.7 2.95-2.5-.85-1.55.9-.55 2.6h-3.4l-.55-2.6-1.55-.9-2.5.85-1.7-2.95 2-1.75v-1.8l-2-1.75 1.7-2.95 2.5.85 1.55-.9z" />,
-    <><path d="M10.3 2.75h3.4l.55 2.6 1.55.9 2.5-.85 1.7 2.95-2 1.75v1.8l2 1.75-1.7 2.95-2.5-.85-1.55.9-.55 2.6h-3.4l-.55-2.6-1.55-.9-2.5.85-1.7-2.95 2-1.75v-1.8l-2-1.75 1.7-2.95 2.5.85 1.55-.9z" />
-      <circle cx="12" cy="12" r="3" /></>,
-  ),
+  settings: N(<path d={GEAR} />, <><path d={GEAR} /><circle cx="12" cy="12" r="3" /></>),
   // A heart with a pulse: the radar's health.
-  // A play button inside a rewind loop: the chart replay (blixvip.com/demo).
-  replay: N(
-    <circle cx="12" cy="12" r="8.25" />,
-    <><path d="M3.75 12a8.25 8.25 0 1 0 2.4-5.83" /><path d="M3.75 3.75v3.5h3.5" /><path d="M10.25 9.25v5.5l4.5-2.75z" /></>,
-  ),
-  health: N(
-    <path d="M12 20.25s-8.25-4.75-8.25-11A4.5 4.5 0 0 1 12 6.9a4.5 4.5 0 0 1 8.25 2.35c0 6.25-8.25 11-8.25 11z" />,
-    <><path d="M12 20.25s-8.25-4.75-8.25-11A4.5 4.5 0 0 1 12 6.9a4.5 4.5 0 0 1 8.25 2.35c0 6.25-8.25 11-8.25 11z" /><path d="M6.5 12.5h2.25l1.5-2.75 2.5 5 1.5-2.25h3.25" /></>,
-  ),
+  health: N(<path d={HEART} />, <><path d={HEART} /><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27" /></>),
 };

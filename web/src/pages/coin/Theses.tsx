@@ -20,7 +20,7 @@ import { Empty } from "./parts";
 
 interface Callout {
   id: string; posted: number | null; t: number | null; likes: number; replies: number; views?: number;
-  user: { pump: string | null; name: string; pic: string | null; verified: boolean; x: string | null };
+  user: { pump: string | null; wallet?: string | null; name: string; pic: string | null; verified: boolean; x: string | null };
   comment: string | null; media: string | null; updates?: { id: string; text: string; t: number | null; media: string | null }[];
   entryMc: number | null; multiple: number | null; maxMultiple: number | null; sizeUsd: number | null; pnlUsd: number | null; pnlPct: number | null;
 }
@@ -51,7 +51,7 @@ export function AllTheses({ mint, f }: { mint: string; f: CoinFomo | null }) {
   const { data: pc } = usePoll<Callouts>(`coin/${mint}/callouts`, 4_000);
 
   const pump: Post[] = (pc?.items || []).map((x) => ({
-    id: x.id, src: "pump", name: x.user.name, handle: x.user.pump, href: x.user.pump ? `https://pump.fun/profile/${encodeURIComponent(x.user.pump)}` : undefined, external: true,
+    id: x.id, src: "pump", name: x.user.name, handle: x.user.pump, href: x.user.wallet ? `#/trader/${x.user.wallet}` : undefined, external: false,
     pic: x.user.pic, t: x.posted || x.t || 0, mc: x.entryMc, text: clean(x.comment || ""), likes: x.likes, replies: x.replies, views: x.views, verified: x.user.verified,
     media: x.media, multiple: x.multiple, entryMc: x.entryMc, snapMc: x.entryMc && x.multiple ? x.entryMc * x.multiple : null, updates: (x.updates || []).map((u) => ({ ...u, text: clean(u.text) })), hold: { value: x.sizeUsd, pnl: x.pnlUsd, pct: x.pnlPct },
   }));

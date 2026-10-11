@@ -17,6 +17,7 @@ import { CIcon, SolAmt } from "./parts";
 import { usePic } from "@/lib/pics";
 import type { Pos } from "./position";
 import { usePositionCard } from "./PnlShare";
+import { MigratingNote, MIGRATING_TIP } from "@/components/Migrating";
 
 import { useQuick, toggleQuick } from "@/lib/quick";
 
@@ -47,7 +48,8 @@ const fieldOk = (i: number, text: string) => {
 
 // `docked`: the same panel sitting in the coin page's right column, always there; its pop-out button floats it
 // (and the docked one steps aside until the floating one is closed).
-export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, away = false }: { mint: string; symbol: string; sizes: number[]; pos: Pos; onDone: () => void; docked?: boolean; away?: boolean }) {
+// `migrating`: when the coin's curve filled while its pool is not live yet (components/Migrating.tsx): nothing trades.
+export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, away = false, migrating = null }: { mint: string; symbol: string; sizes: number[]; pos: Pos; onDone: () => void; docked?: boolean; away?: boolean; migrating?: number | null }) {
   const open = useQuick((s) => s.open);
   const paperOn = useTrade((s) => s.paper), wallet = useTrade((s) => s.wallet), me = useMe((s) => s.me);
   const presets = usePresets((s) => s.list), pi = usePresets((s) => s.pi);
@@ -55,6 +57,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const { buys, sells, slip } = presets[pi];
   const [edit, setEdit] = useState<string[] | null>(null);     // the nine preset fields while editing (4 buys, 4 sells, slippage %)
   const [busy, setBusy] = useState<string | null>(null);
+  const pendingBuys = useRef(0);   // buys pressed and not settled yet
   const [at, setAt] = useState<At | null>(() => store.get<At | null>("qt:at", null));
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ dx: number; dy: number; at: At } | null>(null);
@@ -93,8 +96,11 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   };
   const up = () => { if (drag.current) { store.set("qt:at", drag.current.at); drag.current = null; } };
 
+  // Buys can be pressed again and again (spam buying: lib/trade.ts lines them up, one after another); a sell waits
+  // until nothing is going. The pressed button spins until the last of its buys has settled.
   const go = async (key: string, buy: boolean, v: number) => {
-    if (busy) return;
+    if (busy && !buy) return;
+    if (buy) pendingBuys.current++;
     setBusy(key);
     const slippageBps = slip;
     const ok = await trade(buy ? { side: "buy", mint, symbol, sol: v, slippageBps } : { side: "sell", mint, symbol, pct: v, slippageBps },
@@ -103,6 +109,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
         if (buy) return post("paper/quoted", { mint, sol: v, slippageBps });
         for (const p of pos.open) await post(`paper/${p.id}/sellq`, { pct: v, why: "instant trade" });
       });
+    if (buy && --pendingBuys.current > 0) { if (ok) onDone(); return; }
     setBusy(null);
     if (ok) onDone();
   };
@@ -190,14 +197,16 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
           </span>
         </div>
 
+        {migrating ? <MigratingNote since={migrating} /> : null}
         <div className="flex flex-col gap-1.5">
           {row("Buy", "text-up", cash == null ? (paperOn ? "" : "Not signed in") : <SolAmt v={cash} />)}
           <div className="grid grid-cols-4 gap-1.5">
             {edit ? buyP.map((_, i) => field(i, "SOL")) : buyP.map((v, i) => {
               const short = cash != null && v > cash;
+              if (migrating) return <button key={i} aria-disabled title={MIGRATING_TIP} className={btn("buy", false)}>{v}</button>;
               return (
                 <button key={i} aria-disabled={short || undefined} title={short ? (paperOn ? `Only ${+cash!.toFixed(3)} SOL to spend` : "Not enough SOL: deposit to buy") : `Buy ${v} SOL of ${symbol} · ${slipTxt(slip)} slippage`}
-                  onClick={() => { if (busy) return; if (short) { if (!paperOn) openExchange("deposit"); return; } void go(`b${i}`, true, v); }}
+                  onClick={() => { if (short) { if (!paperOn) openExchange("deposit"); return; } void go(`b${i}`, true, v); }}
                   className={btn("buy", !short)}>
                   {busy === `b${i}` ? spin : v}
                 </button>
@@ -210,6 +219,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
           {row("Sell", "text-down", pos.canSell ? (pos.tokens ? `${tokN(pos.tokens)} ${symbol}` : <SolAmt v={pos.holding} />) : "Nothing held")}
           <div className="grid grid-cols-4 gap-1.5">
             {edit ? sellP.map((_, i) => field(i + 4, "%")) : sellP.map((v, i) => (
+              migrating ? <button key={i} aria-disabled title={MIGRATING_TIP} className={btn("sell", false)}>{`${v}%`}</button> :
               <button key={i} aria-disabled={!pos.canSell || undefined} title={pos.canSell ? `Sell ${v}% of your ${symbol} · ${slipTxt(slip)} slippage` : "Buy first, then sell from here"}
                 onClick={() => { if (!busy && pos.canSell) void go(`s${i}`, false, v); }}
                 className={btn("sell", pos.canSell)}>
@@ -228,7 +238,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
             {pos.exit != null && <span>Avg sell <b className="font-semibold text-ink-2">{usdK(pos.exit)}</b></span>}
             <button onClick={pnlCard.open} title="Open your PnL card"
               className={cn("ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold transition-colors", (pos.pnl ?? 0) >= 0 ? "bg-up/10 text-up hover:bg-up/15" : "bg-down/10 text-down hover:bg-down/15")}>
-              {pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}
+              {pos.pnl == null ? "—" : <><SolAmt v={pos.pnl} signed /></>}
               {pnlPct != null && <span className="opacity-80">{pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}
             </button>
           </>

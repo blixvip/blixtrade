@@ -11,20 +11,39 @@ import { walletAction } from "./wallet-action";
 export interface Order { side: "buy" | "sell"; mint: string; symbol: string; sol?: number; pct?: number; slippageBps?: number }
 
 let agreed = false;   // real money is confirmed once per page load, then quick buttons are quick
-let sending = false;
+
+// Spam buying (the user, 2026-10-10): every press of a buy button counts. A press while trades are still going is
+// lined up and runs the moment the one before it has settled, so ten presses are ten buys. They go one at a time
+// because the wallet service refuses a second transaction while one is in flight (blix-vault walletAction, 409),
+// which keeps the wallet's books straight. At most MAX_LINE wait; a buy that the SOL already lined up would leave
+// unaffordable is refused at the press, and each real buy that waited reads the wallet again before it goes.
+const MAX_LINE = 10;
+let line: Promise<unknown> = Promise.resolve();
+let waiting = 0, lineSol = 0;
 
 // Resolves true when the trade went through. `paper` is the caller's paper request, run when the switch is on.
 export async function trade(o: Order, paper: () => Promise<unknown>): Promise<boolean> {
-  if (sending) { toast("A trade is already being checked. Wait for its result."); return false; }
-  sending = true;
-  try { return await execute(o, paper); } finally { sending = false; }
+  if (waiting >= MAX_LINE) { toast(`${MAX_LINE} trades are already lined up. Wait for some to finish.`); return false; }
+  const sol = o.side === "buy" ? o.sol || 0 : 0, ahead = waiting, solAhead = lineSol;
+  const isPaper = useTrade.getState().paper || paperLocked;
+  const cash = useMe.getState().me?.wallet?.sol;
+  if (!isPaper && sol && ahead && cash != null && sol + solAhead > cash) {
+    toast(`Not enough SOL for another ${sol} SOL buy: ${+solAhead.toFixed(4)} SOL is already lined up.`);
+    return false;
+  }
+  waiting++; lineSol += sol;
+  if (ahead) toast(`${o.side === "buy" ? `Buy ${sol} SOL` : `Sell ${o.pct}%`} of ${o.symbol ? `$${o.symbol}` : "coin"} lined up (${ahead} ahead)`);
+  const run = line.then(() => execute(o, paper, ahead > 0));
+  line = run.catch(() => {});
+  try { return await run; } finally { waiting--; lineSol -= sol; }
 }
 
-async function execute(o: Order, paper: () => Promise<unknown>): Promise<boolean> {
+async function execute(o: Order, paper: () => Promise<unknown>, waited = false): Promise<boolean> {
   const isPaper = useTrade.getState().paper || paperLocked, name = o.symbol ? `$${o.symbol}` : "coin";
   const size = o.side === "buy" ? `${o.sol} SOL` : `${o.pct}%`;
   if (!isPaper) {
-    if (!useMe.getState().me) await loadMe();
+    // A trade that waited in line: the wallet as it is now (the ones before it spent from it).
+    if (!useMe.getState().me || waited) await loadMe();
     const me = useMe.getState().me;
     if (!me?.signedIn) { toast("Sign in to trade with real SOL, or switch Paper on to use fake SOL."); location.hash = "#/account"; return false; }
     if (me.needsWallet) { toast("Create your hosted wallet before trading with real SOL."); location.hash = "#/account"; return false; }

@@ -103,6 +103,7 @@ const pctSigned = (n: number | null) => (n == null || !isFinite(n) ? "" : `${n >
 // A holding: its share with a bar scaled to the biggest holder, and what it is worth.
 // wide: the Holders table, where the share is the point: a long quiet bar across the row with the figures at its end.
 function Holding({ x, scale, wide }: { x: Holder; scale: number; wide?: boolean }) {
+  if (x.pct == null) return <span className="text-sm text-muted">Unknown balance</span>;
   if (x.status === "outside top 100") return <span className="text-sm text-muted">not in top 100</span>;
   if (x.pct <= 0 && (x.boughtSol || x.soldSol)) return <span className="text-sm text-muted">Sold all</span>;
   const w = Math.max(1.5, Math.min(100, (x.pct / Math.max(scale, 1e-4)) * 100));
@@ -142,7 +143,7 @@ export function HoldersView({ c, bonding }: { c: CoinData; bonding: boolean }) {
   const [f, setF] = useState<HFilter>("all");
   const h = c.holders!;
   const list = h.list;
-  const scale = Math.max(...list.filter((x) => x.label !== "Pool").map((x) => x.pct), 0.0001);
+  const scale = Math.max(...list.filter((x) => x.label !== "Pool").map((x) => x.pct ?? 0), 0.0001);
   // The curve or pool first (it is not a person, so it gets no rank), then the wallets biggest first.
   const ordered = [...list.filter((x) => x.label === "Pool"), ...list.filter((x) => x.label !== "Pool")];
   const shown = ordered.filter((x) => f === "all" || (f === "tagged" ? Boolean(x.tag) || x.top10 : x.followed || x.fomo));
@@ -207,7 +208,7 @@ export function TradersView({ c }: { c: CoinData }) {
   const winners = known.filter((x) => (x.pnlUsd ?? 0) > 0).length;
   const best = known.length ? Math.max(...known.map((x) => x.pnlUsd!)) : null, worst = known.length ? Math.min(...known.map((x) => x.pnlUsd!)) : null;
   const vol = list.reduce((s, x) => s + (x.boughtUsd ?? 0) + (x.soldUsd ?? 0), 0);
-  const scale = Math.max(...list.map((x) => x.pct), 0.0001);
+  const scale = Math.max(...list.map((x) => x.pct ?? 0), 0.0001);
   return (
     <div className="flex flex-col">
       <Strip right={viaJup ? `From Jupiter · last ${w!.trades.toLocaleString()} trades of $25+${w!.since ? ` (${ageStr(now - w!.since)})` : ""}` : "Blix's own ledger, live"}>

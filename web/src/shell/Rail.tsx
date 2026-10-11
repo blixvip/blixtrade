@@ -13,7 +13,7 @@ import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
-import { PoweredBy, SolanaLogo } from "@/components/brand";
+import { SolanaLogo } from "@/components/brand";
 import { Icon } from "./icons";
 import { NavIcon } from "./navIcons";
 import { Flash } from "@/components/Live";
@@ -34,16 +34,29 @@ const MORE: Item[] = [["health", "Health", NavIcon.health], ["api", "API", NavIc
 // Every page, for anything that needs a page's name (main.tsx).
 export const NAV: { group: string; items: Item[] }[] = [{ group: "Main", items: MAIN }, { group: "More", items: MORE }];
 
-// The rail's lockup: the eye (Blix's app icon) on a raised tile, then the chrome BLIX wordmark (brand art, black
-// background masked away by its own brightness). Static: no idle glow, blur or sheen.
-const WORD_MASK = { maskImage: "url(brand/blix-chrome-sm.webp)", maskMode: "luminance", maskSize: "100% 100%", WebkitMaskImage: "url(brand/blix-chrome-sm.webp)", WebkitMaskSize: "100% 100%" } as const;
+// The rail's lockup: the chrome BX mark (the owner's transparent PNG, no tile), then the AIs behind Blix's
+// reads as a row of evenly spaced coins in their own colours, each named on hover. Static: no idle glow or sheen.
+const AIS: { name: string; src: string; coin: string; mark: string }[] = [
+  { name: "Grok", src: "brand/ai/grok.svg", coin: "bg-black", mark: "size-[62%]" },
+  { name: "Jev", src: "brand/jev.png", coin: "bg-black", mark: "size-full object-cover" },
+  { name: "Claude", src: "brand/ai/claude.svg", coin: "bg-[#D97757]", mark: "size-[64%] brightness-0 invert" },
+  { name: "ChatGPT", src: "brand/ai/openai.svg", coin: "bg-white", mark: "size-[64%] invert" },
+];
 function Mark() {
   return (
-    <span className="flex items-center gap-2">
-      <span className="relative grid size-9 shrink-0 place-items-center overflow-hidden rounded-[11px] bg-black shadow-[inset_0_1px_0_oklch(100%_0_0/0.16),0_0_0_1px_oklch(100%_0_0/0.09),0_6px_14px_-6px_oklch(0%_0_0/0.7)]">
-        <img src="brand/blix-eye.webp" alt="" width={96} height={96} decoding="async" draggable={false} className="size-full scale-[1.08] object-cover select-none" />
+    <span className="flex items-center gap-3.5">
+      <a href="#/" aria-label="Blix, home" className="shrink-0 transition-opacity duration-150 hover:opacity-85">
+        <img src="brand/bx-mark.png" alt="Blix" width={240} height={173} decoding="async" draggable={false} className="block h-9 w-auto mix-blend-screen select-none" />
+      </a>
+      <span aria-label={`Powered by ${AIS.map((a) => a.name).join(", ")}`} className="flex items-center gap-1.5">
+        {AIS.map((a, i) => (
+          <Tip key={a.name} tip={a.name}>
+            <span className={cn("relative grid size-[26px] shrink-0 place-items-center overflow-hidden rounded-full shadow-[inset_0_0_0_1px_oklch(100%_0_0/0.14),0_0_0_2px_var(--color-paper),0_2px_6px_oklch(0%_0_0/0.45)] transition-transform duration-150 hover:-translate-y-0.5", a.coin)}>
+              <img src={a.src} alt={a.name} width={26} height={26} draggable={false} className={cn("select-none", a.mark)} />
+            </span>
+          </Tip>
+        ))}
       </span>
-      <span style={WORD_MASK} className="block aspect-[300/130] h-10 shrink-0"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} decoding="async" draggable={false} className="block size-full select-none" /></span>
     </span>
   );
 }
@@ -191,8 +204,7 @@ export function Rail({ route }: { route: string }) {
   const owner = useRole() === "owner";
   return (
     <aside className="flex h-dvh w-52 shrink-0 flex-col border-r border-rule bg-paper/80 px-2.5 pt-4 pb-2.5 max-md:hidden">
-      <a href="#/" aria-label="Blix, home" className="mb-3 block self-start rounded-[10px] px-1.5 py-0.5"><Mark /></a>
-      <PoweredBy />
+      <div className="mb-4 px-1"><Mark /></div>
       <nav aria-label="Pages" className="flex min-h-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto [scrollbar-width:none]">
         {shown(SIDE, owner).map((it) => <RailLink key={it[0]} item={it} active={route === it[0]} />)}
       </nav>

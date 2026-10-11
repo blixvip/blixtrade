@@ -5,7 +5,9 @@
 // pair cell (not on the cell's picture, which shows itself big, nor its links, buttons or faces), with its top-left
 // corner at the pointer, and follows the pointer frame by frame (moved directly, not through React). Moving to
 // another row swaps what it shows in place; it fades and slides in, fades out 150 ms after the pointer has left
-// both the cell and the card. Scrolling keeps it, showing the coin now under the pointer; the wheel over the card scrolls the list.
+// both the cell and the card. Heading for the card (the pointer moving inside the wedge between where it was and
+// the card's far corners) holds the card still and on its coin, so it can be reached across other rows; stopping
+// short for 300 ms, or moving any other way (straight down the list, say), lets it follow again. Scrolling keeps it, showing the coin now under the pointer; the wheel over the card scrolls the list.
 import { cloneElement, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
@@ -17,8 +19,11 @@ import { useLiveMc } from "@/lib/livepx";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { api } from "@/lib/api";
-import { pick, type Row, type Tf } from "./parts";
+import { type Row, type Tf } from "./parts";
 import { SolMark } from "@/components/FeesPaid";
+import { useMetrics, useMetricVisibility, metricDescription } from '@/lib/metrics';
+import { useNow } from '@/lib/route';
+import { discoverNumbers, metricPrefix } from './numbers';
 
 // Banners for coins whose row came without one (Fomo's lists, the stream's new pairs): asked of the server once
 // per coin (server/banner.js), kept for the visit. undefined = not asked yet, null = it has none.
@@ -66,7 +71,47 @@ function place() {
 }
 const follow = (x: number, y: number) => { at = { x, y }; if (!frame) frame = requestAnimationFrame(place); };
 const cancelClose = () => clearTimeout(closeTimer);
-const closeSoon = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); closeTimer = window.setTimeout(() => useCard.setState({ open: false }), 150); };
+// Leaving waits out any trip to the card.
+const closeSoon = () => {
+  clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer);
+  const go = () => { const left = aimUntil - performance.now(); if (left > 0) closeTimer = window.setTimeout(go, left + 20); else useCard.setState({ open: false }); };
+  closeTimer = window.setTimeout(go, 150);
+};
+// Heading for the card: each move (every pointer move on the page while the card shows) counts as aiming when
+// its direction falls between the directions to the card's far corners, seen from the previous point. The
+// card's near edges are taken 24 px in, so running straight down or across the list never counts.
+const AIM_MS = 300, INSET = 24;
+let prev = { x: 0, y: 0 }, aimUntil = 0, aimTimer = 0;
+const aiming = () => aimUntil > performance.now();
+function track(e: PointerEvent) {
+  if (e.pointerType !== "mouse") return;
+  const p = prev, x = e.clientX, y = e.clientY;
+  prev = { x, y };
+  if (!useCard.getState().open || !box) return;
+  const dx = x - p.x, dy = y - p.y;
+  if (dx * dx + dy * dy < 4) return;   // a twitch changes nothing
+  const b = box.getBoundingClientRect();
+  if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) { aimUntil = 0; return; }   // on it
+  const l = p.x < b.left ? b.left + INSET : b.left, r = p.x > b.right ? b.right - INSET : b.right;
+  const t = p.y < b.top ? b.top + INSET : b.top, btm = p.y > b.bottom ? b.bottom - INSET : b.bottom;
+  const mid = Math.atan2((t + btm) / 2 - p.y, (l + r) / 2 - p.x);
+  const rel = (a: number) => { let d = a - mid; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+  let lo = Infinity, hi = -Infinity;
+  for (const [cx, cy] of [[l, t], [r, t], [l, btm], [r, btm]]) { const d = rel(Math.atan2(cy - p.y, cx - p.x)); lo = Math.min(lo, d); hi = Math.max(hi, d); }
+  const d = rel(Math.atan2(dy, dx));
+  if (d < lo || d > hi) { aimUntil = 0; return; }
+  aimUntil = performance.now() + AIM_MS;
+  clearTimeout(aimTimer);
+  aimTimer = window.setTimeout(settle, AIM_MS + 10);
+}
+// Stopped short of the card: it goes back to showing (and following) whatever is under the pointer.
+function settle() {
+  if (aiming() || !useCard.getState().open) return;
+  const el = document.elementFromPoint(prev.x, prev.y);
+  if (el && box?.contains(el)) return;
+  follow(prev.x, prev.y);
+  underPointer();
+}
 // The cells on the page, by coin, so after a scroll the card can show whichever cell is now under the pointer.
 const cells = new Map<string, { r: Row; tf: Tf }>();
 let scrollFrame = 0;
@@ -102,6 +147,7 @@ export function CoinHover({ r, tf, children }: { r: Row; tf: Tf; children: Trigg
   const move = (e: unknown) => {
     const ev = e as PointerEvent;
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
+    if (aiming()) return cancelClose();   // on the way to the card: it stays where it is, on its coin
     if ((ev?.target as Element | null)?.closest?.(OWN)) return closeNow();
     cancelClose();
     loadBanner(r);
@@ -147,8 +193,14 @@ function Layer() {
     const wheel = (e: WheelEvent) => forwardWheel(e);
     const el = inner.current;
     addEventListener("scroll", onScroll, true); addEventListener("blur", away); addEventListener("hashchange", away);
+    prev = { ...at };
+    addEventListener("pointermove", track, { capture: true, passive: true });   // before the cells' own handlers
     el?.addEventListener("wheel", wheel, { passive: true });
-    return () => { removeEventListener("scroll", onScroll, true); removeEventListener("blur", away); removeEventListener("hashchange", away); el?.removeEventListener("wheel", wheel); };
+    return () => {
+      removeEventListener("scroll", onScroll, true); removeEventListener("blur", away); removeEventListener("hashchange", away);
+      removeEventListener("pointermove", track, { capture: true }); el?.removeEventListener("wheel", wheel);
+      aimUntil = 0; clearTimeout(aimTimer);
+    };
   }, [shown]);
   const row = open && r ? r : shown;
   return (
@@ -186,19 +238,20 @@ function useStar(mint: string, symbol: string) {
 }
 
 function Card({ r, tf }: { r: Row; tf: Tf }) {
-  const { vol, chg } = pick(r, tf);
+  const now = useNow(), metrics = useMetrics(r.mint), visibleRef = useMetricVisibility(r.mint);
   const liveMc = useLiveMc(r.mint);
-  const mc = liveMc ?? r.mc_live ?? r.mcap;
+  const numbers = discoverNumbers(r, tf, metrics, liveMc);
+  r = numbers.row;
+  const { vol, chg, mc, price } = numbers;
+  const prefix = (field: string, lowerBound = false) => metricPrefix(metrics?.fields[field], lowerBound);
   const s = r.safety || {};
   const born = r.pair_created || r.first_seen;
   const pump = r.dex === "pumpfun" || r.dex === "pumpswap" || r.mint.endsWith("pump");
-  // pump.fun coins all have a billion tokens, so their price is the market cap over a billion; others are not shown.
-  const price = pump && mc ? mc / 1e9 : null;
   const [starred, toggleStar] = useStar(r.mint, r.symbol || "");
   const header = useBanner(r);
   const copy = () => navigator.clipboard?.writeText(r.mint).then(() => toast("Contract copied"), () => toast("Couldn't copy the contract"));
   return (
-    <div className="flex flex-col">
+    <div ref={visibleRef} className="flex flex-col">
       {/* banner: DexScreener's header, sharp, when the coin has one; else (and while it loads) a plain striped band */}
       <div className="relative h-[88px] overflow-hidden bg-paper-3 bg-[repeating-linear-gradient(135deg,transparent_0_14px,color-mix(in_oklch,var(--color-ink)_4%,transparent)_14px_15px)]">
         {header && <img key={header} src={header} alt="" decoding="async" className="absolute inset-0 size-full object-cover opacity-0 transition-opacity duration-200" onLoad={(e) => { e.currentTarget.style.opacity = "1"; }} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
@@ -216,21 +269,21 @@ function Card({ r, tf }: { r: Row; tf: Tf }) {
           <div className="flex items-center gap-2">
             <b className="min-w-0 truncate text-lg font-bold text-ink">{r.symbol || "?"}</b>
             <span className="grid size-5 shrink-0 place-items-center rounded-md bg-paper-4">{pump ? <PumpLogo className="size-3" /> : <SolanaLogo className="w-2.5" />}</span>
-            <span className="num ml-auto shrink-0 text-lg font-bold text-ink">{compact(mc)} <span className="text-sm font-semibold text-muted">MC</span></span>
+            <span title={metricDescription(metrics?.fields.mc)} className="num ml-auto shrink-0 text-lg font-bold text-ink">{mc != null ? prefix('mc') : ''}{compact(mc)} <span className="text-sm font-semibold text-muted">MC</span></span>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <span className="min-w-0 truncate text-muted">{price != null ? `$${fmtPrice(price)}` : r.name}</span>
+            <span title={metricDescription(metrics?.fields.priceUsd)} className="min-w-0 truncate text-muted">{price != null ? `${prefix('priceUsd')}$${fmtPrice(price)}` : r.name}</span>
             {chg != null && <span className={cn("num ml-auto shrink-0 font-semibold", tone(chg))}>{chg >= 0 ? "▲" : "▼"} {pct(Math.abs(chg)).replace(/^[+-]/, "")}</span>}
           </div>
         </div>
         <dl className="flex flex-col gap-2 text-sm">
-          <Line k={`Volume ${tf}`} v={compact(vol)} />
-          <Line k="Liquidity" v={compact(r.liquidity)} />
-          {r.fees != null && r.fees > 0 && <Line k="Fees paid" v={<span className="flex items-center gap-1"><SolMark />{r.fees.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span>} />}
-          <Line k="Holders" v={s.totalHolders != null ? compactCount(s.totalHolders) : "—"} />
-          <Line k="Top 10 holding" v={s.top10 != null ? `${s.top10.toFixed(2)}%` : "—"} tone={s.top10 != null && s.top10 > 30 ? "text-down" : undefined} />
-          <Line k="Dev holding" v={s.devPct != null ? `${s.devPct.toFixed(2)}%` : "—"} tone={s.devPct != null && s.devPct > 5 ? "text-down" : undefined} />
-          <Line k="Age" v={born ? ageStr(Date.now() - born) : "—"} />
+          <Line k={`Volume ${tf}`} title={metricDescription(metrics?.fields[`vol${tf}`])} v={`${vol != null ? prefix(`vol${tf}`, true) : ''}${compact(vol)}`} />
+          <Line k="Liquidity" title={metricDescription(metrics?.fields.liq)} v={`${r.liquidity != null ? prefix('liq') : ''}${compact(r.liquidity)}`} />
+          {r.fees != null && r.fees >= 0 && <Line k="Fees paid" title={`Estimated fees · ${metricDescription(metrics?.fields.fees)}`} v={<span className="flex items-center gap-1"><SolMark />{r.fees.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span>} />}
+          <Line k="Holders" title={metricDescription(metrics?.fields.holders)} v={s.totalHolders != null ? `${prefix('holders', true)}${compactCount(s.totalHolders)}` : "—"} />
+          <Line k="Top 10 holding" title={metricDescription(metrics?.fields.top10)} v={s.top10 != null ? `${prefix('top10')}${s.top10.toFixed(2)}%` : "—"} tone={s.top10 != null && s.top10 > 30 ? "text-down" : undefined} />
+          <Line k="Dev holding" title={metricDescription(metrics?.fields.dev)} v={s.devPct != null ? `${prefix('dev')}${s.devPct.toFixed(2)}%` : "—"} tone={s.devPct != null && s.devPct > 5 ? "text-down" : undefined} />
+          <Line k="Age" v={born ? ageStr(now - born) : "—"} />
           <Line k="Contract" v={<button onClick={copy} className="flex items-center gap-1.5 hover:text-focus" aria-label="Copy contract"><span>{shortAddr(r.mint)}</span><Icon.copy className="size-3.5 text-muted" /></button>} />
         </dl>
       </div>
@@ -239,9 +292,9 @@ function Card({ r, tf }: { r: Row; tf: Tf }) {
 }
 
 // A label, a dotted leader, and the figure, as on Axiom's card.
-function Line({ k, v, tone: t }: { k: string; v: ReactNode; tone?: string }) {
+function Line({ k, v, tone: t, title }: { k: string; v: ReactNode; tone?: string; title?: string }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div title={title} className="flex items-baseline gap-2">
       <dt className="shrink-0 text-muted">{k}</dt>
       <span aria-hidden className="mb-1 min-w-4 flex-1 border-b border-dotted border-rule-2" />
       <dd className={cn("num shrink-0 font-semibold text-ink", t)}>{v}</dd>

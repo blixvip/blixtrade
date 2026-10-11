@@ -1,3 +1,5 @@
+import { watchStream } from "./streamWatch.js";
+import { validTrade } from "../../../server/chart-data.js";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, apiAged, streamFailed, streamInit, streamUrl } from "./api";
@@ -260,15 +262,16 @@ const later = () => { if (!flushing) flushing = document.hidden ? window.setTime
 // for): [mint, ms, mcUsd, volUsd, buy]. The chart and the coin header follow them trade by trade.
 export type CoinTrade = [mint: string, t: number, mc: number, vol: number, buy: 0 | 1];
 const tradeFns = new Map<string, Set<(x: CoinTrade) => void>>();
+const validCoinTrade = (x: unknown): boolean => Array.isArray(x) && typeof x[0] === "string" && validTrade(x[2], x[3], x[1]);
 // A coin being replayed (lib/replay.ts): the live stream's trades, prices and holder figures for it are left out,
 // and the replay hands its own trades to the same listeners instead.
 let replayed: (mint: string) => boolean = () => false;
 export const setReplayHooks = (fn: (mint: string) => boolean) => { replayed = fn; metricReplayGuard(fn); };
-export const emitCoinTrade = (x: CoinTrade) => tradeFns.get(x[0])?.forEach((fn) => fn(x));
+export const emitCoinTrade = (x: CoinTrade) => { if (validCoinTrade(x)) tradeFns.get(x[0])?.forEach((fn) => fn(x)); };
 export const emitCoinRows = (mint: string, rows: CoinRow[]) => rowFns.get(mint)?.forEach((fn) => fn(rows));
 // A market cap from another live source (a Gecko chart's price, a Fomo bar) handed to the same listeners, so the
 // coin header follows whichever chart is open.
-export function pushCoinMc(mint: string, mc: number) { if (mc > 0 && !replayed(mint)) tradeFns.get(mint)?.forEach((fn) => fn([mint, Date.now(), mc, 0, 1])); }
+export function pushCoinMc(mint: string, mc: number) { if (Number.isFinite(mc) && mc > 0 && !replayed(mint)) tradeFns.get(mint)?.forEach((fn) => fn([mint, Date.now(), mc, 0, 1])); }
 // `stream` false: only what is pushed here (a Gecko chart's price, pushCoinMc) is wanted, not the coin's own fast
 // trade stream, which holds a per-coin chain subscription on the server (Helius credits) for as long as it is open.
 // A coin a day old or more is read from its Gecko chart only (pages/coin/Chart.tsx, Header.tsx).
@@ -288,22 +291,36 @@ export function onCoinTrade(mint: string, fn: (x: CoinTrade) => void, stream = t
 // does nothing else), so it moves even while the radar's main stream is held up. While that stream is delivering,
 // the main stream's copies of the same prices (the ones that carry a slot) arrive later and are dropped, so the
 // chart never steps back to an older price.
-const fast = new Map<string, { es: EventSource; last: number }>();
+const fast = new Map<string, { es: EventSource; last: number; stop: () => void }>();
 function openFast(mint: string) {
-  if (typeof EventSource === "undefined") return;
-  const es = new EventSource(streamUrl(`api/fast/stream?mint=${mint}`), streamInit()), f = { es, last: 0 };
+  if (typeof EventSource === "undefined" || !streaming.has(mint)) return;
+  closeFast(mint);
+  const es = new EventSource(streamUrl(`api/fast/stream?mint=${mint}`), streamInit()), f = { es, last: 0, stop: () => {} };
   let opened = false;
   es.onopen = () => { opened = true; };
   fast.set(mint, f);
   es.addEventListener("trade", (e) => {
-    if (document.hidden) return;
-    f.last = Date.now();
-    for (const x of JSON.parse((e as MessageEvent).data).u) if (!replayed(x[0])) tradeFns.get(x[0])?.forEach((fn) => fn(x));
+    if (document.hidden || fast.get(mint) !== f) return;
+    let batch: unknown;
+    try { batch = JSON.parse((e as MessageEvent).data)?.u; } catch { return; }
+    if (!Array.isArray(batch)) return;
+    for (const x of batch) if (validCoinTrade(x) && x[0] === mint && !replayed(x[0])) {
+      f.last = Date.now();
+      tradeFns.get(x[0])?.forEach((fn) => fn(x));
+    }
   });
   // Not there (an older radar, or the lane is down): the main stream carries everything, as before.
-  es.onerror = () => { if (fast.get(mint) === f && !opened && streamFailed()) { es.close(); return openFast(mint); } if (es.readyState === EventSource.CLOSED) window.setTimeout(() => { if (fast.get(mint) === f && tradeFns.has(mint)) { es.close(); openFast(mint); } }, 5000); };
+  let retry = 0;
+  const reconnect = () => { if (fast.get(mint) === f && streaming.has(mint)) openFast(mint); };
+  const unwatch = watchStream(es, reconnect);
+  f.stop = () => { clearTimeout(retry); unwatch(); es.onerror = null; es.onopen = null; es.close(); };
+  es.onerror = () => {
+    if (fast.get(mint) !== f) return;
+    if (!opened && streamFailed()) return reconnect();
+    if (es.readyState === EventSource.CLOSED && !retry) retry = window.setTimeout(reconnect, 1000);
+  };
 }
-function closeFast(mint: string) { fast.get(mint)?.es.close(); fast.delete(mint); }
+function closeFast(mint: string) { fast.get(mint)?.stop(); fast.delete(mint); }
 // A coin's market cap from its latest trade (null until one comes in while the page is open), once a frame.
 export function useTradeMc(mint: string, stream = true) {
   const [mc, setMc] = useState<{ mint: string; mc: number } | null>(null);
@@ -315,7 +332,9 @@ export function useTradeMc(mint: string, stream = true) {
   return mc?.mint === mint ? mc.mc : null;
 }
 function applyTrades(u: (CoinTrade | [...CoinTrade, number | null])[]) {
+  if (!Array.isArray(u)) return;
   for (const x of u) {
+    if (!validCoinTrade(x)) continue;
     if (replayed(x[0]) || (x[5] != null && Date.now() - (fast.get(x[0])?.last || 0) < 5000)) continue;
     tradeFns.get(x[0])?.forEach((fn) => fn(x as CoinTrade));
   }
@@ -370,14 +389,22 @@ export function startPulse() {
   // (the radar sends trades several times a second) is treated as ended.
   const open = () => {
     if (stopped) return;
+    clearTimeout(retry);
     es?.close();
+    lastEvent = Date.now();
     const s = (es = new EventSource(streamUrl(`api/stream?session=${metricSession}`), streamInit()));
     let opened = false;
     s.onopen = () => { opened = true; };
     const on = (ev: string, fn?: (d: any) => void) => s.addEventListener(ev, (e) => {
+      if (stopped || es !== s) return;
+      let data: any;
+      if (fn) { try { data = JSON.parse((e as MessageEvent).data); } catch { return; }
+        if (!data || typeof data !== "object") return;
+        if (["live", "mig", "fees", "px", "trade", "ctrade"].includes(ev) && !Array.isArray(data.u)) return;
+      }
       lastEvent = Date.now();
       if (!usePulse.getState().connected) usePulse.setState({ connected: true });
-      if (fn && !document.hidden) fn(JSON.parse((e as MessageEvent).data));
+      if (fn && !document.hidden) fn(data);
     });
     on("hello"); on("tick");
     on("live", (d) => { for (const r of d.u) queue.live.push(r); later(); });
@@ -393,6 +420,7 @@ export function startPulse() {
     on("launch", applyLaunch);
     on("pic", (d) => picReady(d.mint, d.data));   // the radar just got this coin's logo (usually with the picture itself)
     s.onerror = () => {
+      if (stopped || es !== s) return;
       if (es === s && !opened && streamFailed()) return open();
       usePulse.setState({ connected: false });
       if (s.readyState === EventSource.CLOSED && es === s) { clearTimeout(retry); retry = window.setTimeout(open, 2000); }
@@ -406,7 +434,7 @@ export function startPulse() {
     clearTimeout(parkTimer);
     if (document.hidden) {
       parkTimer = window.setTimeout(() => { if (!document.hidden || stopped) return; parked = true; clearTimeout(retry); const s = es; es = null; s?.close(); usePulse.setState({ connected: false }); }, 60_000);
-    } else if (parked && !stopped) {
+    } else if (!stopped && (parked || Date.now() - lastEvent >= 10_000)) {
       parked = false; lastEvent = 0;
       open();
       loadPulse().catch(() => {});
@@ -424,6 +452,7 @@ export function startPulse() {
   // already arriving on it, so the board is read every 15 s (every minute off the Pulse page); without the stream it is the only source, every 2 s.
   // (Measured 2026-10-06 on a slow home line: at every 4 s the board took 3-8 s to download and every coin logo
   // queued behind it for 10-17 s.)
+  let pollTimer = 0;
   const poll = async () => {
     if (stopped) return;
     if (!document.hidden && Date.now() - boardAt >= 5000) {
@@ -433,7 +462,7 @@ export function startPulse() {
     }
     // Off the Pulse page the board only feeds the ticker and the status bar: once a minute is plenty.
     const onPulse = /^#\/?(pulse)?$/.test(location.hash || "#/");
-    setTimeout(poll, usePulse.getState().connected ? (onPulse ? 15_000 : 60_000) : 2000);
+    if (!stopped) pollTimer = window.setTimeout(poll, usePulse.getState().connected ? (onPulse ? 15_000 : 60_000) : 2000);
   };
   poll();
   // The board is kept for the next visit: when the page is left (a refresh included) and every 30 s meanwhile.
@@ -441,5 +470,5 @@ export function startPulse() {
   window.addEventListener("pagehide", saveSnapshot);
   document.addEventListener("visibilitychange", onHide);
   const keep = setInterval(saveSnapshot, 30_000);
-  return () => { stopped = true; clearInterval(watchdog); clearInterval(keep); clearTimeout(retry); clearTimeout(parkTimer); document.removeEventListener("visibilitychange", onShow); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", saveSnapshot); es?.close(); };
+  return () => { stopped = true; clearTimeout(pollTimer); clearInterval(watchdog); clearInterval(keep); clearTimeout(retry); clearTimeout(parkTimer); document.removeEventListener("visibilitychange", onShow); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", saveSnapshot); es?.close(); };
 }

@@ -1,4 +1,4 @@
-import { XHover } from "@/components/XCard";
+import { XHover, XLinkIcon, xKind, xKindLabel } from "@/components/XCard";
 import * as D from "@/components/ui/modal";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -226,12 +226,14 @@ function Fig({ k, v, sub, mint }: { k: string; v?: number | null; sub?: ReactNod
 function LRow({ r, i, active, sol, onHover, onOpen, onBuy }: { r: Row; i: number; active: boolean; sol: number; onHover: () => void; onOpen: () => void; onBuy: () => void }) {
   const paper = useTrade((s) => s.paper);
   const [busy, setBusy] = useState(false);
+  const pending = useRef(0);
   const age = r.born ? Date.now() - r.born : null;
+  // Every press is a buy (spam buying: lib/trade.ts lines them up); busy while any are going.
   const buy = async () => {
-    if (busy) return;
+    pending.current++;
     setBusy(true); onBuy();
     await trade({ side: "buy", mint: r.mint, symbol: r.symbol || "", sol }, () => post("paper/quoted", { mint: r.mint, sol }));
-    setBusy(false);
+    if (--pending.current === 0) setBusy(false);
   };
   const copy = () => { navigator.clipboard?.writeText(r.mint); toast("Contract copied"); };
   const social = (href: string | null | undefined, ic: ReactNode, label: string) => href && <a href={href} target="_blank" rel="noreferrer" aria-label={label} className="text-muted hover:text-ink [&_svg]:size-4">{ic}</a>;
@@ -253,7 +255,7 @@ function LRow({ r, i, active, sol, onHover, onOpen, onBuy }: { r: Row; i: number
           <div className="flex items-center gap-2.5 text-md">
             {age != null && <span className="num font-medium text-up">{ageStr(age)}</span>}
             <span className="num text-xs text-muted">{shortAddr(r.mint)}</span>
-            {r.x && safeHref(r.x) && <XHover href={safeHref(r.x)!}><a href={safeHref(r.x)!} target="_blank" rel="noreferrer" aria-label="X" className="text-muted hover:text-ink [&_svg]:size-4"><Icon.x /></a></XHover>}{social(r.web, <Icon.web />, "Website")}{social(r.tg, <Icon.tg />, "Telegram")}
+            {r.x && safeHref(r.x) && <XHover href={safeHref(r.x)!}><a href={safeHref(r.x)!} target="_blank" rel="noreferrer" aria-label={xKindLabel(xKind(safeHref(r.x)!))} className="text-muted hover:text-ink [&_svg]:size-4"><XLinkIcon href={safeHref(r.x)!} /></a></XHover>}{social(r.web, <Icon.web />, "Website")}{social(r.tg, <Icon.tg />, "Telegram")}
           </div>
         </div>
       </div>

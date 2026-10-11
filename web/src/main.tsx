@@ -2,6 +2,7 @@ import { Component, lazy, StrictMode, Suspense, useEffect, useRef, useState, typ
 import { createRoot } from "react-dom/client";
 import { Toaster } from "@/components/ui/toast";
 import { NetNotice } from "@/components/NetNotice";
+import { gated } from "@/components/DepositGate";
 import { PicPreview } from "@/components/PicPreview";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { earlyData, earlyReady, fetchApi } from "@/lib/api";
@@ -88,15 +89,15 @@ const Feed = page(() => import("@/pages/Feed"), (m) => m.Feed);
 const Account = page(() => import("@/pages/Account"), (m) => m.Account);
 const Health = page(() => import("@/pages/More"), (m) => m.Health);
 const Launch = page(() => import("@/pages/Launch"), (m) => m.Launch);
-const Narratives = page(() => import("@/pages/Narratives"), (m) => m.Narratives);
-const AiPicks = page(() => import("@/pages/AiPicks"), (m) => m.AiPicks);
+const Narratives = page(() => import("@/pages/Narratives"), (m) => gated("narratives", m.Narratives));
+const AiPicks = page(() => import("@/pages/AiPicks"), (m) => gated("picks", m.AiPicks));
 const Settings = page(() => import("@/pages/Settings"), (m) => m.Settings);
 const Traders = page(() => import("@/pages/Traders"), (m) => m.Traders);
 const XTracker = page(() => import("@/pages/XTracker"), (m) => m.XTracker);
 const Coin = page(() => import("@/pages/Coin"), (m) => m.Coin);
 const Trader = page(() => import("@/pages/Trader"), (m) => m.Trader);
 const Profile = page(() => import("@/pages/Profile"), (m) => m.Profile);
-const Practice = page(() => import("@/pages/Practice"), (m) => m.Practice);
+const Practice = page(() => import("@/pages/Practice"), (m) => gated("practice", m.Practice));
 
 const Api = page(() => import("@/pages/Docs"), (m) => m.Api);
 const Mcp = page(() => import("@/pages/Docs"), (m) => m.Mcp);
@@ -159,6 +160,9 @@ const PAGES: Record<string, PageOf> = { api: Api, mcp: Mcp, settings: Settings, 
   launch: Launch, narratives: Narratives, "ai-picks": AiPicks, health: Health, traders: Traders, x: XTracker, u: Profile, practice: Practice };
 for (const [route, P] of Object.entries({ ...PAGES, coin: Coin, trader: Trader })) pageCode[route] = P.code;
 
+// Tab names for pages that aren't in the rail.
+const TITLES: Record<string, string> = { coin: "Coin", trader: "Trader", u: "Profile", x: "X tracker", practice: "Practice", account: "Portfolio" };
+
 // Pages still served by the classic front end on the radar's own port.
 function NotPorted({ route }: { route: string }) {
   const label = NAV.flatMap((g) => g.items).find(([r]) => r === route)?.[1] ?? route;
@@ -183,6 +187,12 @@ function App() {
   }, []);
   // Leaving the chart closes its floating panel without loading the panel code.
   useEffect(() => { if (route !== "coin") closeQuick(); }, [route]);
+  // The tab says which page this is ("Blix | Discover"). A coin's tab is set by its header, live market cap first.
+  useEffect(() => {
+    if (route === "coin" && arg) return;
+    const name = route === "trader" || route === "u" ? decodeURIComponent(arg) : NAV.flatMap((g) => g.items).find(([r]) => r === route)?.[1] ?? TITLES[route];
+    document.title = name ? `Blix | ${name}` : "Blix";
+  }, [route, arg]);
   // The Signals page is gone; old links land on Pulse.
   // Pulse lives at #/; classic Blix and old bookmarks say #/pulse.
   // Picks and Research were taken out (2026-10-08); their old links land on Pulse too.

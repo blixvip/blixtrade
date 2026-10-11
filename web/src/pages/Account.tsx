@@ -257,7 +257,7 @@ export function Account() {
           <div className="grid grid-cols-4 border-t border-rule max-md:grid-cols-2">
             <Fig label="Total value" sub={w ? `${w.tokens.length} coin${w.tokens.length === 1 ? "" : "s"} held` : undefined}>{usd(total)}</Fig>
             <Fig label="Available" sub={w ? usd(w.solUsd) : undefined}><Sol className="size-4 text-ink-2" />{w ? sol(w.sol) : "—"}</Fig>
-            <Fig label="In coins" sub={w && solPrice ? `≈ ${sol(heldSol, 3)} SOL` : undefined}>{w ? usd(w.tokensUsd) : "—"}</Fig>
+            <Fig label="In coins" sub={w && solPrice ? `${sol(heldSol, 3)} SOL` : undefined}>{w ? usd(w.tokensUsd) : "—"}</Fig>
             <Fig label="Profit & loss" cls={book.n ? toneOf(pnl) : "text-ink-2"} sub={book.n ? `${sol(book.bought, 3)} bought · ${sol(book.sold, 3)} sold` : "no trades yet"}><Sol className="size-4" />{book.n ? signed(pnl, 3) : "0"}</Fig>
           </div>
           {empty && (

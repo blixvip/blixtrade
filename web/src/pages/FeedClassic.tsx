@@ -26,12 +26,13 @@ interface Item {
 }
 interface Feed { items: Item[] | null; t: number | null; loading: boolean; error: string | null; signedOut: boolean }
 
-// Fomo's filter menu, in its order (keys match server/fomofeed.js FEED_GROUPS).
-const GROUPS: [string, string][] = [["trades", "Trades"], ["closed", "Closed positions"], ["theses", "Theses"], ["multi", "Multi-user trades"],
-  ["listings", "New listings"], ["spikes", "Price spikes"], ["milestones", "Profit milestones"], ["traders", "New traders"]];
+// The feed is trades and theses only (the user, 2026-10-10: All, Trades, Theses are the only tabs). Keys match
+// server/fomofeed.js FEED_GROUPS; Fomo's other kinds (closed positions, wins, new listings, spikes...) are not shown.
+const GROUPS: [string, string][] = [["trades", "Trades"], ["theses", "Theses"]];
 const ALL = GROUPS.map(([k]) => k);
 const KEY = "blix:feed:groups";
-const loadGroups = () => { try { const v = JSON.parse(localStorage.getItem(KEY) || "null"); return Array.isArray(v) ? v.filter((g) => ALL.includes(g)) : ALL; } catch { return ALL; } };
+// A saved choice of kinds no longer offered (e.g. only "Wins") falls back to All instead of an empty feed.
+const loadGroups = () => { try { const v = JSON.parse(localStorage.getItem(KEY) || "null"); const ok = Array.isArray(v) ? v.filter((g) => ALL.includes(g)) : []; return ok.length ? ok : ALL; } catch { return ALL; } };
 
 // Every number follows the market: the coins on screen are read together every 2 s (/api/sparks, the lists' live
 // figures) and a coin with a live trade stream moves on each trade (useLiveMc). A post keeps the market cap it was
@@ -169,36 +170,16 @@ function useSocial(ids: string[]) {
 }
 const compact = (n: number) => n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, "")}K` : `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
 
-// The bar under every post: like, replies, share; "Trade" on the right for a Solana coin (shown on hover
-// on a desktop, always on a phone).
+// Under every post: "Trade" for a Solana coin (shown on hover on a desktop, always on a phone). The like, reply and
+// share buttons were taken off (the owner, 2026-10-10).
 function Actions({ it }: { it: Item }) {
-  const { s, like } = useContext(SocialCtx);
-  const liked = s.liked.has(it.id), likes = (it.likes || 0) + (s.likes[it.id] || 0), href = coinHref(it);
-  const btn = "num inline-flex h-7 min-w-12 items-center gap-1.5 rounded-full px-2 text-xs font-medium text-muted transition-colors duration-150";
-  const share = () => {
-    const url = href ? `${location.origin}${location.pathname}${href}` : location.href;
-    const text = it.ticker ? `$${it.ticker} on Blix` : "Blix Feed";
-    if (navigator.share) navigator.share({ title: text, url }).catch(() => {});
-    else navigator.clipboard?.writeText(url).then(() => toast("Link copied"), () => toast("Couldn't copy the link"));
-  };
+  const href = coinHref(it);
+  if (!href) return null;
   return (
-    <div className="-ml-2 mt-1.5 flex items-center">
-      <button onClick={() => like(it.id)} aria-pressed={liked} title={liked ? "Unlike" : "Like"} className={cn(btn, liked ? "text-down" : "hover:bg-down/10 hover:text-down")}>
-        <svg viewBox="0 0 24 24" fill={liked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.9" className={cn("size-[15px]", liked && "motion-safe:animate-[heart-pop_.3s_ease-out]")} aria-hidden><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></svg>
-        {likes ? compact(likes) : ""}
-      </button>
-      <span className={cn(btn, "cursor-default")} title={`${it.replies || 0} replies on Fomo`}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" className="size-[15px]" aria-hidden><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z" /></svg>
-        {it.replies ? compact(it.replies) : ""}
-      </span>
-      <button onClick={share} title="Share" className={cn(btn, "min-w-0 hover:bg-info/10 hover:text-info")}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="size-[15px]" aria-hidden><path d="M12 3v12M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" /></svg>
-      </button>
-      {href && (
-        <a href={href} className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-3 text-xs font-semibold text-ink-2 ring-1 ring-rule-2 ring-inset transition-[opacity,background-color,color] duration-150 hover:bg-ink hover:text-paper focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100">
-          Trade<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="size-3" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-        </a>
-      )}
+    <div className="mt-1.5 flex items-center">
+      <a href={href} className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-3 text-xs font-semibold text-ink-2 ring-1 ring-rule-2 ring-inset transition-[opacity,background-color,color] duration-150 hover:bg-ink hover:text-paper focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100">
+        Trade<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="size-3" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+      </a>
     </div>
   );
 }
@@ -305,7 +286,8 @@ function Row({ it }: { it: Item }) {
         </header>
         {it.comment && it.type !== "manual" && <p className="mt-1 text-md leading-relaxed break-words text-ink">{it.comment}</p>}
         {body}
-        <Actions it={it} />
+        {/* Buys and sells are a ticker, not a conversation: the like/reply/share bar only goes under posts people wrote. */}
+        {(it.type === "thesis_created" || it.type === "manual") && <Actions it={it} />}
       </div>
     </article>
   );
@@ -347,7 +329,7 @@ function Filter({ groups, onChange }: { groups: string[]; onChange: (g: string[]
 }
 
 // Tabs over the feed: everything, or one kind of post. Other mixes are made in Filter.
-const TABS: [string, string][] = [["all", "All"], ["trades", "Trades"], ["theses", "Theses"], ["closed", "Closed"], ["milestones", "Wins"], ["listings", "New"], ["spikes", "Spikes"]];
+const TABS: [string, string][] = [["all", "All"], ["trades", "Trades"], ["theses", "Theses"]];
 function Tabs({ groups, onChange }: { groups: string[]; onChange: (g: string[]) => void }) {
   const at = groups.length === ALL.length ? "all" : groups.length === 1 ? groups[0] : null;
   return (
@@ -396,7 +378,6 @@ export function Feed() {
       <header className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl leading-none font-bold tracking-tight">Feed</h1>
-          <p className="mt-1.5 truncate text-md text-muted">Live trades, theses and wins from Fomo traders.</p>
         </div>
         <div className="flex shrink-0 items-center gap-3 text-xs font-medium text-muted">
           {d?.t ? <span className={cn("flex items-center gap-1.5", d.error ? "text-warn" : "text-ink-2")}><span className={cn("size-1.5 rounded-full motion-safe:animate-pulse", d.error ? "bg-warn" : "bg-up")} />{d.error ? `Last read ${since(d.t)}` : "Live"}</span> : null}

@@ -41,6 +41,8 @@ const tone = { pending: "text-ink-2", ok: "text-up", fail: "text-down", unknown:
 const badge = { pending: "", ok: "bg-up", fail: "bg-down", unknown: "bg-warn", note: "" } as const;
 const ring = { pending: "", ok: "shadow-[0_0_0_2px_var(--color-up),0_0_20px_-3px_var(--color-up)]", fail: "shadow-[0_0_0_2px_var(--color-down),0_0_20px_-3px_var(--color-down)]",
   unknown: "shadow-[0_0_0_2px_var(--color-warn),0_0_20px_-3px_var(--color-warn)]", note: "" } as const;
+// A finished sell reads red (money out of the coin), a finished buy green; the tick stays a tick.
+const hue = (t: Item): Kind => (t.kind === "ok" && /^Sold/.test(t.text.replace(/^Paper · /, "")) ? "fail" : t.kind);
 const glass = "border border-white/[0.07] bg-paper-3/85 shadow-[0_18px_50px_-12px_oklch(0%_0_0/0.75),inset_0_1px_0_oklch(100%_0_0/0.06)] backdrop-blur-xl";
 
 function Glyph({ kind, className }: { kind: Kind; className?: string }) {
@@ -58,13 +60,13 @@ function CoinMark({ t }: { t: Item }) {
   return (
     <span className="relative block size-11 shrink-0">
       <span className={cn("absolute inset-0 grid place-items-center overflow-hidden rounded-full bg-paper-4 text-xs font-bold text-muted uppercase transition-shadow duration-300",
-        settled ? ring[t.kind] : "shadow-[0_0_0_1px_oklch(100%_0_0/0.1)]")}>
+        settled ? ring[hue(t)] : "shadow-[0_0_0_1px_oklch(100%_0_0/0.1)]")}>
         {(t.symbol || "?").slice(0, 3)}
         <CoinImg mint={t.mint!} />
       </span>
       {!settled && <i aria-hidden className="absolute -inset-[4px] animate-spin rounded-full border-2 border-transparent border-t-ink border-r-ink/30 [animation-duration:0.8s]" />}
       {settled && (
-        <span key={t.kind} className={cn("absolute -right-1 -bottom-1 grid size-5 place-items-center rounded-full text-paper-2 shadow-[0_0_0_2.5px_var(--color-paper-3)] animate-tx-pop", badge[t.kind])}>
+        <span key={t.kind} className={cn("absolute -right-1 -bottom-1 grid size-5 place-items-center rounded-full text-paper-2 shadow-[0_0_0_2.5px_var(--color-paper-3)] animate-tx-pop", badge[hue(t)])}>
           <Glyph kind={t.kind} className="size-3" />
         </span>
       )}
@@ -88,7 +90,7 @@ function Title({ t }: { t: Item }) {
   const m = /^(\S+) (\$\S+)$/.exec(text);
   return (
     <b className="truncate text-md font-semibold tracking-[-0.01em] text-ink">
-      {m ? <><span className={tone[t.kind]}>{m[1]}</span> {m[2]}</> : text}
+      {m ? <><span className={tone[hue(t)]}>{m[1]}</span> {m[2]}</> : text}
     </b>
   );
 }
@@ -108,7 +110,7 @@ function Tx({ t }: { t: Item }) {
   const paper = t.paper || t.text.startsWith("Paper · "), settled = t.kind !== "pending";
   return (
     <div role="status" className={cn("pointer-events-auto relative flex w-[min(24rem,calc(100vw-1.5rem))] items-center gap-3 overflow-hidden rounded-2xl py-3 pr-3 pl-3 animate-tx-in", glass,
-      tone[t.kind], t.kind === "fail" && "animate-tx-shake")}>
+      tone[hue(t)], t.kind === "fail" && "animate-tx-shake")}>
       {/* the state colour washing in from the logo's side, and a hairline of light along the top edge */}
       <i aria-hidden className={cn("pointer-events-none absolute inset-0 bg-[radial-gradient(110%_150%_at_0%_50%,currentColor,transparent_55%)] transition-opacity duration-500", settled ? "opacity-[0.13]" : "opacity-[0.05]")} />
       <i aria-hidden className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />

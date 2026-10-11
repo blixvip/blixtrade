@@ -38,10 +38,6 @@ export function PumpBoard({ source, range: shared, onRange }: { source: ReactNod
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl leading-none font-bold tracking-tight"><Icon.crown className="size-6 text-warn" />Leaderboard</h1>
-          <p className="mt-2 flex items-center text-md text-muted">
-            <span className={cn("mr-2 inline-block size-1.5 rounded-full bg-up", d?.loading && "animate-pulse")} />
-            pump.fun's top traders by profit · live · read {ago(d?.t)}
-          </p>
         </div>
         {source}
       </header>

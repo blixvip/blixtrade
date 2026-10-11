@@ -5,6 +5,7 @@
 //  3. Blix's own server candles as the last resort.
 // The newest answer of each coin and size is also kept in this browser (localStorage), so a chart opened again
 // draws on its first frame while the fresh read is on its way.
+import { normalizeBars } from "../../../server/chart-data.js";
 import { api } from "./api";
 import { geckoBars } from "./geckoBars";
 
@@ -22,9 +23,8 @@ async function jupiter(mint: string, tf: number, toMs: number, n: number): Promi
   const r = await fetch(`${JUP}${mint}?interval=${iv}&to=${toMs}&candles=${n}&type=mcap&quote=usd`, { signal: AbortSignal.timeout(8_000) });
   if (!r.ok) throw Object.assign(new Error(`Jupiter ${r.status}`), { busy: r.status === 429 });
   const j = (await r.json()) as { candles?: { time: number; open: number; high: number; low: number; close: number; volume?: number }[] };
-  return (j.candles || []).filter((c) => c.open > 0 && c.close > 0)
-    .map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 }))
-    .sort((a, b) => a.time - b.time);
+  return normalizeBars((Array.isArray(j.candles) ? j.candles : []).filter(Boolean)
+    .map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, value: c.volume || 0 })));
 }
 
 // One read: `before` (seconds) for older history, `limit` candles. Which source answered comes back with them.
@@ -37,14 +37,14 @@ export async function tvBars(mint: string, tf: number, { before, limit = 1000 }:
   } catch (e) { err = e; }
   if (tf >= 60) {
     try {
-      const rows = await geckoBars(mint, tf, before ? { before, limit } : { limit });
+      const rows = normalizeBars(await geckoBars(mint, tf, before ? { before, limit } : { limit }));
       if (rows.length) return { rows, source: "GeckoTerminal" };
     } catch (e) { err = err || e; }
   }
   if (!before) {
     try {
       const d = await api<{ rows: TvBar[] }>(`candles/${mint}?tf=${tf}`);
-      const rows = (d.rows || []).filter((x) => x.open > 0 && x.close > 0).slice(-limit);
+      const rows = normalizeBars(d.rows).slice(-limit);
       if (rows.length) return { rows, source: "Blix" };
     } catch (e) { err = err || e; }
   }
@@ -57,13 +57,15 @@ const KEY = (mint: string, tf: number) => `tv:${mint}:${tf}`;
 export function keptBars(mint: string, tf: number): TvBar[] | null {
   try {
     const v = JSON.parse(localStorage.getItem(KEY(mint, tf)) || "null") as { at: number; rows: TvBar[] } | null;
-    return v && Date.now() - v.at < 6 * 3600e3 && v.rows?.length ? v.rows : null;
+    if (!v || !Number.isFinite(v.at) || v.at > Date.now() || Date.now() - v.at >= 6 * 3600e3) return null;
+    const rows = normalizeBars(v.rows);
+    return rows.length ? rows : null;
   } catch { return null; }
 }
 let keeps = 0;
 export function keepBars(mint: string, tf: number, rows: TvBar[]) {
   try {
-    localStorage.setItem(KEY(mint, tf), JSON.stringify({ at: Date.now(), rows: rows.slice(-800) }));
+    localStorage.setItem(KEY(mint, tf), JSON.stringify({ at: Date.now(), rows: normalizeBars(rows).slice(-800) }));
     // Now and then, drop the oldest copies past 40 charts.
     if (++keeps % 20 === 0) {
       const all: [string, number][] = [];
@@ -79,7 +81,7 @@ export function firstBars(mint: string, tf: number) {
   const k = `${mint}:${tf}`, c = first.get(k);
   if (c && Date.now() - c.at < 30_000) return c.p;
   const p = tvBars(mint, tf);
-  p.then((x) => { if (x.rows.length) keepBars(mint, tf, x.rows); }, () => first.delete(k));
+  p.then((x) => { if (x.rows.length) keepBars(mint, tf, x.rows); }, () => { if (first.get(k)?.p === p) first.delete(k); });
   first.set(k, { at: Date.now(), p });
   if (first.size > 40) first.delete(first.keys().next().value!);
   return p;

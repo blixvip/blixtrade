@@ -4,6 +4,8 @@ import { type ReactNode } from "react";
 import { compact } from "@/lib/format";
 import { useLiveMc } from "@/lib/livepx";
 import { cn } from "@/lib/utils";
+import { useMetrics, useMetricVisibility, metricDescription } from '@/lib/metrics';
+import { useNow } from '@/lib/route';
 
 // A live number. It used to flash green or red on each change; the user wants figures to just update, as fast
 // as they come, with no colour flash (2026-10-10). `value` is kept so callers need not change.
@@ -13,6 +15,8 @@ export function Flash({ children, className }: { value?: number | null; children
 
 // A coin's market cap from the live trade stream (or `value` until a trade comes in).
 export function LiveMc({ mint, value, fmt = compact, className }: { mint: string; value?: number | null; fmt?: (n: number | null | undefined) => string; className?: string }) {
+  useNow();
   const v = useLiveMc(mint) ?? value ?? null;
-  return <Flash value={v} className={className}>{fmt(v)}</Flash>;
+  const metric = useMetrics(mint)?.fields.mc, ref = useMetricVisibility(mint);
+  return <span ref={ref} title={metricDescription(metric)}><Flash value={v} className={className}>{fmt(v)}</Flash></span>;
 }

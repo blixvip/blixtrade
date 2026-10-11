@@ -21,7 +21,7 @@ export function sameSender(a: Message | undefined, b: Message) {
 }
 export const MessageRow = memo(function MessageRow({ message: m, grouped, fresh, quote, onToken, onThread }: { message: Message; grouped?: boolean; fresh?: boolean; quote?: Quote; onToken: (m: Message) => void; onThread: (m: Message) => void }) {
   const name = senderName(m), activity = isActivity(m);
-  const profile = m.user?.handle ? traderHref(m.user.handle) : m.user?.pump ? `https://pump.fun/profile/${encodeURIComponent(m.user.pump)}` : null;
+  const profile = m.user?.handle ? traderHref(m.user.handle) : m.user?.wallet ? `#/trader/${m.user.wallet}` : null;   // a pump.fun caller opens their wallet's page on Blix
   const token = m.mint ? <button onClick={() => onToken(m)} aria-label={`Open ${m.ticker || 'token'} details`} className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-rule px-2 py-0.5 align-middle text-[13px] font-semibold text-ink hover:border-muted"><span className="size-4 shrink-0 overflow-hidden rounded-full"><TokenPic mint={m.mint} chain={m.chain ?? 1399811149} img={m.img || null} /></span><span className="truncate">{m.ticker || `${m.mint.slice(0, 5)}…`}</span><span aria-hidden className="text-muted">↗</span></button> : null;
   const kind: Record<string, string> = { thesis_created: 'Thesis', pump_callout: 'Callout', pump_quote: 'Quote', reply: 'Reply', new_token_listing: 'New listing', user_trade_profit_milestone: 'Milestone' };
   const date = <time dateTime={new Date(m.timelineAt).toISOString()} title={`Stream time: ${new Date(m.timelineAt).toLocaleString()}`} className="shrink-0 text-[12px] tabular-nums text-muted">{clockTime(m.timelineAt)}</time>;
