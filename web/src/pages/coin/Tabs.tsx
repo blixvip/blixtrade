@@ -1,7 +1,7 @@
 // The tabs under the chart: recent trades, the holder ledger, top traders, Fomo's known holders (FomoTabs.tsx),
 // every thesis from pump.fun and Fomo (Theses.tsx), the dev's coins, the AI read and the safety check. Your position is in the right column.
 import { AiGate } from "../AiPicks";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import { tokN, usdK, type CoinData, type TokenDetail, type Trades } from "@/lib/coin";
 import { ageStr } from "@/lib/format";
 import { useNow } from "@/lib/route";
@@ -106,15 +106,27 @@ const ROLE: Record<string, [string, string, string]> = {
   dev: ["DEV", "bg-warn/15 text-warn", "The coin's creator"], sniper: ["SNIPE", "bg-caution/15 text-caution", "Bought in the coin's first blocks"], bundle: ["BUNDLE", "bg-down/15 text-down", "Bought in the same transaction as the launch"],
 };
 type TradeRowData = Trades["trades"][number];
-const tradeKey = (x: TradeRowData, i: number) => (x.tx ? `${x.tx}:${x.wallet}:${x.side}` : `${x.t}:${x.wallet}:${x.side}:${x.usd}:${i}`);
+// A row's key never depends on its place in the list: with the index in it, every trade landing on top re-keyed
+// (and so remounted, and replayed the landing animation on) all the rows under it. Two rows alike in every
+// field are told apart by a count taken from the oldest up, which a new row on top does not change.
+const tradeKeys = (rows: TradeRowData[]) => {
+  const out = new Array<string>(rows.length), seen = new Map<string, number>();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const x = rows[i], base = x.tx ? `${x.tx}:${x.wallet}:${x.side}` : `${x.t}:${x.wallet}:${x.side}:${x.usd}`;
+    const n = seen.get(base) || 0; seen.set(base, n + 1);
+    out[i] = n ? `${base}#${n}` : base;
+  }
+  return out;
+};
 
 export function SideTrades({ trades }: { trades: Trades | null }) {
   const now = useNow();
   const [f, setF] = useTradeFilter();
-  const list = trades?.trades.filter(KEEP[f]) ?? null;
+  // An answer without a trades list (an error body, an older server's shape) reads as none, not a crash (seen 2026-10-11).
+  const list = Array.isArray(trades?.trades) ? trades.trades.filter(KEEP[f]) : null;
   // Rows already shown: a row not seen before slides in as it lands (not on the first draw; no colour flash).
   const seen = useRef<Set<string> | null>(null);
-  const shown = (list || []).slice(0, 150), keys = shown.map(tradeKey);
+  const shown = (list || []).slice(0, 150), keys = tradeKeys(shown);
   const fresh = new Set<string>();
   if (list) {
     if (seen.current) for (const k of keys) if (!seen.current.has(k)) fresh.add(k);
@@ -177,7 +189,8 @@ export function SideTrades({ trades }: { trades: Trades | null }) {
 const HUES = [25, 60, 150, 195, 230, 270, 310, 350];
 const hueOf = (w: string) => { let h = 0; for (let i = 0; i < w.length; i++) h = (h * 31 + w.charCodeAt(i)) | 0; return HUES[Math.abs(h) % HUES.length]; };
 
-function TradeRow({ x, now, share, fresh }: { x: TradeRowData; now: number; share: number; fresh: boolean }) {
+// Memoised: a trade landing re-renders the list, not every row already on it.
+const TradeRow = memo(function TradeRow({ x, now, share, fresh }: { x: TradeRowData; now: number; share: number; fresh: boolean }) {
   const buy = x.side === "buy", usd = x.usd || 0;
   const role = x.tag ? ROLE[x.tag] : null, whale = usd >= 1000;
   const tip = `${buy ? "Buy" : "Sell"} · $${usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}${x.sol != null ? ` · ${x.sol.toFixed(3)} SOL` : ""} · ${tokN(x.tokens)} tokens${x.mcUsd ? ` · at ${usdK(x.mcUsd)} MC` : ""}`;
@@ -201,12 +214,12 @@ function TradeRow({ x, now, share, fresh }: { x: TradeRowData; now: number; shar
       </span>
     </div>
   );
-}
+});
 
 function TradesTab({ trades }: { trades: Trades | null }) {
   const now = useNow();
   const [f, setF] = useTradeFilter();
-  if (!trades) return <Ghost />;
+  if (!trades || !Array.isArray(trades.trades)) return <Ghost />;
   const list = trades.trades.filter(KEEP[f]);
   return (
     <>
