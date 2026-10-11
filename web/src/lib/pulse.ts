@@ -410,6 +410,12 @@ export function startPulse() {
     on("live", (d) => { for (const r of d.u) queue.live.push(r); later(); });
     on("mig", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
     on("fees", (d) => { for (const r of d.u) queue.fees.push(r); later(); });
+    // A coin just migrated (server.js onMigrated): its chip goes now and the board is re-read within a second or
+    // two, so it sits in Migrated at a second old instead of waiting out the 15 s poll in Final Stretch.
+    on("migrated", (d) => {
+      usePulse.setState((s) => { const c = s.coins[d.mint]; return c && c.migrating ? { coins: { ...s.coins, [d.mint]: { ...c, migrating: null, progress: 1 } } } : s; });
+      refreshSoon();
+    });
     // Every coin that traded in the last 100 ms, curve or pool: the live figure everywhere a market cap shows.
     on("px", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
     on('metrics', (d) => receiveMetrics(d, replayed));

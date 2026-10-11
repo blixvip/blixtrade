@@ -485,7 +485,7 @@ export function pulseData() {
   const migrated = [...seconds, ...older].map((t) => {
     const b = bare(t.mint), r = row({ ...t, graduated: 1 }, ai.get(t.mint)), x = liveStats(t.mint);
     // Bonded seconds ago: its last price on the curve stands in until the new pool is priced, and says so.
-    const out = withFees(withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 })));
+    const out = withFees(withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1, migrating: null })));
     return r.mcap == null && x && out.priceT == null ? { ...out, warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : staleness(out);
   }).filter((r) => r.symbol && (r.mcap || 0) >= 5000).map(rankRow).sort((a, b) => a.age - b.age).slice(0, 80);
   bondedSeen.clear();
