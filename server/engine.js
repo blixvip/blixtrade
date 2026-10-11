@@ -98,18 +98,42 @@ function startPump() {
 // PumpPortal's migration event came (it drops some) and before the next DexScreener read names the pair. The pool
 // is the pair (DexScreener's pair id for PumpSwap is the pool), so the Migrated column can show it at once.
 const bondedOnChainSeen = new Set();
-export function bondedOnChain(mint, pool) {
-  if (bondedOnChainSeen.has(mint)) return;
+// Coins that just migrated are never retired by the cap cull below (they have no hour of volume yet, so the cap
+// took them first: 47 of 69 coins bonded in 15 minutes sat 'dead', 9 s after adoption, 2026-10-11) nor left dead
+// from before this rule: revived once at start.
+try { db.prepare("UPDATE tokens SET status = 'active', updated = 0 WHERE status = 'dead' AND graduated = 1 AND COALESCE(migrated_at, pair_created, first_seen) > ?").run(now() - 30 * MIN); } catch {}
+// exact = pump.fun's own migration event (livetrades.js poolMigrated), at = when: the coin's Migrated clock starts
+// there, whatever DexScreener later says the pool's creation was (it said 47-108 s earlier for two coins, so a
+// coin arrived in Migrated a minute old). A pool trade (exact = false) only marks a coin the event was missed for.
+export function bondedOnChain(mint, pool, at = now(), exact = false) {
+  if (bondedOnChainSeen.has(mint) && !exact) return;
   const had = q.getToken.get(mint);
   // A coin the radar never tracked (most fresh launches) is adopted this instant with what the launch feed knows
   // of it, then marked like any other: it is in Migrated at a second old, not after its next pool trade and scan.
-  if (!had) { const l = launchIndex.get(mint); adopt({ mint, symbol: l?.symbol, name: l?.name, uri: l?.uri, creator: l?.creator, devSol: l?.devSol, source: "pump-graduated" }); }
+  if (!had) {
+    const l = launchIndex.get(mint), s0 = liveCurves.get(mint);
+    adopt({ mint, symbol: l?.symbol, name: l?.name, uri: l?.uri, creator: l?.creator, devSol: l?.devSol, source: "pump-graduated" });
+    // Never tracked, and neither heard launching nor seen filling its curve: an old coin whose pool just traded
+    // (after a restart, or one the radar never followed), not a migration. Listed as bonded, dated by DexScreener's
+    // pool age on the next scan; never "bonded seconds ago" at a cap taken from a pool trade (2026-10-11: 70-day-old
+    // coins sat at the top of Migrated at $100K-800K while the market said $2K).
+    const recent = Boolean(l) || (s0?.completeAt && now() - s0.completeAt < 60 * MIN);
+    if (!exact && !recent) {
+      db.prepare("UPDATE tokens SET graduated = 1, status = 'active', pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = 0 WHERE mint = ?").run(pool || null, mint);
+      bondedOnChainSeen.add(mint);
+      return;
+    }
+  }
   bondedOnChainSeen.add(mint); if (bondedOnChainSeen.size > 5000) bondedOnChainSeen.clear();
-  if (had?.graduated && had?.pair) return;
+  // Known exactly already, or bonded long ago (a pool trade of an old coin after a restart): nothing to move.
+  if (had?.migrated_at) return;
+  if (had?.graduated && had?.pair && (!exact || (had.pair_created && at - had.pair_created > 10 * MIN))) return;
   // Its market cap from the live curve (SOL, at the live SOL price) until the scan reads the pool: the Migrated
-  // column's query wants one.
+  // column's query wants one. Active, and no quarantine: whatever was read of it on the curve is the past.
   const s = liveCurves.get(mint), mc = s?.mc > 0 && liveFeed.solUsd > 0 ? Math.round(s.mc * liveFeed.solUsd) : null;
-  const r = db.prepare("UPDATE tokens SET graduated = 1, pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = COALESCE(pair_created, ?), mcap = COALESCE(NULLIF(mcap, 0), ?) WHERE mint = ?").run(pool || null, now(), mc, mint);
+  const r = exact
+    ? db.prepare("UPDATE tokens SET graduated = 1, status = 'active', quarantine = NULL, pair = COALESCE(?, pair), dex = 'pumpswap', pair_created = ?, migrated_at = ?, mcap = COALESCE(?, NULLIF(mcap, 0)) WHERE mint = ?").run(pool || null, at, at, mc, mint)
+    : db.prepare("UPDATE tokens SET graduated = 1, status = 'active', pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = COALESCE(pair_created, ?), mcap = COALESCE(NULLIF(mcap, 0), ?) WHERE mint = ?").run(pool || null, at, mc, mint);
   if (!r.changes || had?.graduated) return;
   stats.graduated++;
   nursery.delete(mint);
@@ -229,7 +253,7 @@ async function graduateNursery() {
   }
   stats.nursery = nursery.size;
   if (!ripe.length) return;
-  const pairs = await src.dexTokens(ripe.map((t) => t.mint));
+  const pairs = await src.dexTokens(ripe.map((t) => t.mint), { lane: "scan" });
   let kept = 0;
   for (const t of ripe) {
     const p = pairs.get(t.mint);
@@ -281,7 +305,7 @@ function solSupply() {
   }
   return solCirc.n;
 }
-function applyPair(mint, p) {
+export function applyPair(mint, p) {   // exported for test/migrated-column.test.mjs
   p = fromReserves(p);
   if (mint === WSOL && !(p.marketCap || p.fdv) && solSupply()) p = { ...p, marketCap: (+p.priceUsd || 0) * solSupply() };
   const links = cleanLinks([
@@ -291,6 +315,17 @@ function applyPair(mint, p) {
   for (const l of links) if (/twitter|x\.com/i.test(`${l.type} ${l.url}`)) warmX(l.url);   // the X card, ahead of any hover (once per link)
   const t = q.getToken.get(mint);
   const mcap = p.marketCap || p.fdv || 0, liq = p.liquidity?.usd || 0;
+  // A pump.fun graduate's pool (migrated_at: the migration itself was seen) holds locked liquidity from the curve,
+  // tens of SOL that nobody can pull: a reading with under $2K of liquidity or no market cap is DexScreener not
+  // having indexed the pool yet (it said $1 / $0.97 liquidity for 10-16 minutes on 2026-10-11, then $1,962, then
+  // the market), not a crash. Dropped: the last real figure stands (the chain's own trades move it meanwhile), and
+  // the coin is not quarantined out of Migrated over it. Read again on the next scan.
+  // Only while the pool is new: past half an hour a reading like that is the market (the coin died), and keeping
+  // the old figure left 83 of 152 Migrated rows at caps 10-400x the market for 5+ hours (2026-10-11).
+  if (t?.migrated_at && now() - t.migrated_at < 30 * MIN && (liq < 2000 || mcap < 500)) {
+    if (t.quarantine === "implausible market cap") db.prepare("UPDATE tokens SET quarantine = NULL WHERE mint = ?").run(mint);
+    return;
+  }
   // A reading from an emptied pool is kept for display (flagged) but never becomes a peak or a return.
   const cls = classifyAsset({ ...t, mint, symbol: p.baseToken?.symbol || t?.symbol, name: p.baseToken?.name || t?.name, mcap, liquidity: liq });
   const problem = readingProblem({ dex: p.dexId, liquidity: liq, mcap, asset: cls }, settings.minExitLiq);
@@ -300,7 +335,7 @@ function applyPair(mint, p) {
   }
   db.prepare(`UPDATE tokens SET
     symbol = COALESCE(?, symbol), name = COALESCE(?, name), image = COALESCE(image, ?), header = COALESCE(?, header),
-    pair = ?, dex = ?, pair_created = ?, price = ?, mcap = ?, liquidity = ?,
+    pair = ?, dex = ?, pair_created = CASE WHEN migrated_at IS NOT NULL THEN pair_created ELSE ? END, price = ?, mcap = ?, liquidity = ?,
     vol_m5 = ?, vol_h1 = ?, vol_h24 = ?, buys_m5 = ?, sells_m5 = ?, buys_h1 = ?, sells_h1 = ?,
     chg_m5 = ?, chg_h1 = ?, chg_h24 = ?, links = ?, updated = ?, peak_mcap = MAX(COALESCE(peak_mcap, 0), ?),
     graduated = CASE WHEN ? THEN 1 ELSE graduated END,
@@ -356,7 +391,7 @@ async function refreshActive() {
   // record reflects what really happened to them instead of freezing at their last good price.
   const scoring = cyc % 4 !== 0 ? [] : db.prepare(`SELECT DISTINCT t.mint FROM tokens t JOIN signals s ON s.mint = t.mint
     WHERE t.status = 'dead' AND s.hidden = 0 AND s.p24h IS NULL AND s.t > ? LIMIT 300`).all(now() - 25 * 60 * MIN).map((r) => r.mint);
-  const pairs = await src.dexTokens([...due, ...scoring]);
+  const pairs = await src.dexTokens([...due, ...scoring], { lane: "scan" });
   await batched([...due, ...scoring], (m) => {
     const p = pairs.get(m);
     if (p) applyPair(m, p);
@@ -384,12 +419,15 @@ function reviveBusy() {
     revive.run(mint); stats.revived = (stats.revived || 0) + 1;
   }
 }
-function cull() {
+export function cull() {   // exported for test/migrated-column.test.mjs
   reviveBusy();
   const age = (t) => now() - t.first_seen;
   // SOL, stablecoins, wrapped BTC and other big non-memes score 0 (only memes are scored) but are never retired.
-  const keep = (t) => MAJOR_MINTS.has(t.mint) || (t.asset_class && t.asset_class !== "meme" && (t.mcap || 0) >= 5e7);
-  const rows = db.prepare("SELECT mint, first_seen, mcap, liquidity, vol_h1, score, asset_class FROM tokens WHERE status = 'active'").all();
+  // A coin bonded in the last 30 minutes is kept whatever its figures say: its pool's volume is not read yet, and
+  // it is the youngest row of Migrated (an hours-old curve coin that just bonded read as "3 h old, no volume").
+  const justBonded = (t) => t.graduated && now() - (t.migrated_at || t.pair_created || t.first_seen) < 30 * MIN;
+  const keep = (t) => MAJOR_MINTS.has(t.mint) || justBonded(t) || (t.asset_class && t.asset_class !== "meme" && (t.mcap || 0) >= 5e7);
+  const rows = db.prepare("SELECT mint, first_seen, mcap, liquidity, vol_h1, score, asset_class, graduated, migrated_at, pair_created FROM tokens WHERE status = 'active'").all();
   const dead = rows.filter((t) => !busyNow(t.mint) && !keep(t) && (
     (age(t) > 45 * MIN && (t.mcap || 0) < 6000) ||
     (age(t) > 3 * 60 * MIN && (t.vol_h1 || 0) < 500) ||
@@ -399,7 +437,11 @@ function cull() {
   const alive = rows.length - dead.length;
   if (alive > settings.maxTracked) {
     // Over the cap, the least traded go first (a hot coin with a low score must not drop off Discover).
-    const extra = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND NOT (mint IN (${[...MAJOR_MINTS].map((m) => `'${m}'`).join(",")}) OR (COALESCE(asset_class, 'meme') != 'meme' AND mcap >= 5e7)) ORDER BY COALESCE(vol_h1, 0) + 12 * COALESCE(vol_m5, 0) ASC, score ASC, first_seen ASC LIMIT ?`).all(alive - settings.maxTracked);
+    // Never a coin that just bonded (its hour of volume is not read yet: it is the least traded on paper) nor one
+    // minutes old: those are the board's youngest rows, and the cull emptied Migrated of them (2026-10-11).
+    const extra = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND NOT (mint IN (${[...MAJOR_MINTS].map((m) => `'${m}'`).join(",")}) OR (COALESCE(asset_class, 'meme') != 'meme' AND mcap >= 5e7))
+      AND first_seen < ? AND NOT (graduated = 1 AND COALESCE(migrated_at, pair_created, first_seen) > ?)
+      ORDER BY COALESCE(vol_h1, 0) + 12 * COALESCE(vol_m5, 0) ASC, score ASC, first_seen ASC LIMIT ?`).all(now() - 10 * MIN, now() - 30 * MIN, alive - settings.maxTracked);
     for (const t of extra) kill.run(now(), t.mint);
   }
 }
@@ -720,13 +762,22 @@ export function rebuildFromSnapshots() {
 
 // ---------- loop ----------
 let running = false;
+// Which stage the running cycle is in and since when (the health page shows it); a cycle stuck in one stage for
+// 10 minutes is abandoned so the next one can run (stats.stuck counts them), rather than prices going stale for good.
+const STAGE_MAX = 10 * MIN;
 async function cycle() {
-  if (running) return;
+  if (running) {
+    if (now() - (stats.stageAt || now()) < STAGE_MAX) return;
+    stats.stuck = (stats.stuck || 0) + 1;
+    logEvent("error", `scan cycle stuck in ${stats.stage} for ${Math.round((now() - stats.stageAt) / MIN)} min; abandoned, a new one starts`);
+  }
   running = true;
+  const stage = (name) => { stats.stage = name; stats.stageAt = now(); };
   try {
-    await graduateNursery();
-    await refreshActive();
-    await runSafety();
+    stage("nursery"); await graduateNursery();
+    stage("refresh"); await refreshActive();
+    stage("safety"); await runSafety();
+    stage("scoring");
     for (const mint of pendingGraduations) { const t = q.getToken.get(mint); if (t?.pair) rescore(t); }
     dumpWatch();
     trackOutcomes();
@@ -741,6 +792,7 @@ async function cycle() {
     logEvent("error", e.message);
   } finally {
     running = false;
+    stats.stage = null;
   }
 }
 

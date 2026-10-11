@@ -8,6 +8,8 @@
 // This PC only: the port is bound to 127.0.0.1, and the radar sees these requests as its own local page.
 import crypto from "node:crypto";
 import http from "node:http";
+import { createByteCache } from './byte-cache.js';
+import { proxyRequest } from './http-proxy.js';
 import zlib from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,6 +20,7 @@ import { createOriginGuard, isRelay } from './request-guard.js';
 const originGuard = createOriginGuard();
 import { answer, kind, wrote, cacheReport } from "./apicache.js";
 import { servePicture, pictureBatch, picStats, serveFar, farStats, warmFar } from "./pagepics.js";
+import { searchTokens, searchable, warmSearch } from "./search.js";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 const PORT = Number(process.env.BLIX_WEB_PORT) || 4421;
@@ -26,7 +29,7 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8" };
 export const webStats = { on: false, port: PORT, built: null, error: null };
 
-const files = new Map();     // path -> { body, mtime, checked }: read once, re-checked at most every 2 s
+const files = createByteCache({ maxBytes: 64 * 1024 ** 2, maxEntries: 400, sizeOf: v => v.body.length });
 function read(file) {
   const c = files.get(file);
   if (c && Date.now() - c.checked < 2000) return c.body;
@@ -59,7 +62,8 @@ async function pruneAssets() {
       const full = path.join(dir, f), base = f.replace(/\.(br|gz)$/, "");
       if (used.has(base)) continue;
       const st = await fs.promises.stat(full).catch(() => null);
-      if (st && Date.now() - st.mtimeMs > 7 * 864e5) await fs.promises.rm(full).catch(() => {});
+      // Two days, not a week: peers deploy every few minutes and the folder reached 32,565 files (2026-10-11).
+    if (st && Date.now() - st.mtimeMs > 2 * 864e5) await fs.promises.rm(full).catch(() => {});
     }
   } catch {}
 }
@@ -80,7 +84,7 @@ function toRadar(req, res, port, local, allow) {
   const accepts = String(req.headers["accept-encoding"] || "");
   const enc = local || stream || req.method !== "GET" ? null : /\bbr\b/.test(accepts) ? "br" : /\bgzip\b/.test(accepts) ? "gzip" : null;
   if (local || enc) headers["accept-encoding"] = "identity";
-  const out = http.request({ host: "127.0.0.1", port, method: req.method, path: req.url, headers }, (r) => {
+  return proxyRequest(req, res, { port, headers, stream, firstByteMs: req.method === 'GET' ? 15000 : 120000, onResponse: (r) => {
     const h = allow ? { ...r.headers, ...allow } : { ...r.headers };
     const len = Number(r.headers["content-length"]);
     if (enc && !r.headers["content-encoding"] && /json|text|javascript/.test(String(r.headers["content-type"] || "")) && !(len < 1024)) {
@@ -89,16 +93,11 @@ function toRadar(req, res, port, local, allow) {
       res.writeHead(r.statusCode || 502, h);
       const z = enc === "br" ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }) : zlib.createGzip({ level: 5 });
       z.on("error", () => res.destroy());
-      return r.pipe(z).pipe(res);
+      r.pipe(z).pipe(res);
+      return z;
     }
     res.writeHead(r.statusCode || 502, h); r.pipe(res);
-  });
-  out.on("error", () => {
-    if (!res.headersSent) res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-    res.end(JSON.stringify({ error: "Blix is restarting. Back in a few seconds." }));
-  });
-  res.on("close", () => out.destroy());   // the live stream: stop reading when the page goes
-  req.pipe(out);
+  } });
 }
 
 // Accounts are answered right here (accounts.js runs on its own and never opens the radar's database), so
@@ -114,9 +113,7 @@ async function toAccountsHere(req, res) {
 
 function toAccounts(req, res) {
   const headers = { ...req.headers, origin: `http://localhost:${ACCOUNTS.port}`, "x-forwarded-host": req.headers.host || "" };
-  const out = http.request({ ...ACCOUNTS, method: req.method, path: req.url, headers }, (r) => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
-  out.on("error", () => { if (!res.headersSent) res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ error: "The accounts service is not running on this PC." })); });
-  req.pipe(out);
+  return proxyRequest(req, res, { port: ACCOUNTS.port, headers, firstByteMs: 120000 });
 }
 
 
@@ -312,7 +309,7 @@ function remoteGate(req, res) {
 }
 
 const ZIPPABLE = new Set([".js", ".css", ".html", ".svg", ".json"]);
-const zips = new Map();   // `${enc}:${file}` -> { body, zip: a promise } (a rebuilt file gets a new body, so a new zip)
+const zips = createByteCache({ maxBytes: 64 * 1024 ** 2, maxEntries: 400, sizeOf: v => v.body.length * 2 + 1024 });
 // Brotli where the browser takes it (every current one does): ~15-20% smaller than gzip on these scripts.
 // Compressed once per file and kept, off the main thread: done in line, the main script took this process
 // 170-320 ms the first time it was asked for after each build, and every other request waited behind it.
@@ -331,7 +328,6 @@ function compressed(file, body, enc) {
     else zlib.gzip(body, { level: 6 }, done);
   });
   zips.set(key, { body, zip });
-  if (zips.size > 400) zips.delete(zips.keys().next().value);
   return zip;
 }
 
@@ -398,6 +394,8 @@ function fromHere(req, res, p, port) {
   const pic = (get || req.method === "HEAD") && p.match(PIC_PATH);
   if (pic) return servePicture(pic[1], req, res, port, Boolean(pic[2])).catch(failed(res));
   if (get && p === "/api/pics") return pics(req, res, port, local).catch(failed(res));
+  // A coin search (search.js): from the index kept here, in a few ms, never on the radar's thread.
+  if (get && p === "/api/tokens") { const u = new URL(req.url, "http://x"); if (searchable(u)) return json(res, 200, JSON.stringify(searchTokens(u.searchParams))); }
   // A picture from elsewhere (a person's avatar, a post's photo), kept here (pagepics.js).
   if ((get || req.method === "HEAD") && (p === "/api/pic" || p === "/api/pic.webp")) {
     // A member may ask for 600 pictures a minute (a coin page's holders and theses are ~150, Pulse ~60); a kept one
@@ -432,6 +430,7 @@ function fromHere(req, res, p, port) {
 
 // `radar`: the radar's own http server when it serves the page in-process; null to forward over HTTP (supervisor).
 export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
+  warmSearch();
   // The Feed's pictures (avatars, coin pictures, photos), fetched here at the sizes the page draws them the moment
   // their posts reach the radar (GET /api/feed/pics lists them while someone has had the Feed open in the last
   // 10 minutes), so the page finds every one already on disk.
@@ -470,9 +469,10 @@ export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
     // A missing built file is a 404, never the page: a script import answered with HTML fails in a way the page
     // cannot recover from, and took the whole app down to a blank screen after rebuilds.
     if (p.startsWith("/assets/") && !(inside && read(file))) { res.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" }); return res.end("Not found"); }
-    const body = (inside && read(file)) || read(path.join(DIST, "index.html"));
+    const fileBody = inside && read(file);
+    const body = fileBody || read(path.join(DIST, "index.html"));
     if (!body) { res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }); return res.end("The new Blix page has not been built yet. In the web folder run: npm run build"); }
-    const isFile = inside && files.has(file);
+    const isFile = Boolean(fileBody);
     // Text files go out compressed (once per file and kept), Brotli first, else gzip: it matters through the tunnel.
     const accepts = String(req.headers["accept-encoding"] || ""), enc = /\bbr\b/.test(accepts) ? "br" : /gzip/.test(accepts) ? "gzip" : null;
     const local = LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase());

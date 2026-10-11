@@ -73,9 +73,10 @@ for (const [m, dec] of DOLLARS) prices.set(m, { usd: 1, dec, t: Infinity });
 export function quoteUsd(mint) {
   const p = prices.get(mint);
   if (p) return p;
+  // The radar's own figure serves until Jupiter's arrives (asked for either way: Jupiter's is the one to keep).
+  want(mint);
   const l = localUsd(mint);
   if (l > 0) return { usd: l, dec: 6, t: Date.now() };
-  want(mint);
   return null;
 }
 
@@ -90,8 +91,8 @@ export function quotedTrade(buf, solUsd) {
   const L = buf.length, quote = b58(buf.subarray(L - 80, L - 48));
   if (quote === WSOL) return null;
   let p = prices.get(quote);
-  if (!p) { const usd = localUsd(quote); if (usd > 0) { p = { usd, dec: 6 }; quoteStats.local++; } }
-  if (!p) { want(quote); quoteStats.unpriced++; return { pending: true }; }
+  if (!p) { want(quote); const usd = localUsd(quote); if (usd > 0) { p = { usd, dec: 6 }; quoteStats.local++; } }
+  if (!p) { quoteStats.unpriced++; return { pending: true }; }
   const scale = 10 ** p.dec;
   const amount = Number(buf.readBigUInt64LE(L - 48)) / scale, vQuote = Number(buf.readBigUInt64LE(L - 40)) / scale;
   const tokens = Number(buf.readBigUInt64LE(48)) / 1e6, vTok = Number(buf.readBigUInt64LE(105)) / 1e6, rTok = Number(buf.readBigUInt64LE(121)) / 1e6;

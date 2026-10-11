@@ -23,16 +23,13 @@ const TITLES: Record<string, string> = { new: "New Pairs", stretch: "Final Stret
 const SHOWN = COLS.filter(([c]) => c !== "running");
 const SHOW: [Show, string][] = [["all", "All"], ["noslop", "Hide slop"], ["rated", "AI rated"], ["buy", "Buy calls"]];
 
-// A coin that is already a rug, or cannot end any other way: its pool was emptied, the dev sold everything before it went anywhere,
-// a handful of wallets hold nearly all of it, or the AI failed it outright. These never show on the Pulse,
-// in any display mode. Searching a ticker or contract still finds one. A coin people are really trading right now
-// (mv, from the server) is shown anyway, whatever its holders look like: only an emptied pool hides it.
+// Discovery risk heuristics, not evidence that a coin rugged. Search bypasses them.
 export const isRug = (t: Coin) => {
-  if (t.mv) return t.warn?.kind === "emptied";
+  if (t.mv) return false;
   const H = t.hl || {}, top10 = H.t10 ?? t.top10 ?? 0, dev = H.dev ?? t.dev ?? 0, holders = H.h ?? t.holders ?? 0, old = Date.now() - t.born > 90_000;
   // A dev selling out kills a coin that has not gone anywhere; one that kept running after it is a community coin, not a rug.
-  const devDumped = (H.ds === "all" || H.ds === 2) && !t.graduated && (t.mcap ?? 0) < 10_000;
-  return t.warn?.kind === "emptied" || devDumped || (holders >= 15 && top10 >= 80) || (old && dev >= 50) || (H.bd ?? 0) >= 50 || (H.sn ?? 0) >= 50 || t.ai?.grade === "F";
+  const devDumped = (H.ds === "all" || H.ds === 2) && !t.graduated && t.mcap != null && t.mcap > 0 && t.mcap < 10_000;
+  return devDumped || (holders >= 15 && top10 >= 80) || (old && dev >= 50) || (H.bd ?? 0) >= 50 || (H.sn ?? 0) >= 50 || t.ai?.grade === "F";
 };
 
 // A coin whose chart is dead is never shown, in any list or search: a new pair nobody has traded for minutes
@@ -73,9 +70,8 @@ const fits = (t: Coin, f: PulsePrefs) => {
 };
 
 const passes = (t: Coin, show: Show, q: string, f: PulsePrefs): boolean => {
-  if (isDeadCoin(t)) return false;
   if (q) return `${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q) && (show === "all" || show === "noslop" || passes(t, show, "", f));
-  if (isRug(t) || rugGuard(t, f) || !fits(t, f)) return false;
+  if (isDeadCoin(t) || isRug(t) || rugGuard(t, f) || !fits(t, f)) return false;
   if (show === "noslop") return !(t.tri?.label === "slop" && !t.ai);
   if (show === "rated") return Boolean(t.ai?.rated);
   if (show === "buy") return t.ai?.action === "buy";
@@ -196,22 +192,12 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   );
 }
 
-// An empty column says exactly what emptied it, most specific first, with the one click that brings coins back.
-// "Buy calls" or "AI rated" with nothing called yet is not a filter mistake, so it does not read like one.
-function ColumnEmpty({ title, showing, q, own, clearOwn, colFilters, resetCol, show, setShow, prefs }: {
+// An empty column: one plain line, nothing else (owner, 2026-10-11: "super simple").
+function ColumnEmpty(_: {
   title: string; showing: boolean; q: string; own: string; clearOwn: () => void; colFilters: number; resetCol: () => void;
   show: Show; setShow: (v: Show) => void; prefs: PulsePrefs;
 }) {
-  const showAll = { label: "Show all coins", onClick: () => setShow("all") };
-  if (showing) return <EmptyState brand icon="eye" title="No hidden coins here" hint="Coins you hide from this column show up here, so you can bring them back." />;
-  if (q) return <EmptyState brand icon="search" title="No matches" hint={`Nothing in ${title} matches "${q}".`} action={own ? { label: "Clear search", onClick: clearOwn } : null} />;
-  if (colFilters) return <EmptyState brand icon="filter" badge={colFilters} title="No coins match this column's filters" hint={`${colFilters} filter${colFilters === 1 ? " is" : "s are"} on. Loosen ${colFilters === 1 ? "it" : "them"}, or reset to see every coin again.`} action={{ label: "Reset filters", onClick: resetCol }} />;
-  if (show === "buy") return <EmptyState brand icon="bolt" title="No buy calls yet" hint={`The AI hasn't called a buy in ${title}. Calls land here the moment it makes one.`} action={showAll} />;
-  if (show === "rated") return <EmptyState brand icon="spark" title="No AI-rated coins yet" hint={`Coins in ${title} show here once the AI has rated them.`} action={showAll} />;
-  if (show === "noslop") return <EmptyState brand icon="filter" title="Only slop right now" hint={`Every coin in ${title} was flagged as slop. Better ones show up as they launch.`} action={showAll} />;
-  if (filterCount(prefs)) return <EmptyState brand icon="shield" title="Your filters hide every coin" hint="Rug guard or your Pulse settings filter out everything in this column."
-    action={{ label: "Clear filters", onClick: () => setPrefs({ ...Object.fromEntries(FILTER_KEYS.map((k) => [k, null])), socials: false, rug: false }) }} />;
-  return <EmptyState brand icon="inbox" title="Nothing here right now" hint="Coins appear the moment they qualify." />;
+  return <div role="status" className="grid h-full min-h-64 w-full place-items-center px-6 text-center text-xs text-muted">No tokens match the current filters</div>;
 }
 
 // Axiom's eye button: how many coins are hidden; pressing it shows just those (and Unhide all).
@@ -235,8 +221,8 @@ function HiddenButton() {
 function RugButton() {
   const on = usePrefs((p) => p.rug);
   return (
-    <Tip tip={on ? "Rug guard is on: likely rugs are hidden. Its checks are in Settings." : "Hide likely rugs: dev sold, a few wallets or snipers holding most of it, serial launchers, dead coins"}>
-      <button role="switch" aria-checked={on} onClick={() => { setPrefs({ rug: !on }); toast(on ? "Rug guard off" : "Rug guard on: likely rugs hidden"); }}
+    <Tip tip={on ? "Rug guard is on: coins matching risk filters are hidden. Its checks are in Settings." : "Filter risk signals: dev sold, a few wallets or snipers holding most of it, serial launchers, dead coins"}>
+      <button role="switch" aria-checked={on} onClick={() => { setPrefs({ rug: !on }); toast(on ? "Rug guard off" : "Rug guard on: risk filters applied"); }}
         className={cn(CTL, "gap-1.5 px-3", on ? "bg-up/10 text-up ring-up/35 hover:bg-up/15 hover:text-up" : "text-ink-2")}>
         <Icon.shield className="size-4" /><span className="max-md:sr-only">Rug guard</span>
         <i aria-hidden className={cn("size-1.5 rounded-full transition-colors", on ? "bg-up shadow-[0_0_6px_var(--color-up)]" : "bg-rule-2")} />

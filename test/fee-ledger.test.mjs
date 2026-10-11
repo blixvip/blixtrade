@@ -207,3 +207,19 @@ test('snapshot restore retains original legacy expiry despite a newer coin times
   close(result.sol, 0.02);
   assert.equal(result.coverage, 1);
 });
+
+test('signatures of old buckets are dropped on restore and prune; their fees and coverage stay', () => {
+  const now = () => 20 * 3600e3;
+  const ledger = createFeeLedger({ now });
+  ledger.add('coin', { sol: 0.01, signature: 'old', at: now() - 3 * 3600e3, coverage: 0.5 });
+  ledger.add('coin', { sol: 0.02, signature: 'new', at: now() - 60e3, coverage: 1 });
+  const fresh = createFeeLedger({ now });
+  fresh.restore(ledger.snapshot());
+  assert.equal(fresh.get('coin').observedSol, 0.03, 'fees kept');
+  assert.equal(fresh.get('coin').sol, 0.01 / 0.5 + 0.02, 'coverage kept');
+  assert.equal(fresh.add('coin', { sol: 0.02, signature: 'new', at: now() - 60e3, coverage: 1 }), false, 'a recent repeat is still refused');
+  assert.equal(fresh.snapshotOne('coin').buckets.find((b) => b.sol === 0.01).signatures.length, 0, 'old signatures gone');
+  ledger.prune();
+  assert.equal(ledger.snapshotOne('coin').buckets.find((b) => b.sol === 0.01).signatures.length, 0, 'prune drops them in a running ledger too');
+  assert.equal(ledger.snapshotOne('coin').buckets.find((b) => b.sol === 0.02).signatures.length, 1);
+});

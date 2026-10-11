@@ -1,5 +1,9 @@
 // Actual fees are never scaled at ingestion. Coverage is an explicit estimate per minute.
-export function createFeeLedger({ now = Date.now, keepMs = 7 * 864e5 } = {}) {
+// Signatures are kept only for the last `sigKeepMs` of buckets: they exist to refuse a transaction heard twice (the
+// live feed and the block follower, minutes apart at most), and keeping a week of them held 7.9M strings (1.5 GB)
+// in every process that loads the ledger (the page server too, via accounts.js), which hit Node's 2 GB heap
+// limit and crash-looped the site on 2026-10-11. Older buckets keep their fees and coverage, not their signatures.
+export function createFeeLedger({ now = Date.now, keepMs = 7 * 864e5, sigKeepMs = 2 * 3600e3 } = {}) {
   const coins = new Map(), changed = new Set();
   const minute = at => Math.floor(at / 60_000) * 60_000;
   const validCoverage = x => Number.isFinite(x) && x > 0 && x <= 1;
@@ -36,7 +40,7 @@ export function createFeeLedger({ now = Date.now, keepMs = 7 * 864e5 } = {}) {
         const buckets = new Map(), seen = new Set();
         for (const b of row.buckets || []) {
           if (!Number.isFinite(b.sol) || b.sol < 0 || !validCoverage(b.coverage) || !Number.isFinite(b.at) || b.at < now() - keepMs) continue;
-          const signatures = (b.signatures || []).filter(s => typeof s === 'string');
+          const signatures = b.at < now() - sigKeepMs ? [] : (b.signatures || []).filter(s => typeof s === 'string');
           buckets.set(minute(b.at), { ...b, signatures }); for (const s of signatures) seen.add(s);
         }
         const legacyAt = Number.isFinite(row.legacyAt) ? row.legacyAt : row.at;
@@ -50,6 +54,8 @@ export function createFeeLedger({ now = Date.now, keepMs = 7 * 864e5 } = {}) {
         if (c.at < cut) { coins.delete(mint); changed.add(mint); continue; }
         if (c.legacyEstimatedSol && c.legacyAt < cut) { c.legacyEstimatedSol = 0; changed.add(mint); }
         for (const [at, b] of c.buckets) if (at < cut) { c.buckets.delete(at); for (const sig of b.signatures) c.seen.delete(sig); changed.add(mint); }
+        const sigCut = now() - sigKeepMs;
+        for (const [at, b] of c.buckets) if (at < sigCut && b.signatures.length) { for (const sig of b.signatures) c.seen.delete(sig); b.signatures = []; changed.add(mint); }
         if (c.since < cut) c.since = c.buckets.size ? Math.min(...c.buckets.keys()) : c.at;
       }
     },

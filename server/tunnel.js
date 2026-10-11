@@ -26,8 +26,10 @@ async function register(url) {
     logEvent("system", `Remote access live: https://${settings.publicHost} → ${url}`);
   } catch (e) {
     tunnelStats.registerError = e.message; health.fail("tunnel", e);
-    logEvent("error", `tunnel register: ${e.message}`);
-    setTimeout(() => { if (tunnelStats.url === url && !stopped) register(url); }, 30_000);
+    // Logged once per distinct failure (105 "register 429" rows in 6 h, 2026-10-11), and a 429 waits 10 minutes
+    // before the next try instead of 30 s: the named tunnel's address never changes, nothing is lost by waiting.
+    if (tunnelStats.lastLogged !== e.message) { tunnelStats.lastLogged = e.message; logEvent("error", `tunnel register: ${e.message}`); }
+    setTimeout(() => { if (tunnelStats.url === url && !stopped) register(url); }, /register 429/.test(e.message) ? 10 * 60_000 : 30_000);
   }
 }
 

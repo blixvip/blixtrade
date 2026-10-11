@@ -77,6 +77,8 @@ export function decode(buf, buy, { rev = false, dec = 6, supply = false, qmint =
 const best = new Map();   // mint -> { pool, depth }
 // The pool a coin trades in, as the chain showed it (fastpx.js: a coin that bonded before the tokens table knew).
 export const poolOf = (mint) => best.get(mint)?.pool ?? null;
+// The pool as last heard: its address, the SOL on its quote side (depth) and when (ms). For the radar's own pool quotes (quote.js).
+export const poolStateOf = (mint) => best.get(mint) ?? null;
 // The last real (non-dust) trade's price per pool: a dust trade is priced at it. The reserves' ratio was the
 // fallback, but on some pools it sits 10-15% under every trade (AM, ChatGPT, PIG: chain rows at 0.85x
 // Jupiter's level, 2026-10-06), and bot-spammed coins are mostly dust, so most of their rows read low.
@@ -104,7 +106,9 @@ function emit(mint, e, slot, sig = null) {
   const sup = supplyOf(mint);
   if (e.needSupply && !sup) { swapFeed.unpriced++; return; }
   const mcSol = e.mcSol * ((sup ?? 1e9) / 1e9);
-  for (const fn of listeners()) fn(mint, { mcSol, sol: e.sol, tokens: e.tokens, buy: e.buy, user: e.user, slot, sig, depth: e.depth, rev: Boolean(e.rev) });
+  // `supply`: the tokens that cap is on, so a reader can get back to a price per token (pumpquote.js prices other
+  // curves in this coin: PUMP's cap on 463B tokens read as a cap on 1B put every PUMP-quoted coin 460x too high).
+  for (const fn of listeners()) fn(mint, { mcSol, sol: e.sol, tokens: e.tokens, buy: e.buy, user: e.user, slot, sig, depth: e.depth, rev: Boolean(e.rev), supply: sup ?? 1e9 });
 }
 
 // Unknown pools are read in batches of up to 100, a few times a second at most.
@@ -213,7 +217,7 @@ export function decodeKnown(buf, buy) {
   const px = e.exec ?? lastExec.get(pool) ?? e.mcSol;
   const sup = supplyOf(mint);
   if (!(px > 0) || px > 1e8 || (e.needSupply && !sup)) return null;
-  return { mint, buy: e.buy, sol: e.sol, tokens: e.tokens, user: e.user, mcSol: px * ((sup ?? 1e9) / 1e9) };
+  return { mint, buy: e.buy, sol: e.sol, tokens: e.tokens, user: e.user, mcSol: px * ((sup ?? 1e9) / 1e9), supply: sup ?? 1e9 };
 }
 
 // One logs notification's value; shared by the program-wide stream below and chartstream.js.

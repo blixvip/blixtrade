@@ -393,7 +393,7 @@ function build(mint, top) {
     // Off the curve with no live price, the chart's newest close (seconds old while it is open) before the stored
     // DexScreener reading (minutes old: it showed $21K for a coin that had dumped to $2.4K).
     // While its chart is open the header shows what the chart shows: the fast feed, else the newest candle.
-    mcUsd: fastMcUsd(mint) != null ? Math.round(fastMcUsd(mint)) : chartClose(mint) != null ? Math.round(chartClose(mint)) : curveLive(L, t) ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : (fastMcap(mint) != null ? Math.round(fastMcap(mint) * levelNow(mint)) : null) ?? (chartClose(mint) != null ? Math.round(chartClose(mint)) : null) ?? onScale(mint, t, t?.mcap) ?? (L ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : null),
+    mcUsd: L?.suspect ? Math.round(L.mc) : fastMcUsd(mint) != null ? Math.round(fastMcUsd(mint)) : chartClose(mint) != null ? Math.round(chartClose(mint)) : curveLive(L, t) ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : (fastMcap(mint) != null ? Math.round(fastMcap(mint) * levelNow(mint)) : null) ?? (chartClose(mint) != null ? Math.round(chartClose(mint)) : null) ?? onScale(mint, t, t?.mcap) ?? (L ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : null),
     // How old the market cap above is: under a few seconds while it trades on the curve or the Pulse prices it.
     priceAgeMs: curveLive(L, t) ? now() - L.last : fastMcap(mint) != null ? 0 : t?.price_t ? now() - t.price_t : null,
     priceUsd: p.sol != null && solUsd ? p.sol * solUsd : t?.price ?? null,

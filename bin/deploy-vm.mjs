@@ -148,6 +148,12 @@ const record = () => {
   ssh(`cat > ${REMOTE}/data/deploy-manifest.json`, JSON.stringify(m, null, 1));
 };
 if (!ship.length) { if (ADOPT) record(); say("No server change: no restart."); process.exit(refused.length ? 2 : 0); }
+// The test suite gates a server deploy (about 25 s): a file that breaks a test never reaches the VM. --no-test skips it.
+if (!flag("--no-test") && !DRY) {
+  say("Running the tests before shipping…");
+  const t = spawnSync("npm", ["test"], { stdio: "inherit", shell: true });
+  if (t.status !== 0) { say("Tests failed: nothing shipped (--no-test to ship anyway)."); process.exit(3); }
+}
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const bak = `${REMOTE}/data/deploy-backups/${stamp}`;
 const tgz = path.join(os.tmpdir(), `blix-server-${process.pid}.tgz`);

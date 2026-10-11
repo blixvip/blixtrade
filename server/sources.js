@@ -13,6 +13,11 @@ function throttle(host, perMinute) {
   g.next = Math.max(Date.now(), g.next) + gap;
   return new Promise((r) => setTimeout(r, wait));
 }
+// How long a call to this host (or lane) queues right now, in ms (0 when the gate is idle).
+export const gateWait = (host, lane = null) => { const g = gates.get(lane ? `${host}:${lane}` : host); return g ? Math.max(0, g.next - Date.now()) : 0; };
+// Calls by host and endpoint this session (the first two path segments), to see who is using a host's allowance.
+const calls = new Map();
+export const callCounts = (host) => [...calls].filter(([k]) => k.startsWith(host + " ")).map(([k, n]) => [k.slice(host.length + 1), n]).sort((a, b) => b[1] - a[1]);
 
 // GeckoTerminal from the VM's address (measured 2026-10-07 23:43 UTC): 6 calls answered, then 429 for the rest
 // of the minute, nowhere near the documented 30. Discovery keeps 4 a minute, the pages 4 (LANES below).
@@ -20,12 +25,16 @@ const LIMITS = { "api.dexscreener.com": 200, "api.geckoterminal.com": 4, "api.ru
 // The pages' calls (a chart's history, a coin's pool, its price) run in their own lane with their own share of a
 // host's allowance, so they never queue behind the discovery scans: GeckoTerminal allows ~30 a minute from one
 // address; discovery keeps 15, the pages 10 (gtgate.js caps them by rank).
-const LANES = { "api.geckoterminal.com": { page: 4 }, "api.coingecko.com": { keyed: 60 } };   // keyed: 100/min allowed; the daily cap (gtgate.js) guards the month
+// DexScreener allows 300 a minute on the token endpoints. The engine's scan (every tracked coin's price, 30 a call)
+// has its own 100 so it never queues behind the pages' single-coin lookups: at one shared 200 the lookups ran the
+// gate at its cap and a scan batch waited 4 minutes, so the scan never finished and prices went stale (2026-10-11).
+const LANES = { "api.geckoterminal.com": { page: 4 }, "api.coingecko.com": { keyed: 60 }, "api.dexscreener.com": { scan: 100 } };   // keyed: 100/min allowed; the daily cap (gtgate.js) guards the month
 
 const SERVICE = { "api.dexscreener.com": "dexscreener", "api.geckoterminal.com": "geckoterminal", "api.coingecko.com": "coingecko", "api.rugcheck.xyz": "rugcheck" };
 
 export async function getJson(url, { timeout = 15000, lane = null, headers = {} } = {}) {
-  const host = new URL(url).host;
+  const host = new URL(url).host, path = new URL(url).pathname.split("/").slice(1, 3).join("/");
+  calls.set(`${host} ${path}`, (calls.get(`${host} ${path}`) || 0) + 1);
   const perMin = lane && LANES[host]?.[lane];
   await throttle(perMin ? `${host}:${lane}` : host, perMin || LIMITS[host] || 60);
   const ctl = new AbortController();
@@ -67,13 +76,13 @@ export async function dexBoosts(kind = "latest") {
 
 // Up to 30 mints per call. Returns the most liquid pair per token.
 // out.failed holds the mints whose request failed, so "no pair" is never confused with "no answer".
-export async function dexTokens(mints) {
+export async function dexTokens(mints, { lane = null } = {}) {
   const out = new Map();
   out.failed = new Set();
   for (let i = 0; i < mints.length; i += 30) {
     const chunk = mints.slice(i, i + 30);
     let pairs = [];
-    try { pairs = await getJson(`https://api.dexscreener.com/tokens/v1/${SOL}/${chunk.join(",")}`); }
+    try { pairs = await getJson(`https://api.dexscreener.com/tokens/v1/${SOL}/${chunk.join(",")}`, { lane }); }
     catch (e) { for (const m of chunk) out.failed.add(m); if (e.status === 429) throw e; continue; }
     for (const p of pairs || []) {
       const mint = p.baseToken?.address;

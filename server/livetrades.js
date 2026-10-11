@@ -11,6 +11,7 @@ import { setSolPrice } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
 import { startRpcStream } from "./rpc-stream.js";
 import { quotedTrade, setLocalPrice } from "./pumpquote.js";
+import { createPriceSanity } from "./price-sanity.js";
 import { noteSlot, behindOf } from "./feedlag.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
@@ -74,7 +75,33 @@ export function b58(buf) {
 
 export const live = new Map();   // mint -> stats
 const dirty = new Set();
-export const feed = { connected: false, trades: 0, perSec: 0, solUsd: 150, solKnown: false, solT: 0, since: now(), lastMsg: 0, url: null };
+export const feed = { connected: false, trades: 0, perSec: 0, solUsd: 150, solKnown: false, solT: 0, since: now(), lastMsg: 0, url: null, overCap: 0, overCapLast: null };
+// A pump.fun curve fills at ~415 SOL of market cap (quoted curves at about the same dollar figure); a curve trade
+// read far above that is a misread event (a wrongly priced quote token: 2026-10-11, 1,000+ SOL caps for $4k coins)
+// and is dropped here rather than shown. Pool caps have no ceiling; they are checked against DexScreener instead.
+const CURVE_MC_MAX = 3000;
+// Live caps against DexScreener's (price-sanity.js): a coin far off for 2 minutes is shown at DexScreener's figure.
+export const sanity = createPriceSanity();
+function checkSanity() {
+  try {
+    const t = now(), mints = [];
+    // Up to 20 min since the coin's last trade: the pages show a live cap for 15 min after it (pulse.js), and a wrong
+    // one on a coin that stopped trading must still be caught.
+    for (const s of live.values()) if (s.mc > 0 && t - s.last < 20 * 60_000) mints.push(s.mint);
+    if (!mints.length || !(feed.solUsd > 0)) return;
+    const rows = [];
+    for (let i = 0; i < mints.length; i += 500) {
+      const part = mints.slice(i, i + 500);
+      for (const r of db.prepare(`SELECT mint, mcap, price_t FROM tokens WHERE price_src = 'dexscreener' AND mcap > 0 AND quarantine IS NULL AND mint IN (${part.map(() => "?").join(",")})`).all(...part)) {
+        const s = live.get(r.mint);
+        if (s) rows.push({ mint: r.mint, liveUsd: s.mc * feed.solUsd, dexUsd: r.mcap, dexT: r.price_t });
+      }
+    }
+    sanity.check(rows, t);
+    sanity.stats.lastError = null;
+  } catch (e) { sanity.stats.lastError = String(e?.message || e); }
+}
+setInterval(checkSanity, 30_000).unref?.();
 let sent = 0;
 // Other parts of the radar can follow every trade as it lands (the early radar does).
 const listeners = [];
@@ -137,11 +164,19 @@ function onTrade(buf, slot = null, sig = null) {
 // launchlab.js). `user` is null when the feed does not say who traded; `pad` names a launchpad other than pump.fun.
 export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSol, vTok, feeBps, slot, pad, sig = null }) {
   if (!(mcSol > 0) || mcSol > 5e6 || sol > 5000) return;   // a 5,000 SOL trade on a curve is a misread event
+  if (mcSol > CURVE_MC_MAX) { feed.overCap++; feed.overCapLast = { mint, mcSol: Math.round(mcSol), t: now() }; return; }
   feed.trades++;
   let s = live.get(mint);
   if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; if (pad) s.pad = pad; live.set(mint, s); }
   s.mc = mcSol; s.ath = Math.max(s.ath, mcSol); s.last = now(); s.side = buy ? "b" : "s";
   s.progress = Math.max(0, Math.min(1, progress));
+  // A curve trade after "complete" (a later slot, or no slot known) with the curve still short of full: that
+  // CompleteEvent came from a transaction that never landed (the twin feed listens at "processed" commitment, and
+  // a forked-out buy still shows its events). BATONA 2026-10-11: "Migrating" shown and trading refused for 97 s
+  // before the real completion while the curve traded on (real migrations follow the completion within a second).
+  if (s.completeAt && !s.pool && s.progress < 0.999 && (!slot || !s.completeSlot || slot > s.completeSlot)) {
+    s.completeAt = null; s.completeExact = false; s.completeSlot = null; migrateStats.spurious = (migrateStats.spurious || 0) + 1; dirty.add(mint);
+  }
   // The curve just filled: pump.fun now moves the coin to its PumpSwap pool, and until that pool trades nothing can
   // be bought or sold (migrationOf below).
   if (s.progress >= 0.999 && !s.completeAt && !s.pool) s.completeAt = now();
@@ -162,13 +197,14 @@ export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSo
 // were: buys, sells, volume and traders carry on from the curve's figures, the market cap and the pool's depth
 // move with every trade, and the row goes out on the next 100 ms push like any curve coin's. Before this a
 // bonded coin's counts came from DexScreener (half a minute old) and its holders from RugCheck (minutes).
-export function recordPoolTrade(mint, { mcSol, sol, tokens, buy, user, slot, sig, depth }) {
+export function recordPoolTrade(mint, { mcSol, sol, tokens, buy, user, slot, sig, depth, supply }) {
   if (!(mcSol > 0) || !(sol >= 0) || sol > 50_000) return;
   let s = live.get(mint);
   if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
   s.mc = mcSol; s.ath = Math.max(s.ath, mcSol); s.last = now(); s.side = buy ? "b" : "s";
   s.progress = 1; s.pool = true;
   if (depth > 0) s.depth = depth;
+  if (supply > 0) s.supply = supply;              // the tokens `mcSol` is on (pumpswap.js: Jupiter's circulating supply)
   buy ? s.buys++ : s.sells++;
   s.vol += sol;
   if (user && s.traders.size < 2000) s.traders.add(user);
@@ -200,11 +236,11 @@ const bondedRow = db.prepare("SELECT graduated, dex, pair_created FROM tokens WH
 const bondedSeen = new Map();   // mint -> when last asked (at most once every 5 s a coin)
 // The curve filled (pump.fun's CompleteEvent, exact; or a trade reading 99.9%+ of the curve, the fallback when
 // the feed dropped the event): "Migrating" starts now.
-export function curveCompleted(mint, at = now()) {
+export function curveCompleted(mint, at = now(), slot = null) {
   let s = live.get(mint);
   if (!s) { s = { mint, first: at, mc0: 0, ath: 0, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
   if (s.pool) return;
-  if (!s.completeAt) { s.completeAt = at; dirty.add(mint); }
+  if (!s.completeAt) { s.completeAt = at; s.completeSlot = slot; dirty.add(mint); }
   s.completeExact = true;
 }
 // The pool is live (pump.fun's CompletePumpAmmMigrationEvent on the curve feed, PumpSwap's CreatePoolEvent on the
@@ -224,10 +260,10 @@ export function poolMigrated(mint, pool, at = now(), via = "feed") {
   logEvent("system", `Migrated ${mint.slice(0, 6)}... to its PumpSwap pool${secs != null ? ` ${secs}s after the curve filled` : ""} (seen on the ${via})`);
   for (const fn of migratedListeners) { try { fn(mint, pool, at); } catch {} }
 }
-function onComplete(buf) {
+function onComplete(buf, slot = null) {
   if (buf.length < 8 + 32 + 32 + 32) return;
   migrateStats.complete++;
-  curveCompleted(b58(buf.subarray(40, 72)));
+  curveCompleted(b58(buf.subarray(40, 72)), now(), slot);
 }
 function onMigratedEvent(buf) {
   // user 32, mint 32, mint_amount u64, sol_amount u64, pool_migration_fee u64, bonding_curve 32, timestamp i64, pool 32
@@ -258,6 +294,10 @@ export function liveStats(mint) {
   const usd = feed.solUsd;
   const ago = s.hist.find(([t]) => now() - t <= 70_000) || s.hist[0];
   const liq = s.pool ? (s.depth > 0 ? 2 * s.depth * usd : null) : s.vSol > 0 ? 2 * s.vSol * usd : null;
+  // A coin whose live cap disagrees with DexScreener for 2 minutes is shown at DexScreener's figure (price-sanity.js).
+  const bad = sanity.suspect(mint);
+  if (bad) return { mc: bad.dex, ath: Math.max(bad.dex, Math.min(s.ath * usd, bad.dex)), buys: s.buys, sells: s.sells, vol: s.vol * usd, traders: s.traders.size,
+    progress: s.progress, side: s.side, last: s.last, chg1m: null, liq: null, pool: Boolean(s.pool), suspect: true };
   return { mc: s.mc * usd, ath: s.ath * usd, buys: s.buys, sells: s.sells, vol: s.vol * usd, traders: s.traders.size,
     progress: s.progress, side: s.side, last: s.last, chg1m: ago ? (s.mc / ago[1] - 1) * 100 : null, liq, pool: Boolean(s.pool) };
 }
@@ -267,7 +307,7 @@ export function liveStats(mint) {
 // not only the coins the radar decided to track.
 export function closeToBonding(min = 0.5, quietMs = 10 * 60_000, limit = 80) {
   const out = [];
-  for (const s of live.values()) if (s.progress >= min && s.progress < 0.995 && now() - s.last < quietMs) out.push(s);
+  for (const s of live.values()) if (!s.pool && s.progress >= min && s.progress < 0.995 && now() - s.last < quietMs) out.push(s);
   return out.sort((a, b) => b.progress - a.progress).slice(0, limit).map((s) => s.mint);
 }
 
@@ -303,8 +343,16 @@ export function sigGate(max = 100_000) {
 const firstPump = sigGate();
 // Whether a pump.fun transaction came on a live stream (journalfeed.js's sweep reads only the ones that did not).
 export const pumpHeard = (sig) => firstPump.has(sig);
-// A pump.fun coin as another curve's quote token: its live price in dollars (curve market cap on 1B tokens).
-setLocalPrice((mint) => { const s = live.get(mint); return s && s.mc > 0 && feed.solUsd > 0 && Date.now() - s.last < 10 * 60_000 ? (s.mc * feed.solUsd) / 1e9 : null; });
+// A coin the radar trades as another curve's quote token: its live price in dollars. A curve's market cap is on 1B
+// tokens; a pool's is on the coin's real supply (recordPoolTrade), and without that figure the price is unknown
+// (PUMP's $2.7B cap divided by 1B gave $2.70 a PUMP instead of $0.0058, and every PUMP-quoted curve read 460x too
+// high, 2026-10-11).
+setLocalPrice((mint) => {
+  const s = live.get(mint);
+  if (!s || !(s.mc > 0) || !(feed.solUsd > 0) || Date.now() - s.last >= 10 * 60_000) return null;
+  const supply = s.pool ? s.supply : 1e9;
+  return supply > 0 ? (s.mc * feed.solUsd) / supply : null;
+});
 export const dupes = { pump: 0 };
 // The twin feed's own figures: messages, and trades it carried first (the main feed had skipped them, or not yet).
 export const twin = { pump: { connected: false, msgs: 0, first: 0, lastMsg: 0 }, swap: { connected: false, msgs: 0, first: 0, lastMsg: 0 } };
@@ -323,7 +371,7 @@ export function pumpLogs(v, slot = null, src = null) {
     const disc = buf.toString("hex", 0, 8);
     if (disc === TRADE) { if (onTrade(buf, slot, v.signature || null) === "pending") pending = true; else if (pending !== true) pending = false; }
     else if (disc === CREATE) onCreate(buf);
-    else if (disc === COMPLETE) onComplete(buf);
+    else if (disc === COMPLETE) onComplete(buf, slot);
     else if (disc === MIGRATED) onMigratedEvent(buf);
   }
   // A trade on a curve whose quote token has no price yet, and nothing else read from it: the transaction is left

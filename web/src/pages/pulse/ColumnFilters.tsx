@@ -26,9 +26,13 @@ const KNOWN = new Set(PADS.map(([k]) => k));
 // at most 400 minutes old and worth at least $4K, and every column has a floor on the fees traders have paid to
 // trade the coin (New Pairs 0.001 SOL, Final Stretch 0.05, Migrated 1), so a rug nobody traded never shows. Reset
 // goes back to these.
-export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.001" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.05" }, migrated: { feesMin: "1" } };
-// Floors a browser may have been given before (2026-10-10 set them higher twice): replaced by the current one.
-const OLD_FLOORS: Record<string, string[]> = { new: ["0.01", "0.005"], stretch: ["0.1"] };
+// 2026-10-11: no fee floor by default on any column. The floors hid coins from one user and not another (whoever
+// had cleared the box saw more), and the owner wants every coin shown to every user; the Fees paid box is still
+// there for anyone who wants a floor.
+export const DEFAULTS: Record<Col, Filters> = { new: {}, running: {}, stretch: { ageMax: "400", mcapMin: "4000" }, migrated: {} };
+// Floors a browser may have been given before (2026-10-10 set them higher twice, then removed 2026-10-11): cleared
+// once, so a saved default floor goes; a floor the user typed themselves after that sticks.
+const OLD_FLOORS: Record<string, string[]> = { new: ["0.01", "0.005", "0.001"], stretch: ["0.1", "0.05"], migrated: ["1"] };
 export const countFilters = (f: Filters) => Object.values(f).filter(isSet).length;
 const load = (c: Col) => {
   const f = store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
@@ -40,6 +44,9 @@ const load = (c: Col) => {
     store.set(`pulse:colf2:${c}:fees:${floor}`, true);
     if (!isSet(f.feesMin) || (OLD_FLOORS[c] || []).includes(f.feesMin!)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); }
   }
+  // No default floor any more (2026-10-11). A floor already saved in this browser stays, whether it came from an old
+  // default or was typed: clearing saved defaults once wiped a floor the owner had just typed (1 SOL on Migrated,
+  // the same string as the old default), and a typed value cannot be told from a defaulted one. Reset clears it.
   return f;
 };
 export function resetColumn(c: Col) { store.set(`pulse:colf2:${c}`, { ...DEFAULTS[c] }); useColFilters.setState((s) => ({ f: { ...s.f, [c]: { ...DEFAULTS[c] } } })); }
@@ -60,6 +67,10 @@ function feesFit(t: Coin, lo: string | undefined, hi: string | undefined, col?: 
   const v = feesPaid(t);
   if (isSet(hi) && v != null && v > +hi!) return false;
   if (!isSet(lo)) return true;
+  // A coin that just migrated is shown for its first two minutes whatever the floor says: it moved here this second
+  // and the fees it has paid are the curve's, not yet the pool's (0.8 SOL at 5 s old against a 1 SOL floor made a
+  // coin flash in Migrated and vanish, 2026-10-11). The floor applies from then on.
+  if (col === "migrated" && Date.now() - t.born < 4 * FEE_GRACE) return true;
   if (col === "new") {
     if (Date.now() - t.born < FEE_GRACE) return true;
     if (v == null) return (t.buys || 0) + (t.sells || 0) > 0;

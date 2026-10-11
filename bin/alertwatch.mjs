@@ -32,8 +32,18 @@ const CHECKS = [
     let j; try { j = JSON.parse(r.body); } catch { return "The radar's health check answered something unreadable"; }
     const f = j.parts?.find((p) => p.key === "freshness"), t = j.parts?.find((p) => p.key === "trades");
     if (f?.state === "down") return `Prices are stale: ${f.summary}`;
+    const s = j.parts?.find((p) => p.key === "sanity");
+    if (s?.state === "down") return `Live prices disagree with DexScreener (shown at DexScreener's figure meanwhile): ${s.summary}`;
     if (t && t.state === "down") return `No trades coming in: ${t.summary}`;
     return null;
+  }],
+  // A crash loop: systemd's restart counter (since the last manual start) jumping by 3+ between two checks (5 min).
+  ["restarts", 1, async () => {
+    let n = 0;
+    try { n = Number(execFileSync("systemctl", ["show", "blix", "-p", "NRestarts", "--value"], { encoding: "utf8" }).trim()); } catch { return null; }
+    const prev = state.restartsSeen ?? n;
+    state.restartsSeen = n;
+    return n - prev >= 3 ? `blix restarted ${n - prev} times by itself in the last 5 minutes (a crash loop: data/supervisor.err.log on the VM says why)` : null;
   }],
   ["disk", 1, async () => { const st = fs.statfsSync(DATA), free = (st.bavail * st.bsize) / 1e9; return free < 5 ? `Only ${free.toFixed(1)} GB free on the VM's disk (a full disk stops the site)` : null; }],
   ["services", 2, async () => { const down = ["blix", "blix-vault", "cloudflared"].filter((u) => unit(u) !== "active"); return down.length ? `Not running: ${down.join(", ")}` : null; }],

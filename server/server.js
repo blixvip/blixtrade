@@ -2,6 +2,8 @@
 import "./timing.js";
 import { metricState } from "./metricstate.js";
 import { createMetricInterests } from "./metric-interests.js";
+import { startCoinScreen } from './coin-screen-runtime.js';
+import { focusCoin, viewCoin, coinScreenStatus } from './coin-screen.js';
 import { marketPrices } from "./market.js";
 import http from "node:http";
 import zlib from "node:zlib";
@@ -9,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, json, logEvent, meta, backupInBackground, backups, DB_FILE, DATA, dbStats, checkpointStats } from "./db.js";
+import { gateWait, callCounts } from "./sources.js";
 import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound, wantSafety, backfill, lookupMint } from "./engine.js";
 import * as jupdisc from "./jupdisc.js";
 import { jupCandles, knownSupply } from "./jup.js";
@@ -30,9 +33,9 @@ import * as fomo from "./fomo.js";
 import * as fomoBoard from "./fomoboard.js";
 import * as research from "./research.js";
 import * as brain from "./brain.js";
-import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, focusPrice, rugFigures, onChainMc, setPulseFastCheck, fastMcap } from "./pulse.js";
+import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, nameNow, focusPrice, rugFigures, onChainMc, setPulseFastCheck, fastMcap } from "./pulse.js";
 import { dexPaid } from "./dexpaid.js";
-import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, migrationBlock, migrationOf, onMigrated, feed as liveFeed, live as liveCurves } from "./livetrades.js";
+import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, migrationBlock, migrationOf, onMigrated, feed as liveFeed, live as liveCurves, sanity as liveSanity } from "./livetrades.js";
 import { startPumpSwap, onPoolTrade, swapFeed, poolOf } from "./pumpswap.js";
 import { bondedOnChain } from "./engine.js";
 import { startChartStream, focusChart, chartStream } from "./chartstream.js";
@@ -47,7 +50,7 @@ import { snipeFor, snipeStats, snipeDebug } from "./snipe.js";
 import * as paper from "./paper.js";
 import { membersReport } from "./adminmembers.js";
 import { quote } from "./quote.js";
-import { candles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade, priceTick, bookAt, chartClose } from "./candles.js";
+import { candles, ownCandles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade, priceTick, bookAt, chartClose } from "./candles.js";
 import { startTunnel, tunnelStats } from "./tunnel.js";
 import { startTriage, triageRecord, triageFor } from "./triage.js";
 import { testFast } from "./fast.js";
@@ -98,6 +101,7 @@ const PORT = +(process.env.RADAR_PORT || 4420);
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const WARNINGS = "'dump', 'dev-sold', 'rugged', 'liq-pulled'";
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
+startCoinScreen();
 
 // How trustworthy a coin's displayed price is: when it was read, from where, and whether it can be sold at it.
 function freshness(t) {
@@ -680,6 +684,8 @@ function healthReport() {
   const add = (key, name, state, summary, extra = {}) => parts.push({ key, name, state, summary, ...extra });
   const hp = (key) => { const p = health.part(key); return { lastOk: p.lastOk, lastFail: p.lastFail, lastError: p.lastError, ok: p.ok, fail: p.fail }; };
   add('metric-freshness', 'Shared live metrics', 'ok', `${metricState.stats().coins} coins · ${metricInterests.snapshot().mints} visible interests`, { fields: metricState.stats(), interests: metricInterests.snapshot() });
+  const screening = coinScreenStatus();
+  add('coin-screen', 'Helius coin screening', screening.enabled ? 'ok' : 'off', `${screening.deferred} paid-work checks deferred · ${screening.admitted} admitted`, { screening });
   const ago = (t) => !t ? "never" : now - t < MIN ? `${Math.round((now - t) / 1000)}s ago` : now - t < HOUR ? `${Math.round((now - t) / MIN)}m ago` : `${Math.round((now - t) / HOUR)}h ago`;
 
   const cr = crashes(now), upMs = now - stats.startedAt;
@@ -709,6 +715,12 @@ function healthReport() {
     liveFeed.connected ? `${liveFeed.perSec} trades/s, last message ${ago(liveFeed.lastMsg)}` : `${liveFeed.lastError || "Connecting to RPC"}; retry every 3s`, { lastOk: liveFeed.lastMsg || null });
   add("pumpswap", "Live PumpSwap pool trades (bonded coins' prices)", !swapFeed.connected ? "down" : now - swapFeed.lastMsg > 30_000 ? "degraded" : "ok",
     swapFeed.connected ? `${swapFeed.trades} pool trades, ${swapFeed.priced} priced, ${swapFeed.pools} pools known, last message ${ago(swapFeed.lastMsg)}` : `${swapFeed.error || "Connecting to RPC"}; retry every 3s`, { lastOk: swapFeed.lastMsg || null });
+  // Are the radar's own prices right? Every live coin against DexScreener's cap (price-sanity.js); the owner is emailed
+  // when several disagree (bin/alertwatch.mjs). Impossible curve caps are dropped before they are shown (livetrades.js).
+  { const ps = liveSanity.stats, ex = ps.examples.map((e) => `${e.mint.slice(0, 6)}… live $${e.live.toLocaleString()} vs DexScreener $${e.dex.toLocaleString()} (${e.ratio}x)`).join("; ");
+    add("sanity", "Price sanity (live caps vs DexScreener)", !ps.lastRun ? "idle" : ps.suspects >= 3 ? "down" : ps.suspects ? "degraded" : "ok",
+      `${ps.compared.toLocaleString()} live coins compared with DexScreener's cap every 30 s · ${ps.suspects} off by 8x+ for 2 minutes${ps.suspects ? ` (shown at DexScreener's figure meanwhile): ${ex}` : ""} · ${liveFeed.overCap} impossible curve caps dropped${liveFeed.overCapLast ? ` (last ${liveFeed.overCapLast.mint.slice(0, 6)}… at ${liveFeed.overCapLast.mcSol.toLocaleString()} SOL)` : ""}${ps.lastError ? ` · check failing: ${ps.lastError}` : ""}`,
+      { suspects: ps.examples, overCap: liveFeed.overCap, lastOk: ps.lastRun || null }); }
   if (chartStream.on) add("chartstream", "Open charts' own trade stream (fast RPC, one subscription per coin)", chartStream.overBudget ? "degraded" : !chartStream.connected ? (chartStream.coins ? "down" : "ok") : "ok",   // idle (no chart open) is fine, whatever old note .error still holds
     `${chartStream.connected ? `${chartStream.coins} charts streaming, ${chartStream.msgs} messages` : "idle until a chart opens"}; ${(chartStream.bytesToday / 1e6).toFixed(0)} MB today of the ${settings.chartDailyMB} MB budget${chartStream.keys > 1 ? ` · on key ${chartStream.key || "?"} of ${chartStream.keys}` : ""}${chartStream.side ? ` · side socket ${chartStream.side.on ? "on" : "off"} (${chartStream.side.n} subs) · fast socket ${chartStream.fast.on ? "on" : "off"} (${chartStream.fast.n} subs) · ${chartStream.extra.n} extra` : ""}${chartStream.error ? `; ${chartStream.error}` : ""}${lagSummary() ? `; ${lagSummary()}` : ""}${laneStats.on ? "; fast lane on" : `; fast lane off${laneStats.error ? ` (${laneStats.error})` : ""}`}`, { lastOk: chartStream.lastMsg || null, sockets: { side: chartStream.side, fast: chartStream.fast, extra: chartStream.extra } });
   // Helius credits (helius.js): each key's month at Helius (Admin API; needs the project ID in Settings next to
@@ -719,7 +731,7 @@ function healthReport() {
     const resetText = u?.resetAt ? `resets in ${days === 0 ? "under a day" : `${days} day${days === 1 ? "" : "s"}`} (${new Date(u.resetAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })})` : "reset date unknown";
     const top = Object.entries(k.byMethod || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([m, n]) => `${m} ${n.toLocaleString()}`).join(", ");
     const today = `today ${(k.creditsToday || 0).toLocaleString()} credits (${(k.bytesToday / 1e6).toFixed(0)} MB${top ? `; calls: ${top}` : ""}) of the ${k.dayBudget.toLocaleString()} daily budget (paced: ${(k.allowedNow || 0).toLocaleString()} allowed by now)${k.dayUsed ? ", paced out for now" : ""}`;
-    const role = two ? (k.active ? " · in use" : k.monthUsed ? " · resting until the month resets" : k.dayUsed ? " · resting until midnight UTC" : " · spare") : "";
+    const role = k.monthUsed ? " · resting until monthly credits are confirmed" : k.dayUsed ? ` · pacing pause; next allowance ${k.nextResumeAt ? new Date(k.nextResumeAt).toISOString().slice(11, 19) + ' UTC' : 'pending'}` : two ? (k.active ? " · in use" : " · spare") : "";
     const state = !hs.projectId ? (k.dayUsed ? "degraded" : "idle") : u ? (u.pctUsed >= 100 ? "down" : u.pctUsed >= 80 ? "degraded" : "ok") : hs.error ? "down" : "idle";
     add(`helius${hs.index > 1 ? hs.index : ""}`, `Helius credits${two ? ` · key ${hs.index}` : ""} (this month)`, state,
       (!hs.projectId ? `Project ID not set, so the month's usage cannot be read · ${today}`
@@ -773,10 +785,15 @@ function healthReport() {
   }
   const scanAge = stats.lastCycle ? now - stats.lastCycle : null;
   add("scan", "Scan loop", scanAge == null ? "idle" : scanAge > 3 * MIN ? "down" : scanAge > 90_000 ? "degraded" : "ok",
-    `Last full scan ${ago(stats.lastCycle)} · ${stats.errors} error${stats.errors === 1 ? "" : "s"} this session${health.gaps.length ? ` · paused ${health.gaps.length}× (PC asleep or stopped), last for ${Math.round((health.gaps.at(-1).to - health.gaps.at(-1).from) / MIN)}m` : ""}`,
+    `Last full scan ${ago(stats.lastCycle)}${stats.stage ? ` · now in ${stats.stage} for ${Math.round((now - stats.stageAt) / 1000)} s` : ""}${stats.stuck ? ` · ${stats.stuck} stuck cycle${stats.stuck === 1 ? "" : "s"} abandoned` : ""} · ${stats.errors} error${stats.errors === 1 ? "" : "s"} this session${health.gaps.length ? ` · paused ${health.gaps.length}× (PC asleep or stopped), last for ${Math.round((health.gaps.at(-1).to - health.gaps.at(-1).from) / MIN)}m` : ""}`,
     { ...hp("scan"), gaps: health.gaps.slice(-5) });
   const svc = (key, name, staleMs) => { const p = hp(key); add(key, name, health.stateOf(key, staleMs), p.lastOk ? `Last answer ${ago(p.lastOk)} · ${p.ok.toLocaleString()} ok, ${p.fail} failed${p.lastFail && p.lastFail > p.lastOk ? ` · failing: ${p.lastError}` : ""}` : p.lastError ? `Never answered: ${p.lastError}` : "Not used yet", p); };
   svc("dexscreener", "Prices (DexScreener)", 3 * MIN);
+  // Its allowance: how long a call queues now (pages' lookups share 200 a minute, the scan has its own 100), and
+  // who is using it (a page feature that asks per coin can run the gate at its cap and starve everything else).
+  { const d = parts[parts.length - 1], q = gateWait("api.dexscreener.com"), qs = gateWait("api.dexscreener.com", "scan"), top = callCounts("api.dexscreener.com").slice(0, 3).map(([p, n]) => `${p} ${n.toLocaleString()}`).join(", ");
+    d.summary += ` · queue ${(q / 1000).toFixed(1)} s (scan lane ${(qs / 1000).toFixed(1)} s)${top ? ` · calls: ${top}` : ""}`;
+    if (d.state === "ok" && q > 60_000) { d.state = "degraded"; d.fix = "Something asks DexScreener per coin faster than its allowance; see the call counts."; } }
   svc("jupiter", "Quotes and prices (Jupiter)", 3 * MIN);
   // Keyless Jupiter rate-limits now and then and the next call goes through: degraded only while it is actually
   // failing (its latest answer a failure, or none for a minute), not for a recovered blip in the last 10 minutes.
@@ -790,7 +807,7 @@ function healthReport() {
   const active = db.prepare("SELECT COUNT(*) n, SUM(CASE WHEN COALESCE(price_t, updated, 0) < ? THEN 1 ELSE 0 END) stale FROM tokens WHERE status = 'active' AND pair IS NOT NULL").get(now - 6 * MIN);
   const flagged = db.prepare("SELECT COUNT(*) n FROM tokens WHERE status = 'active' AND quarantine IS NOT NULL").get().n;
   add("freshness", "Price freshness", !active.n ? "idle" : active.stale / active.n > 0.5 ? "down" : active.stale / active.n > 0.1 ? "degraded" : "ok",
-    `${(active.n - (active.stale || 0)).toLocaleString()} of ${active.n.toLocaleString()} tracked coins priced in the last 6 minutes · ${flagged} flagged as unreliable (emptied pools) and kept out of signals`, { stale: active.stale || 0, flagged });
+    `${(active.n - (active.stale || 0)).toLocaleString()} of ${active.n.toLocaleString()} tracked coins priced in the last 6 minutes · ${flagged} flagged by price-quality checks and kept out of signals`, { stale: active.stale || 0, flagged });
 
   const tr = wallets.tracking();
   const rpc = tr.rpc, cooling = rpc.coolingUntil > now;
@@ -1120,6 +1137,8 @@ function refreshMetricInterests(reselect = true) {
   if (reselect) metricSelected = metricInterests.select(metricFlags.hotCoins);
   const selected = metricSelected;
   for (const mint of selected) {
+    viewCoin(mint);
+    if (metricInterests.isActive(mint)) focusCoin(mint);
     if (metricFlags.subscriptions) {
       watchFast(mint, metricInterests.isActive(mint));
       if (!isFast(mint)) focusPrice(mint);
@@ -1215,6 +1234,8 @@ async function handleRequest(req, res) {
     if (p === "/api/me") return send(res, 200, { readonly: Boolean(req.visitor), ...(req.visitor ? {} : { mcpScript: path.join(ROOT, "mcp", "blix-mcp.mjs") }) });
     if (req.visitor && p === "/api/health") return send(res, 200, visitorHealth(cached("health", 4000, healthReport)));
     if (p === "/api/remote-link") return LOCAL.has(hostOf(req)) ? send(res, 200, { host: settings.publicHost || null, link: remoteLink() }) : send(res, 403, { error: "local only" });
+    // The coins migrating this moment and the SOL price, for the page server's hosted-accounts routes (radar-link.js).
+    if (p === "/api/migrating") return LOCAL.has(hostOf(req)) ? send(res, 200, { mints: [...liveCurves.keys()].filter((m) => migrationOf(m)), solUsd: liveFeed.solUsd }) : send(res, 403, { error: "local only" });
     const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (pic) return await images.serve(pic[1], res);
     // Logos in bulk for the page (lib/pics.ts): ?m=<mint>,<mint>,…  →  { mint: data URL | null }
@@ -1450,7 +1471,7 @@ async function handleRequest(req, res) {
     if (p === "/api/pulse") return send(res, 200, pulseData());
     if (p === "/api/bot") return send(res, 200, cached("bot", 3000, () => ({ anti: antiSlop(), day: cached("bot-day", 10_000, brain.dayData), live: pulseData().live, scout: research.scoutStats, early: cached("bot-early", 10_000, earlyData) })));
     if (p === "/api/triage") return send(res, 200, cached("triage", 30000, triageRecord));
-    if (p === "/api/picks") return send(res, 200, warmPics(cached("picks", 8000, brain.picksData)));
+    if (p === "/api/picks") return send(res, 200, warmPics(cached("picks", 30000, brain.picksData)));
     if (p === "/api/picks/all") return send(res, 200, cached("picks-all", 3000, brain.allPicks));
     if (p === "/api/picks/review" && POST) { brain.review(true); return send(res, 200, { started: true }); }
     if (p === "/api/picks/scout" && POST) { const s = brain.scoutStatus(); if (s.available) brain.scout(); return send(res, 200, { started: s.available, why: s.why }); }
@@ -1459,7 +1480,8 @@ async function handleRequest(req, res) {
     if (hm) { const h = holdersFor(hm[1], { top: +params.top || 25 }); return h ? send(res, 200, h) : send(res, 404, { error: "The radar has not seen this coin trade since it started." }); }
     // The paper desk: open at a preset size, sell all or part, change a position's exit rule, forget a closed one.
     // Real quotes and candles for the coin page's trade panel and chart (quote.js, candles.js).
-    if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip, estimate: true }));
+    // `quote=usdc`: the amount is USDC (a buy), or the sell is paid in USDC (quote.js).
+    if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip, estimate: true, usdc: params.quote === "usdc" }));
     // The trade journal's health (journal.js): rows kept, confirmations, drops, outages and their repair.
     if (p === "/api/journal") return send(res, 200, { ...journal.summary(), candles: candleStoreStats, coins: coinIndex.indexStats, pictures: images.imgStats, fast: fastStats, rpc: rpcStats });
     // A chart that reads its candles elsewhere (the TradingView chart in the browser: coins past their first day) still
@@ -1467,10 +1489,19 @@ async function handleRequest(req, res) {
     // coin's own fast subscription (chartstream.js: first-day coins only, the Helius budget). Its holder book is read
     // from the chain again while it is open (reseedWanted, every 5 s below).
     const cf = p.match(new RegExp(`^/api/chartfocus/(${MINT})$`));
-    if (cf) { chartFocus.set(cf[1], Date.now()); return send(res, 200, { ok: true, level: levelNow(cf[1]) }); }
+    if (cf) { focusCoin(cf[1]); chartFocus.set(cf[1], Date.now()); return send(res, 200, { ok: true, level: levelNow(cf[1]) }); }
+    // The Pulse chart card's warm read (web hoverChart.ts): the candles of every row on the page at once, from the
+    // radar's own store only (candles.js ownCandles), ahead of the pointer. Focuses no chart, asks no provider.
+    // m = mint[:since1m[:since5s]],… (unix seconds; none = the newest 720 minute and 120 five-second candles).
+    // Rows go packed, [time, open, high, low, close, volume], a third the bytes of the chart's own answer.
+    if (p === "/api/candles/warm") return send(res, 200, warmCandlesFor(String(params.m || "")));
     const cm = p.match(new RegExp(`^/api/candles/(${MINT})$`));
     if (cm) {
-      chartFocus.set(cm[1], Date.now()); focusChart(cm[1]); watchFast(cm[1]);
+      focusCoin(cm[1]); chartFocus.set(cm[1], Date.now()); focusChart(cm[1]); watchFast(cm[1]);
+      // A coin with no chain stream here (LaunchLab, Raydium, Meteora, Bonk… anything not pump.fun) is priced from
+      // Jupiter every few seconds while its chart is open (pulse.js focusPrice -> priceTick), whatever its graduated
+      // flag says: an unflagged LaunchLab→Raydium coin had no source at all and its chart sat stale 5 min, 4x off.
+      try { const tk = db.prepare("SELECT dex FROM tokens WHERE mint = ?").get(cm[1]); if (tk?.dex && tk.dex !== "pumpfun" && tk.dex !== "pumpswap" && !/pump$/.test(cm[1])) focusPrice(cm[1]); } catch {}
       // Outages of the radar's own feeds not yet read back for this coin (journal.js), in seconds: the chart
       // leaves them empty instead of drawing a flat price through them.
       const c = await candles(cm[1], params.tf, params.since);
@@ -1504,7 +1535,13 @@ async function handleRequest(req, res) {
     // A coin migrating to its pool cannot be traded on chain, so paper does not fill it either (livetrades.js).
     const paperHeld = (mint) => { const why = migrationBlock(mint); if (why) throw Object.assign(new Error(why), { status: 409 }); };
     const paperMint = (id) => db.prepare("SELECT mint FROM paper WHERE id = ?").get(id)?.mint;
-    if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); paperHeld(String(b.mint || "")); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
+    // A paper buy sized in USDC (`usdc`) is the same buy in SOL at the live SOL price: the desk keeps SOL.
+    if (p === "/api/paper/quoted" && POST) {
+      const b = await readBody(req); paperHeld(String(b.mint || ""));
+      let sol = b.sol;
+      if (b.usdc != null && b.usdc !== "") { if (!(liveFeed.solUsd > 0)) return send(res, 503, { error: "Waiting for the SOL price to size a USDC buy. Try again in a few seconds." }); sol = Number(b.usdc) / liveFeed.solUsd; }
+      return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), sol, b), desk: paper.desk() });
+    }
     if (p === "/api/paper") {
       if (POST) { const b = await readBody(req); paperHeld(String(b.mint || "")); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
       return send(res, 200, paper.desk());
@@ -1651,6 +1688,20 @@ onFee((mint) => { if (clients.size && watched.has(mint)) feeDirty.add(mint); });
 // (curve trades and bonded coins' pool trades) goes out as [mint, ms, mcUsd, volUsd, buy] at once: trades that
 // land in the same message burst share one event, nothing waits on a timer.
 const chartFocus = new Map();   // mint -> last candles request
+// /api/candles/warm (above): up to 60 coins' own candles, packed. Each coin: the newest minute candles (the card's
+// opening overview, 12 h at most) and the newest 5 s candles (its live view), or only those since the page's last.
+const MINT_RE = new RegExp(`^${MINT}$`);
+function warmCandlesFor(m) {
+  const f = (x) => +Number(x).toPrecision(8);   // 8 figures of market cap, not 17: a third of the bytes
+  const pack = (rows) => rows.map((r) => [r.time, f(r.open), f(r.high), f(r.low), f(r.close), Math.round((r.value || 0) * 100) / 100]);
+  const coins = {};
+  for (const part of m.split(",").slice(0, 60)) {
+    const [mint, s60, s5] = part.split(":");
+    if (!MINT_RE.test(mint || "")) continue;
+    try { coins[mint] = { m: pack(ownCandles(mint, 60, +s60 || null, 720)), s: pack(ownCandles(mint, 5, +s5 || null, 120)) }; } catch {}
+  }
+  return { t: Date.now(), coins };
+}
 let tradeOut = [], tradeTimer = null;
 function chartTrade(mint, mc, vol, buy, slot = null) {
   const t = chartFocus.get(mint);
@@ -1706,7 +1757,13 @@ onPoolTrade((mint, e) => { if (isFast(mint)) return; const mc = e.mcSol * liveFe
 // and the first of them marks a pump.fun coin bonded in the tokens table (engine.js), so it moves to Migrated at once.
 onPoolTrade((mint, e) => { try { recordPoolTrade(mint, e); if (!e.rev) bondedOnChain(mint, poolOf(mint)); } catch {} });
 // The migration itself (pump.fun's event, before the pool's first trade): bonded now, with its pool, 1 s old in Migrated.
-onMigrated((mint, pool) => { try { bondedOnChain(mint, pool || poolOf(mint)); } catch {} if (clients.size) broadcast("migrated", { mint, pool: pool || null }); });
+onMigrated((mint, pool, at) => {
+  try { bondedOnChain(mint, pool || poolOf(mint), at, true); } catch {}
+  try { nameNow(mint); } catch {}
+  if (!clients.size) return;
+  const n = nameOf(mint) || {}, x = liveStats(mint);
+  broadcast("migrated", { mint, pool: pool || null, at, symbol: n.symbol || null, name: n.name || null, mcap: x?.mc > 0 && liveFeed.solUsd > 0 ? Math.round(x.mc * liveFeed.solUsd) : null });
+});
 const fastLast = new Map();   // mint -> { mc, t }: the header's live figure while the fast feed leads (coin.js)
 onFastPx((mint, x) => {
   const mc = x.mcSol * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9);

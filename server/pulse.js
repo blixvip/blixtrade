@@ -5,7 +5,7 @@ import { db, q, json } from "./db.js";
 import { recentLaunches, devLaunches, launchIndex } from "./engine.js";
 import { candidates, ipfs, bondingProgress, providers, queueStatus, liveTraction } from "./research.js";
 import { safeUrl, publicUrl, cleanLinks, readingProblem } from "./quality.js";
-import { liveStats, feed, live, closeToBonding, curveLiqUsd, migrationOf } from "./livetrades.js";
+import { liveStats, feed, live, closeToBonding, curveLiqUsd, migrationOf, sanity } from "./livetrades.js";
 import { dexTokens } from "./sources.js";
 import { triageFor, triageStats } from "./triage.js";
 import { earlyFor } from "./early.js";
@@ -109,7 +109,7 @@ function withLive(r) {
   r = { ...r, migrating: mig ? mig.since : null };
   r = withFees(r);
   const x = liveStats(r.mint);
-  const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
+  const bonded = r.graduated || Boolean(x?.pool) || (x?.progress ?? 0) >= 0.995;
   // The ledger follows a coin into its PumpSwap pool (x.pool); one that bonded elsewhere keeps it LEDGER_AFTER_BOND.
   const hl = bonded && !x?.pool && (!x || now() - x.last > LEDGER_AFTER_BOND) ? null : ledgerFor(r);
   if (!x || now() - x.last > 15 * MIN) return hl ? { ...r, hl } : r;
@@ -148,7 +148,7 @@ function flag(r) {
   if (!r.graduated && oddCurve(s)) return { ...r, warn: { kind: "odd-curve", text: "Non-standard bonding curve: priced far below where every pump.fun curve starts, so its figures do not compare" } };
   if (r.graduated && r.mcap > 0) {
     const why = readingProblem({ dex: r.dex, liquidity: r.liq, mcap: r.mcap });
-    if (why) return { ...r, warn: { kind: "emptied", text: `${cap1(why)}: the price shown cannot be traded at` } };
+    if (why) return { ...r, warn: { kind: "price-quality", text: `${cap1(why)}. Price needs verification; this is not confirmation of a rug.` } };
   }
   return r;
 }
@@ -202,10 +202,15 @@ const justBonded = () => {
 const symbolOf = (m) => db.prepare("SELECT symbol FROM tokens WHERE mint = ?").get(m)?.symbol || null;
 // Every stored row for a list of mints in one query (the Pulse used to read them one by one).
 const tokensByMint = (mints) => mints.length ? new Map(db.prepare(`SELECT * FROM tokens WHERE mint IN (${mints.map(() => "?").join(",")})`).all(...mints).map((t) => [t.mint, t])) : new Map();
+// A coin that just migrated with no name on file (launched before the radar's launch window, or before a restart):
+// looked up on the next pass, ahead of the rest, so it does not sit in Migrated nameless or hidden (server.js onMigrated).
+const urgentNames = new Set();
+export function nameNow(mint) { if (!launchIndex.has(mint) && !names.get(mint)?.symbol && !symbolOf(mint)) urgentNames.add(mint); }
+const nameInto = db.prepare("UPDATE tokens SET symbol = COALESCE(symbol, ?), name = COALESCE(name, ?), image = COALESCE(image, ?) WHERE mint = ?");
 async function lookupNames() {
-  if (now() - cache.t > 15_000) return;
+  if (now() - cache.t > 15_000 && !urgentNames.size) return;
   const ask = [];
-  for (const m of [...stretchMints, ...runningMints, ...justBonded()]) {
+  for (const m of [...urgentNames, ...stretchMints, ...runningMints, ...justBonded()]) {
     if (ask.length >= 30) break;
     const n = names.get(m);
     if (launchIndex.has(m) || n?.symbol || (n && now() - n.t < 60_000) || symbolOf(m)) continue;
@@ -214,7 +219,11 @@ async function lookupNames() {
   if (!ask.length) return;
   for (const m of ask) names.set(m, { t: now() });
   const got = await dexTokens(ask);
-  for (const [m, p] of got) names.set(m, { symbol: p.baseToken?.symbol, name: p.baseToken?.name, image: safeUrl(p.info?.imageUrl), created: p.pairCreatedAt || null, t: now() });
+  for (const m of ask) urgentNames.delete(m);
+  for (const [m, p] of got) {
+    names.set(m, { symbol: p.baseToken?.symbol, name: p.baseToken?.name, image: safeUrl(p.info?.imageUrl), created: p.pairCreatedAt || null, t: now() });
+    if (p.baseToken?.symbol) try { nameInto.run(p.baseToken.symbol, p.baseToken.name || null, safeUrl(p.info?.imageUrl), m); } catch {}
+  }
   if (names.size > 4000) for (const k of [...names.keys()].slice(0, 1500)) names.delete(k);
 }
 
@@ -296,8 +305,11 @@ async function priceMigrated() {
       const mc = usd * (t || 1e9);
       const prev = migPx.get(m);
       migPx.set(m, { mcap: mc, t: now() });
-      // Into the chart only on the chart's own scale (the supply arrives a moment after the first price).
-      if (circ) priceTick(m, mc);
+      // Into the chart on the chart's own scale: Jupiter's circulating supply, else the radar's own price-to-cap ratio
+      // for the coin (the same figure its header and lists use). Only with Jupiter's supply, a coin Jupiter has no
+      // supply for (an unflagged LaunchLab→Raydium coin, 8kjE…SrYU 2026-10-11) got no price into its chart at all and
+      // the chart sat 4x above the market for 5 minutes.
+      if (circ || t) priceTick(m, mc);
       if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
     }
     // A pool Jupiter cannot price yet (it indexes new pools within minutes): DexScreener's reading, at most
@@ -362,7 +374,8 @@ onPoolPrice((mint, { px, quote }) => {
 
 function withFastPrice(r) {
   const x = migPx.get(r.mint);
-  if (!x || now() - x.t > 30_000) return r;
+  // A coin whose live cap disagrees with DexScreener (price-sanity.js) keeps DexScreener's figure (liveStats gave it).
+  if (!x || now() - x.t > 30_000 || sanity.suspect(r.mint)) return r;
   return { ...r, mcap: x.mcap, priceT: x.t, ...(x.liq != null ? { liq: x.liq } : {}) };
 }
 // A bonded coin's price that is minutes old says so (a fresh pool can fall 90% in that time).
@@ -415,7 +428,7 @@ function row(t, ai) {
   const links = cleanLinks(json(t.links, []));
   const link = (re) => links.find((l) => re.test(`${l.type} ${l.url}`))?.url || null;
   return {
-    mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.pair_created || t.first_seen), dex: t.dex, priceT: t.price_t || t.updated || null,
+    mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, age: now() - (t.migrated_at || t.pair_created || t.first_seen), dex: t.dex, priceT: t.price_t || t.updated || null,
     mcap: t.mcap, vol: t.vol_h1, vol5m: t.vol_m5, peak: t.peak_mcap, liq: t.liquidity > 0 || t.graduated || t.dex !== "pumpfun" ? t.liquidity : curveLiqUsd(t.mcap), chg5: t.chg_m5, chg1h: t.chg_h1, buys: t.buys_h1, sells: t.sells_h1,
     holders: rf.holders, top10: rf.top10, dev: rf.dev, insiders: rf.insiders,
     safety: rf.safety, danger: (s.danger || 0) > 0, progress: t.progress ?? bondingProgress(t), graduated: !!t.graduated,
@@ -442,7 +455,11 @@ export function pulseData() {
   if (now() - cache.t < 1500 && cache.v) return cache.v;
   const { near, bonded } = candidates();
   // New pairs: the newest launches, joined with the radar's data once it starts tracking them.
-  const fresh = recentLaunches.slice(-NEW_ROWS).reverse();
+  // Newest first by when each launch was heard, not by its place in the list: the backfill after a restart appends
+  // older launches at the end, and taking the end of the list put day-old coins at the top of New Pairs (130 of 148
+  // rows over 6 hours old, 2026-10-11). Nothing older than a day belongs in New Pairs at all.
+  const dayAgo = now() - 24 * 60 * MIN;
+  const fresh = recentLaunches.filter((l) => l.seen > dayAgo).sort((a, b) => b.seen - a.seen).slice(0, NEW_ROWS);
   const tracked = fresh.length ? new Map(db.prepare(`SELECT * FROM tokens WHERE mint IN (${fresh.map(() => "?").join(",")})`).all(...fresh.map((l) => l.mint)).map((t) => [t.mint, t])) : new Map();
   // Final stretch: every coin the live trade feed sees at 50%+ of the curve and still trading, then any
   // tracked coin near bonding the feed has not seen trade yet (only with volume: no dead ones).
@@ -456,7 +473,7 @@ export function pulseData() {
   const since = now() - 6 * 60 * MIN;
   const older = db.prepare(`SELECT * FROM tokens INDEXED BY tokens_bonded_t WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'
     AND COALESCE(pair_created, first_seen) > ? AND mcap >= 5000 ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(since);
-  const seconds = db.prepare("SELECT * FROM tokens WHERE graduated = 1 AND (pair IS NULL OR COALESCE(mcap, 0) < 5000) AND status = 'active' AND quarantine IS NULL AND COALESCE(pair_created, first_seen) > ? ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 20").all(now() - 10 * MIN);
+  const seconds = db.prepare("SELECT * FROM tokens WHERE graduated = 1 AND (pair IS NULL OR COALESCE(mcap, 0) < 5000) AND status = 'active' AND quarantine IS NULL AND COALESCE(migrated_at, pair_created, first_seen) > ? ORDER BY COALESCE(migrated_at, pair_created, first_seen) DESC LIMIT 20").all(now() - 10 * MIN);
   const all = [...fresh.map((l) => l.mint), ...stretchMints, ...quiet.map((t) => t.mint), ...older.map((t) => t.mint), ...seconds.map((t) => t.mint)];
   const ai = researchMap([...new Set(all)]);
   const newPairs = fresh.filter((l) => { const t = tracked.get(l.mint); return !t || now() - (t.pair_created || t.first_seen) < 24 * 60 * MIN; }).map((l) => {
@@ -470,7 +487,10 @@ export function pulseData() {
     return { ...base, image: base.image || m.image || null, x: base.x || m.twitter, web: base.web || m.website, tg: base.tg || m.telegram,
       desc: m.description || null, creator: base.creator || l.creator || null, pool: live.get(l.mint)?.pad || l.pool || null, devSol: l.devSol, early: earlyFor(l.mint), tri: triageFor(l.mint), startMcapSol: l.mcapSol, devCount: devLaunches.get(l.creator) || 1,
       state: t ? "tracked" : age < 4.5 * MIN ? "watching" : "faded" };
-  }).map(withLive).map(rankRow);
+  }).map(withLive).map(rankRow)
+    // A coin created on chain hours ago that a feed only just heard of (Jupiter's recent-pools list names old coins
+    // whose pool is new) is not a new pair: 76 of 98 rows were over 6 hours old on 2026-10-11. `age` is ms here.
+    .filter((r) => !(r.age > 6 * 60 * MIN));
   // A coin that's still trading isn't faded, whatever the 4-minute check said.
   for (const r of newPairs) if (r.state === "faded" && r.lastTrade && now() - r.lastTrade < 2 * MIN) r.state = "watching";
   const stretch = [...stretchMints.map((m) => {
@@ -479,13 +499,14 @@ export function pulseData() {
     if (t.graduated) return null;
     const b = bare(m), r = row(t, ai.get(m));
     return withLive({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, x: r.x || b.x, web: r.web || b.web, tg: r.tg || b.tg, creator: r.creator || b.creator, devSol: b.devSol, devCount: b.devCount });
-  }), ...quiet.map((t) => withLive(row(t, ai.get(t.mint))))].filter((r) => r && r.symbol).map(rankRow).sort((a, b) => (b.progress || 0) - (a.progress || 0));
+  }), ...quiet.map((t) => withLive(row(t, ai.get(t.mint))))].filter((r) => r && r.symbol && !r.graduated).map(rankRow).sort((a, b) => (b.progress || 0) - (a.progress || 0));
   for (const t of older) if (t.price > 0 && t.mcap > 0) migRatio.set(t.mint, t.mcap / t.price);
   if (migRatio.size > 800) migRatio.clear();
   const migrated = [...seconds, ...older].map((t) => {
     const b = bare(t.mint), r = row({ ...t, graduated: 1 }, ai.get(t.mint)), x = liveStats(t.mint);
     // Bonded seconds ago: its last price on the curve stands in until the new pool is priced, and says so.
-    const out = withFees(withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1, migrating: null })));
+    const nm = r.symbol || b.symbol ? null : coinIndex.nameOf(t.mint);
+    const out = withFees(withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol || nm?.symbol || null, name: r.name || b.name || nm?.name || null, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1, migrating: null })));
     return r.mcap == null && x && out.priceT == null ? { ...out, warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : staleness(out);
   }).filter((r) => r.symbol && (r.mcap || 0) >= 5000).map(rankRow).sort((a, b) => a.age - b.age).slice(0, 80);
   bondedSeen.clear();

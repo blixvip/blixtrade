@@ -11,6 +11,7 @@
 // to /api/account/google/callback with a code, and the code is exchanged for the person's verified email.
 // The client id and secret come from data/google.json: { "clientId": "…", "clientSecret": "…" }.
 import crypto from "node:crypto";
+import { noteHeldWallet } from './coin-screen.js';
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { initSocial, socialRoute } from "./social.js";
 import { createHostedAccounts } from "./hosted-accounts.js";
-import { migrationBlock } from "./livetrades.js";
+import { busyOf, solUsdNow, startRadarLink } from "./radar-link.js";   // the radar over HTTP, not its module graph
+startRadarLink();
 import { createHandles } from "./handles.js";
 import { initCreator, creatorRewards } from "./creator.js";
 
@@ -62,6 +64,7 @@ async function vault(pathname, body) {
   } catch { throw fail(503, "Blix Vault is not running. Start it, then try again."); }
   const j = await r.json().catch(() => null);
   if (!r.ok) throw fail(r.status === 401 ? 503 : r.status, j?.error || `Vault error ${r.status}`);
+  if (/^\/users\/\d+\/wallet$/.test(pathname) && Array.isArray(j?.tokens) && j.seen > 0) noteHeldWallet(pathname, j.tokens);
   return j;
 }
 
@@ -134,7 +137,7 @@ const onramp = () => { try { return JSON.parse(fs.readFileSync(path.join(DATA, "
 
 const MINT =/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const handles = adb ? createHandles({ db: adb }) : null;
-const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf, busy: migrationBlock }) : null;
+const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf, busy: busyOf }) : null;
 const HOME = "/#/account";
 // A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
 // builds, signs and sends the create (+ the creator's first buy) from this wallet. Used by both sign-ins.
@@ -222,11 +225,14 @@ async function route(req, res, url) {
   if (p === "/api/account/txs" && m === "GET") return send(res, 200, await vault(`/users/${me.vault_id}/txs`));
   if (p === "/api/account/buy" && m === "POST") {
     if (!MINT.test(String(body.mint || ""))) throw fail(400, "That is not a coin's contract address.");
-    return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "buy", mint: body.mint, sol: body.sol, slippageBps: body.slippageBps }));
+    // Sized in SOL (`sol`) or in USDC (`usdc`, Axiom-style): a USDC buy goes with the live SOL price, which the wallet
+    // service uses to keep the trade's SOL figures and to size Blix's fee.
+    return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "buy", mint: body.mint, sol: body.sol, usdc: body.usdc, solUsd: solUsdNow(), slippageBps: body.slippageBps }));
   }
   if (p === "/api/account/sell" && m === "POST") {
     if (!MINT.test(String(body.mint || ""))) throw fail(400, "That is not a coin's contract address.");
-    return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "sell", mint: body.mint, pct: body.pct, slippageBps: body.slippageBps }));
+    // `to: "USDC"`: paid in USDC instead of SOL.
+    return send(res, 200, await vault(`/users/${me.vault_id}/swap`, { side: "sell", mint: body.mint, pct: body.pct, to: body.to, solUsd: solUsdNow(), slippageBps: body.slippageBps }));
   }
   if (p === "/api/account/launch" && m === "POST") return send(res, 200, await launchCoin(me.vault_id, body));
   if (p === "/api/account/rewards" && m === "GET") return send(res, 200, await rewardsFor(me.vault_id));
