@@ -24,19 +24,20 @@ const KNOWN = new Set(PADS.map(([k]) => k));
 
 // What a column starts with in a browser that has never saved filters (a new sign-up): Final Stretch shows coins
 // at most 400 minutes old and worth at least $4K, and every column has a floor on the fees traders have paid to
-// trade the coin (New Pairs 0.005 SOL, Final Stretch 0.05, Migrated 1), so a rug nobody traded never shows. Reset
+// trade the coin (New Pairs 0.001 SOL, Final Stretch 0.05, Migrated 1), so a rug nobody traded never shows. Reset
 // goes back to these.
-export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.005" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.05" }, migrated: { feesMin: "1" } };
-// Floors a browser may have been given before (2026-10-10 first set them higher): replaced by the current one.
-const OLD_FLOORS: Record<string, string[]> = { new: ["0.01"], stretch: ["0.1"] };
+export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.001" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.05" }, migrated: { feesMin: "1" } };
+// Floors a browser may have been given before (2026-10-10 set them higher twice): replaced by the current one.
+const OLD_FLOORS: Record<string, string[]> = { new: ["0.01", "0.005"], stretch: ["0.1"] };
 export const countFilters = (f: Filters) => Object.values(f).filter(isSet).length;
 const load = (c: Col) => {
   const f = store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
-  // The fee floors arrived on 2026-10-10 (lowered the same day): a browser with filters saved before gets its
-  // column's floor once, on top of what it had (clearing the box afterwards sticks); an earlier floor moves to the new one.
+  // The fee floors arrived on 2026-10-10: a browser with filters saved before gets its column's floor once per
+  // floor value (the flag names it), on top of what it had, and an earlier floor moves to the current one;
+  // clearing the box afterwards, or typing another number, sticks.
   const floor = DEFAULTS[c].feesMin;
-  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees2`, false)) {
-    store.set(`pulse:colf2:${c}:fees2`, true);
+  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees:${floor}`, false)) {
+    store.set(`pulse:colf2:${c}:fees:${floor}`, true);
     if (!isSet(f.feesMin) || (OLD_FLOORS[c] || []).includes(f.feesMin!)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); }
   }
   return f;
@@ -69,8 +70,12 @@ export function fitsColumn(t: Coin, f: Filters): boolean {
     peak: t.peak, liq: t.liq, traders: t.traders, chg1m: t.chg1m, chg5: t.chg5, chg1h: t.chg1h,
     fees: feesPaid(t),
   };
+  // Fees are counted from the chain a little behind the launch: a coin under 5 minutes old with none counted yet
+  // is not held back by a fee floor (it would be hidden exactly while it is new).
+  const young = Date.now() - t.born < 5 * 60_000;
   for (const [stem, v] of Object.entries(figure)) {
     const lo = f[`${stem}Min`], hi = f[`${stem}Max`];
+    if (stem === "fees" && v == null && young && isSet(lo)) continue;
     if (isSet(lo) && (v == null || v < +lo)) return false;
     if (isSet(hi) && v != null && v > +hi) return false;
   }
