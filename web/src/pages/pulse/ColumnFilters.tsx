@@ -45,9 +45,10 @@ export function resetColumn(c: Col) { store.set(`pulse:colf2:${c}`, { ...DEFAULT
 interface State { f: Record<Col, Filters>; open: Col | null }
 export const useColFilters = create<State>(() => ({ f: { new: load("new"), running: load("running"), stretch: load("stretch"), migrated: load("migrated") }, open: null }));
 
-// The fees traders have paid to trade a coin, in SOL: the row's figure (server/coinfees.js), else the live metric
-// the stream has brought since, so a coin whose fees cross the floor appears without waiting for the next sweep.
-const feesPaid = (t: Coin) => metricNumber(metricsOf(t.mint), "fees", t.fees);
+// The fees traders have paid to trade a coin, in SOL: the row's figure (server/coinfees.js, refreshed with every
+// live trade) or the live metric, whichever is newer (fees only grow), so a coin whose fees cross the floor appears
+// with the trade that lifts it there.
+const feesPaid = (t: Coin) => { const m = metricNumber(metricsOf(t.mint), "fees"); return m == null ? t.fees : t.fees == null ? m : Math.max(m, t.fees); };
 
 // Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one.
 export function fitsColumn(t: Coin, f: Filters): boolean {

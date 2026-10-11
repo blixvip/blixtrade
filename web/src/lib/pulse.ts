@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { api, apiAged, streamFailed, streamInit, streamUrl } from "./api";
 import { picReady } from "./pics";
 import { setPx } from "./livepx";
+import { receiveMetrics, metricSession, metricReplayGuard } from './metrics';
 import type { Trade } from "./coin";
 
 export type ColKey = "new" | "running" | "stretch" | "migrated";
@@ -13,6 +14,7 @@ export interface Coin {
   mcap?: number | null; startMcapSol?: number | null; vol?: number | null; liveVol?: number | null; liq?: number | null;
   chg1m?: number | null; chg5?: number | null; buys?: number; sells?: number; traders?: number | null;
   holders?: number | null; top10?: number | null; dev?: number | null; devSol?: number | null; devCount?: number;
+  migrating?: number | null;   // curve full, pool not trading yet: when the curve filled (server livetrades.js migrationOf)
   fees?: number | null; feesSince?: number | null;   // fees paid to trade it, SOL (server/coinfees.js)
   progress?: number | null; graduated?: boolean; dex?: string | null; pool?: string | null; mayhem?: boolean;
   x?: string | null; web?: string | null; tg?: string | null; tiktok?: string | null; desc?: string | null; paid?: boolean | null; peak?: number | null; chg1h?: number | null;
@@ -55,6 +57,24 @@ const FRESH_MS = 10_000;
 // First discovery is not creation: an hours-old coin arriving in a poll belongs below newer coins.
 const newestFirst = (mints: string[], coins: Record<string, Coin>) => [...new Set(mints)]
   .sort((a, b) => (coins[b]?.born || 0) - (coins[a]?.born || 0) || a.localeCompare(b)).slice(0, 160);
+// Final Stretch is ranked by volume (the owner, 2026-10-10): the busiest coin on top, and a coin whose volume
+// picks up climbs past the ones going quiet. Ties fall back to the newest.
+const vol = (c?: Coin) => c?.vol ?? c?.liveVol ?? 0;
+const byVolume = (mints: string[], coins: Record<string, Coin>) => [...new Set(mints)]
+  .sort((a, b) => vol(coins[b]) - vol(coins[a]) || (coins[b]?.born || 0) - (coins[a]?.born || 0) || a.localeCompare(b)).slice(0, 160);
+// Live trades change volumes between board reads: the column is re-ranked at most every 2 s, so rows move as
+// volume shifts without jittering on every trade.
+let rankTimer: number | undefined;
+function rerankSoon() {
+  if (rankTimer) return;
+  rankTimer = window.setTimeout(() => {
+    rankTimer = undefined;
+    usePulse.setState((s) => {
+      const next = byVolume(s.cols.stretch, s.coins);
+      return next.every((m, i) => m === s.cols.stretch[i]) ? s : { cols: { ...s.cols, stretch: next } };
+    });
+  }, 2000);
+}
 const GRACE_MS = 30_000;
 const missingSince = new Map<string, number>();
 function settle(col: ColKey, prev: string[], next: string[], now: number, moved: Set<string>) {
@@ -104,7 +124,7 @@ async function readBoard() {
       stretch: settle("stretch", s.cols.stretch, fresh.stretch, now, all), migrated: settle("migrated", s.cols.migrated, fresh.migrated, now, all),
     };
     // Running keeps the server's hottest-first order: the ticker tape (shell/Rail.tsx) shows its head as "moving now".
-    for (const [col] of COLS) if (col !== "running") cols[col] = newestFirst(cols[col], coins);
+    for (const [col] of COLS) if (col !== "running") cols[col] = col === "stretch" ? byVolume(cols[col], coins) : newestFirst(cols[col], coins);
     if (missingSince.size > 2000) missingSince.clear();
     // Forget coins no column shows any more, so the map does not grow all day.
     const shown = new Set([...cols.new, ...cols.running, ...cols.stretch, ...cols.migrated]);
@@ -114,7 +134,7 @@ async function readBoard() {
 }
 
 // One trade batch from the stream: [mint, mcap, buys, sells, vol, traders, progress, side, chg, liq, holders, top10, dev, devSold, snipers, bundle]
-type LiveRow = [string, number, number, number, number, number, number, "b" | "s" | null, number | null, number | null, number | null, number | null, number | null, number | null, number | null, number | null];
+type LiveRow = [string, number, number, number, number, number, number, "b" | "s" | null, number | null, number | null, number | null, number | null, number | null, number | null, number | null, number | null, number | null];
 
 // A coin the stream just showed bonding belongs in another column: the board is read again within a second or
 // two (at most every 4 s), instead of waiting out the 12 s poll with the coin sitting in Final stretch.
@@ -132,7 +152,7 @@ function applyLive(u: LiveRow[]) {
     // store as it was, so no column re-filters.
     let coins: typeof s.coins | null = null;
     let b = 0, n = 0;
-    for (const [mint, mcap, buys, sells, vol, traders, prog, side, chg, liq, h, t10, dev, ds, sn, bd] of u) {
+    for (const [mint, mcap, buys, sells, vol, traders, prog, side, chg, liq, h, t10, dev, ds, sn, bd, fees] of u) {
       const c = (coins || s.coins)[mint];
       if (side) { n++; if (side === "b") b++; }
       if (!c) continue;
@@ -142,12 +162,15 @@ function applyLive(u: LiveRow[]) {
       if (h != null) hl.h = h; if (t10 != null) hl.t10 = t10; if (dev != null) hl.dev = dev;
       if (ds != null) hl.ds = ds; if (sn != null) hl.sn = sn; if (bd != null) hl.bd = bd;
       // A bonded coin's row arrives only while the chain feed reads its pool, so its figures replace DexScreener's too.
-      coins[mint] = { ...c, mcap, buys, sells, liveVol: vol, vol: c.graduated && !(vol > 0) ? c.vol : vol, liq: liq ?? c.liq, traders, progress: prog, side, chg1m: chg ?? c.chg1m, hl, live: true, lt: Date.now(), state: c.state === "faded" ? "tracked" : c.state };
+      // Fees paid ride along (server.js live rows): a column filtering on them re-decides with this trade.
+      coins[mint] = { ...c, mcap, buys, sells, liveVol: vol, vol: c.graduated && !(vol > 0) ? c.vol : vol, liq: liq ?? c.liq, traders, progress: prog, side, chg1m: chg ?? c.chg1m, hl, live: true, lt: Date.now(), state: c.state === "faded" ? "tracked" : c.state, ...(fees != null ? { fees } : {}) };
     }
     const pressure = n ? s.pressure * 0.8 + ((2 * b) / n - 1) * 0.2 : s.pressure;
     return coins ? { coins, pressure } : pressure === s.pressure ? s : { pressure };
   });
   if (bonded) refreshSoon();
+  const st = usePulse.getState().cols.stretch;
+  if (st.length && u.some(([m]) => st.includes(m))) rerankSoon();
 }
 
 function applyMig(u: [string, number][]) {
@@ -194,7 +217,7 @@ const tradeFns = new Map<string, Set<(x: CoinTrade) => void>>();
 // A coin being replayed (lib/replay.ts): the live stream's trades, prices and holder figures for it are left out,
 // and the replay hands its own trades to the same listeners instead.
 let replayed: (mint: string) => boolean = () => false;
-export const setReplayHooks = (fn: (mint: string) => boolean) => { replayed = fn; };
+export const setReplayHooks = (fn: (mint: string) => boolean) => { replayed = fn; metricReplayGuard(fn); };
 export const emitCoinTrade = (x: CoinTrade) => tradeFns.get(x[0])?.forEach((fn) => fn(x));
 export const emitCoinRows = (mint: string, rows: CoinRow[]) => rowFns.get(mint)?.forEach((fn) => fn(rows));
 // A market cap from another live source (a Gecko chart's price, a Fomo bar) handed to the same listeners, so the
@@ -302,7 +325,7 @@ export function startPulse() {
   const open = () => {
     if (stopped) return;
     es?.close();
-    const s = (es = new EventSource(streamUrl("api/stream"), streamInit()));
+    const s = (es = new EventSource(streamUrl(`api/stream?session=${metricSession}`), streamInit()));
     let opened = false;
     s.onopen = () => { opened = true; };
     const on = (ev: string, fn?: (d: any) => void) => s.addEventListener(ev, (e) => {
@@ -315,6 +338,7 @@ export function startPulse() {
     on("mig", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
     // Every coin that traded in the last 100 ms, curve or pool: the live figure everywhere a market cap shows.
     on("px", (d) => { for (const r of d.u) queue.mig.push(r); later(); });
+    on('metrics', (d) => receiveMetrics(d, replayed));
     on("trade", (d) => applyTrades(d.u));
     on("ctrade", (d) => applyRows(d.u));
     on("cholders", (d) => { if (!replayed(d.mint)) holderFns.get(d.mint)?.forEach((fn) => fn(d)); });
