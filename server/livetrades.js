@@ -5,7 +5,7 @@ import { rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 // bonding progress, buys/sells, volume and trader count, pushed to the Pulse page as they happen.
 import fs from "node:fs";
 import path from "node:path";
-import { DATA, db } from "./db.js";
+import { DATA, db, logEvent } from "./db.js";
 import { settings } from "./settings.js";
 import { setSolPrice } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
@@ -16,6 +16,8 @@ import { noteSlot, behindOf } from "./feedlag.js";
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const TRADE = "bddb7fd34ee661ee";           // anchor discriminator of pump.fun's TradeEvent
 const CREATE = "1b72a94ddeeb6376";          // ... and of its CreateEvent (name, symbol, uri, mint, curve, user)
+const COMPLETE = "5f72619cd42e9808";        // ... CompleteEvent: the curve just filled (user, mint, curve, timestamp)
+const MIGRATED = "bde95db95c94ea94";        // ... CompletePumpAmmMigrationEvent: the PumpSwap pool is live (..., pool)
 const INITIAL_REAL_TOKENS = 793_100_000;     // tokens sold along the curve before it completes
 // Without a key, each (re)connection takes the next public websocket in turn: the two feeds spread over two
 // endpoints, and one that cuts us off ("data allowance" per IP per 30 s at tonight's volume, 2026-10-07)
@@ -190,12 +192,48 @@ export function curveLiqUsd(mcapUsd, usd = feed.solUsd) {
 // meanwhile. { since } or null. Three minutes at most: a real migration takes seconds, and a pool trade the feed
 // missed must not hold a coin there (it was 15 minutes; a bonded coin sat on "Migrating" for all of it, 2026-10-11).
 // The page applies the same limit (web components/Migrating.tsx MIGRATE_MAX_MS).
-export const MIGRATE_MAX_MS = 3 * 60_000;
+export const MIGRATE_MAX_MS = 45_000;
 // The pool's trades can be missed by the feed, so the token's own record is asked too: once it says the coin has
 // bonded into a pool (graduated, or a pair that is not the curve's), the migration is over. Without this a bonded
 // "Machinefun" sat on "Migrating" in Discover for its whole 15 minutes while its pool traded (2026-10-11).
 const bondedRow = db.prepare("SELECT graduated, dex, pair_created FROM tokens WHERE mint = ?");
 const bondedSeen = new Map();   // mint -> when last asked (at most once every 5 s a coin)
+// The curve filled (pump.fun's CompleteEvent, exact; or a trade reading 99.9%+ of the curve, the fallback when
+// the feed dropped the event): "Migrating" starts now.
+export function curveCompleted(mint, at = now()) {
+  let s = live.get(mint);
+  if (!s) { s = { mint, first: at, mc0: 0, ath: 0, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
+  if (s.pool) return;
+  if (!s.completeAt) { s.completeAt = at; dirty.add(mint); }
+  s.completeExact = true;
+}
+// The pool is live (pump.fun's CompletePumpAmmMigrationEvent on the curve feed, PumpSwap's CreatePoolEvent on the
+// pool feed, or either read from a block): "Migrating" ends this instant, before any pool trade, and the coin is
+// marked bonded with its pool (server.js -> engine.js bondedOnChain) so it sits in Migrated at 1 s old.
+const migratedListeners = [];
+export const onMigrated = (fn) => migratedListeners.push(fn);
+export const migrateStats = { complete: 0, migrated: 0, byPoolFeed: 0, byBlock: 0, lastSecs: null };
+export function poolMigrated(mint, pool, at = now(), via = "feed") {
+  let s = live.get(mint);
+  if (!s) { s = { mint, first: at, mc0: 0, ath: 0, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; live.set(mint, s); }
+  if (s.pool && s.migratedAt) return;
+  const secs = s.completeAt ? Math.round((at - s.completeAt) / 1000) : null;
+  s.pool = true; s.progress = 1; s.poolAddr = pool || s.poolAddr || null; s.migratedAt = at;
+  migrateStats.migrated++; if (via === "pool-feed") migrateStats.byPoolFeed++; if (via === "block") migrateStats.byBlock++; migrateStats.lastSecs = secs;
+  dirty.add(mint);
+  logEvent("system", `Migrated ${mint.slice(0, 6)}... to its PumpSwap pool${secs != null ? ` ${secs}s after the curve filled` : ""} (seen on the ${via})`);
+  for (const fn of migratedListeners) { try { fn(mint, pool, at); } catch {} }
+}
+function onComplete(buf) {
+  if (buf.length < 8 + 32 + 32 + 32) return;
+  migrateStats.complete++;
+  curveCompleted(b58(buf.subarray(40, 72)));
+}
+function onMigratedEvent(buf) {
+  // user 32, mint 32, mint_amount u64, sol_amount u64, pool_migration_fee u64, bonding_curve 32, timestamp i64, pool 32
+  if (buf.length < 8 + 32 + 32 + 8 + 8 + 8 + 32 + 8 + 32) return;
+  poolMigrated(b58(buf.subarray(40, 72)), b58(buf.subarray(136, 168)), now(), "feed");
+}
 export function migrationOf(mint) {
   const s = live.get(mint);
   if (!s?.completeAt || s.pool || s.pad || now() - s.completeAt > MIGRATE_MAX_MS) return null;
@@ -285,6 +323,8 @@ export function pumpLogs(v, slot = null, src = null) {
     const disc = buf.toString("hex", 0, 8);
     if (disc === TRADE) { if (onTrade(buf, slot, v.signature || null) === "pending") pending = true; else if (pending !== true) pending = false; }
     else if (disc === CREATE) onCreate(buf);
+    else if (disc === COMPLETE) onComplete(buf);
+    else if (disc === MIGRATED) onMigratedEvent(buf);
   }
   // A trade on a curve whose quote token has no price yet, and nothing else read from it: the transaction is left
   // unheard, so the sweep (journalfeed.js) reads it again once the price is in.

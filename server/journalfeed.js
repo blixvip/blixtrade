@@ -3,7 +3,7 @@ import { heliusFetch as fetch } from "./heliuskeys.js";
 // trade is recorded as it is heard, written once a second, confirmed a few seconds later, and kept a day. The
 // feeds' outages (and the radar's own downtime) are recorded as gaps and repaired from the chain when the
 // feed is back. The live candles are rebuilt from the journal at start, so a restart loses no trades.
-import { onLiveTrade, feed, twin, pumpHeard } from "./livetrades.js";
+import { onLiveTrade, feed, twin, pumpHeard, poolMigrated, b58 } from "./livetrades.js";
 import { onPoolTrade, onPoolLearned, swapFeed, decodeKnown, knownMint, poolInfoOf } from "./pumpswap.js";
 import { settings } from "./settings.js";
 import { Worker } from "node:worker_threads";
@@ -176,6 +176,7 @@ async function reconcile(mint) {
 // comes later than that (the follower catching up) has its coin's candles made again.
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", AMM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const TRADE = "bddb7fd34ee661ee", BUY = "67f4521f2cf57777", SELL = "3e2f370aa503dc2a";
+const MIGRATED = "bde95db95c94ea94";   // pump.fun CompletePumpAmmMigrationEvent (livetrades.js): the feeds drop some; the block has it
 J.stats.twin = twin;
 J.stats.quoted = quoteStats;   // curves quoted in another token (pumpquote.js)
 J.stats.fees = feeStats;       // fees paid per coin (coinfees.js)
@@ -196,6 +197,7 @@ function onBlock({ slot, time, txs }) {
       if (buf.length < 8) continue;
       const disc = buf.toString("hex", 0, 8);
       let x = null;
+      if (disc === MIGRATED) { if (buf.length >= 168) poolMigrated(b58(buf.subarray(40, 72)), b58(buf.subarray(136, 168)), t0, "block"); continue; }
       if (disc === TRADE) {
         const e = J.decodeCurveTrade(buf);
         if (e) x = { mint: e.mint, venue: J.VENUE.curve, sol: e.sol, tokens: e.tokens, buy: e.buy, wallet: e.user, mcUsd: e.mcSol * sol * ((knownSupply(e.mint) ?? 1e9) / 1e9) };
@@ -416,7 +418,11 @@ export function startJournal({ watched = () => [] } = {}) {
     try { if (J.flush() > 0) { draining = true; setImmediate(drain); return; } } catch (e) { J.stats.flushError = e.message; }
     draining = false;
   };
-  setInterval(() => { if (!draining) drain(); }, 250).unref?.();
+  // Once a second, not four times: every commit writes each index page it dirtied to the write-ahead log, and the
+  // trade key index scatters inserts over the whole 550 MB index, so four small commits a second wrote ~4x the log
+  // of one (≈300 MB/min, the checkpointer and disk behind it, stalls; 2026-10-11). The chart's newest seconds come
+  // from the live book, not the journal, so nothing on screen waits on this.
+  setInterval(() => { if (!draining) drain(); }, 1000).unref?.();
   // Behind (a burst, or the RPC was out): several batches a sweep, so a backlog clears before it ages out.
   let sweeping = false;
   setInterval(async () => {

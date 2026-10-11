@@ -11,7 +11,7 @@ import { rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 // with the sides swapped, and priced only when Jupiter knows the coin's supply (it is not a 1B pump.fun coin).
 import { startRpcStream } from "./rpc-stream.js";
 import { noteSlot, behindOf } from "./feedlag.js";
-import { b58, rpcWsUrl, sigGate, dupes, live, twin, twinOn, startTwin, feed as liveFeed } from "./livetrades.js";
+import { b58, rpcWsUrl, sigGate, dupes, live, twin, twinOn, startTwin, feed as liveFeed, poolMigrated } from "./livetrades.js";
 import { quoteUsd } from "./pumpquote.js";
 import { rpc } from "./solana.js";
 import { db } from "./db.js";
@@ -19,6 +19,7 @@ import { supplyOf } from "./jup.js";
 
 const AMM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const BUY = "67f4521f2cf57777", SELL = "3e2f370aa503dc2a";   // sha256("event:BuyEvent" / "event:SellEvent")[0..8]
+const CREATE_POOL = "b1310cd2a076a774";   // CreatePoolEvent: a migration's pool is live (base_mint at 50, pool at 173)
 const WSOL = "So11111111111111111111111111111111111111112";
 const POOL_AT = 8 + 14 * 8;                                    // 14 u64 fields, then the pool, then the user
 const now = () => Date.now();
@@ -226,6 +227,8 @@ export function swapLogs(v, slot = null, src = null) {
     const buf = Buffer.from(l.slice(14), "base64");
     if (buf.length < 8) continue;
     const disc = buf.toString("hex", 0, 8);
+    // A pool just created for a coin whose curve this radar watched: its migration is over this instant.
+    if (disc === CREATE_POOL) { if (buf.length >= 205) { const mint = b58(buf.subarray(50, 82)); if (live.has(mint)) poolMigrated(mint, b58(buf.subarray(173, 205)), now(), "pool-feed"); } continue; }
     if (disc !== BUY && disc !== SELL) continue;
     const pool = poolOfEvent(buf);
     if (!pool) continue;

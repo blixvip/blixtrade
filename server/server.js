@@ -32,7 +32,7 @@ import * as research from "./research.js";
 import * as brain from "./brain.js";
 import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, focusPrice, rugFigures, onChainMc, setPulseFastCheck, fastMcap } from "./pulse.js";
 import { dexPaid } from "./dexpaid.js";
-import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, migrationBlock, migrationOf, feed as liveFeed, live as liveCurves } from "./livetrades.js";
+import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, migrationBlock, migrationOf, onMigrated, feed as liveFeed, live as liveCurves } from "./livetrades.js";
 import { startPumpSwap, onPoolTrade, swapFeed, poolOf } from "./pumpswap.js";
 import { bondedOnChain } from "./engine.js";
 import { startChartStream, focusChart, chartStream } from "./chartstream.js";
@@ -1705,6 +1705,8 @@ onPoolTrade((mint, e) => { if (isFast(mint)) return; const mc = e.mcSol * liveFe
 // The same pool trades keep a bonded coin's counts, volume, traders, depth and holder ledger moving (livetrades.js, holders.js),
 // and the first of them marks a pump.fun coin bonded in the tokens table (engine.js), so it moves to Migrated at once.
 onPoolTrade((mint, e) => { try { recordPoolTrade(mint, e); if (!e.rev) bondedOnChain(mint, poolOf(mint)); } catch {} });
+// The migration itself (pump.fun's event, before the pool's first trade): bonded now, with its pool, 1 s old in Migrated.
+onMigrated((mint, pool) => { try { bondedOnChain(mint, pool || poolOf(mint)); } catch {} });
 const fastLast = new Map();   // mint -> { mc, t }: the header's live figure while the fast feed leads (coin.js)
 onFastPx((mint, x) => {
   const mc = x.mcSol * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9);

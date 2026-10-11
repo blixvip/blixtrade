@@ -104,8 +104,9 @@ function withLive(r) {
   if (launchIndex.get(r.mint)?.mayhem) r = { ...r, mayhem: true };
   // What traders paid to trade it (network, priority, tips), the row's "F" (coinfees.js).
   // Curve full, pool not trading yet: the row says "Migrating" and its buy button waits (livetrades.js migrationOf).
+  // Always on the row (null when not): a page merging rows keeps a key it is not given, and kept "Migrating" after it ended.
   const mig = r.graduated && r.pair_created ? null : migrationOf(r.mint);
-  if (mig) r = { ...r, migrating: mig.since };
+  r = { ...r, migrating: mig ? mig.since : null };
   r = withFees(r);
   const x = liveStats(r.mint);
   const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;

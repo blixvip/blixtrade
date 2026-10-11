@@ -9,7 +9,7 @@ export const MIGRATING_TIP = "Migrating to PumpSwap: the bonding curve is full a
 
 // A real migration takes seconds. Past this the page stops saying "Migrating" whatever the server last said (the
 // server gives up at the same age: livetrades.js MIGRATE_MAX_MS), so a stuck state can never hold a row.
-export const MIGRATE_MAX_MS = 3 * 60_000;
+export const MIGRATE_MAX_MS = 45_000;
 export const migratingNow = (since?: number | null) => (since && Date.now() - since < MIGRATE_MAX_MS ? since : null);
 
 // The cyan, as one value for the pieces below.
