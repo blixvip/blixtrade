@@ -98,7 +98,7 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   const { mints: hiddenList, showing } = useHidden();
   const hidden = new Set(hiddenList);
   // Normal view: hidden coins drop out. Hidden view: only the hidden ones, filters off, so each can be brought back.
-  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf))))));
+  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf, col as "new"))))));
   const hideAll = () => { if (!mints.length) return; hideCoins(mints); toast(`${mints.length} coin${mints.length === 1 ? "" : "s"} hidden from ${title}. The eye button up top brings them back.`); };
   // Rows show from the radar's board, or from the one this browser kept (lib/pulse.ts readSnapshot) until it answers.
   const loaded = usePulse((s) => s.loaded || s.restored);

@@ -51,8 +51,25 @@ export const useColFilters = create<State>(() => ({ f: { new: load("new"), runni
 // with the trade that lifts it there.
 const feesPaid = (t: Coin) => { const m = metricNumber(metricsOf(t.mint), "fees"); return m == null ? t.fees : t.fees == null ? m : Math.max(m, t.fees); };
 
-// Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one.
-export function fitsColumn(t: Coin, f: Filters): boolean {
+// New Pairs must show a coin the instant it is created (the owner: seconds matter), and its fees are only counted
+// from blocks a few seconds later, by a follower that reads about half of them. So in that column the fee floor
+// waits: a coin under FEE_GRACE old passes whatever its fees say; after that it needs the floor, or, when no fee
+// figure has come yet, to have traded at all (a rug nobody touched goes; a coin whose blocks were missed stays).
+const FEE_GRACE = 30_000;
+function feesFit(t: Coin, lo: string | undefined, hi: string | undefined, col?: Col): boolean {
+  const v = feesPaid(t);
+  if (isSet(hi) && v != null && v > +hi!) return false;
+  if (!isSet(lo)) return true;
+  if (col === "new") {
+    if (Date.now() - t.born < FEE_GRACE) return true;
+    if (v == null) return (t.buys || 0) + (t.sells || 0) > 0;
+  }
+  return v != null && v >= +lo!;
+}
+
+// Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one
+// (New Pairs' fee floor excepted: feesFit).
+export function fitsColumn(t: Coin, f: Filters, col?: Col): boolean {
   if (!countFilters(f)) return true;
   const H = t.hl || {};
   const name = `${t.symbol || ""} ${t.name || ""}`.toLowerCase();
@@ -68,8 +85,8 @@ export function fitsColumn(t: Coin, f: Filters): boolean {
     curve: t.graduated ? 100 : t.progress != null ? t.progress * 100 : null,
     snipersN: H.snN, bundleN: H.bdN, devSol: t.devSol, pwin: t.ai?.pwin != null ? t.ai.pwin * (t.ai.pwin <= 1 ? 100 : 1) : null,
     peak: t.peak, liq: t.liq, traders: t.traders, chg1m: t.chg1m, chg5: t.chg5, chg1h: t.chg1h,
-    fees: feesPaid(t),
   };
+  if (!feesFit(t, f.feesMin, f.feesMax, col)) return false;
   // Fees are counted from the chain a little behind the launch: a coin under 5 minutes old with none counted yet
   // is not held back by a fee floor (it would be hidden exactly while it is new).
   const young = Date.now() - t.born < 5 * 60_000;
