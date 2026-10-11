@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { isSet, type Filters } from "@/components/filterbits";
 import { PadLogo, padOf } from "@/components/logos";
 import { Tip } from "@/components/ui/tooltip";
+import { metricNumber, metricsOf } from "@/lib/metrics";
 import type { Coin, ColKey } from "@/lib/pulse";
 import { store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -22,13 +23,26 @@ const KNOWN = new Set(PADS.map(([k]) => k));
 // The launchpad a coin is filtered by: its pool, else what its dex or mint says (components/logos.ts padOf).
 
 // What a column starts with in a browser that has never saved filters (a new sign-up): Final Stretch shows coins
-// at most 400 minutes old and worth at least $4K. Reset goes back to these.
-export const DEFAULTS: Record<Col, Filters> = { new: {}, running: {}, stretch: { ageMax: "400", mcapMin: "4000" }, migrated: {} };
+// at most 400 minutes old and worth at least $4K, and every column has a floor on the fees traders have paid to
+// trade the coin (New Pairs 0.01 SOL, Final Stretch 0.1, Migrated 1), so a rug nobody traded never shows. Reset
+// goes back to these.
+export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.01" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.1" }, migrated: { feesMin: "1" } };
 export const countFilters = (f: Filters) => Object.values(f).filter(isSet).length;
-const load = (c: Col) => store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
+const load = (c: Col) => {
+  const f = store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
+  // The fee floors arrived on 2026-10-10: a browser with filters saved before then gets its column's floor once, on
+  // top of what it had (clearing the box afterwards sticks).
+  const floor = DEFAULTS[c].feesMin;
+  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees`, false)) { store.set(`pulse:colf2:${c}:fees`, true); if (!isSet(f.feesMin)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); } }
+  return f;
+};
 export function resetColumn(c: Col) { store.set(`pulse:colf2:${c}`, { ...DEFAULTS[c] }); useColFilters.setState((s) => ({ f: { ...s.f, [c]: { ...DEFAULTS[c] } } })); }
 interface State { f: Record<Col, Filters>; open: Col | null }
 export const useColFilters = create<State>(() => ({ f: { new: load("new"), running: load("running"), stretch: load("stretch"), migrated: load("migrated") }, open: null }));
+
+// The fees traders have paid to trade a coin, in SOL: the row's figure (server/coinfees.js), else the live metric
+// the stream has brought since, so a coin whose fees cross the floor appears without waiting for the next sweep.
+const feesPaid = (t: Coin) => metricNumber(metricsOf(t.mint), "fees", t.fees);
 
 // Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one.
 export function fitsColumn(t: Coin, f: Filters): boolean {
@@ -47,6 +61,7 @@ export function fitsColumn(t: Coin, f: Filters): boolean {
     curve: t.graduated ? 100 : t.progress != null ? t.progress * 100 : null,
     snipersN: H.snN, bundleN: H.bdN, devSol: t.devSol, pwin: t.ai?.pwin != null ? t.ai.pwin * (t.ai.pwin <= 1 ? 100 : 1) : null,
     peak: t.peak, liq: t.liq, traders: t.traders, chg1m: t.chg1m, chg5: t.chg5, chg1h: t.chg1h,
+    fees: feesPaid(t),
   };
   for (const [stem, v] of Object.entries(figure)) {
     const lo = f[`${stem}Min`], hi = f[`${stem}Max`];

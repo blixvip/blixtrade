@@ -18,7 +18,7 @@ const AUDITS: Row[] = [
   ["Dev coins launched", "devCoins", ""], ["AI score", "ai", ""], ["AI win chance", "pwin", "%"],
 ];
 const METRICS: Row[] = [
-  ["Market cap", "mcap", "$"], ["ATH market cap", "peak", "$"], ["Liquidity", "liq", "$"], ["Volume", "vol", "$"], ["Txns", "tx", ""], ["Buys", "buys", ""], ["Sells", "sells", ""],
+  ["Market cap", "mcap", "$"], ["ATH market cap", "peak", "$"], ["Liquidity", "liq", "$"], ["Volume", "vol", "$"], ["Fees paid", "fees", "SOL"], ["Txns", "tx", ""], ["Buys", "buys", ""], ["Sells", "sells", ""],
   ["Traders", "traders", ""], ["Bonding curve", "curve", "%"], ["Change 1m", "chg1m", "%"], ["Change 5m", "chg5", "%"], ["Change 1h", "chg1h", "%"],
 ];
 const AUDIT_CHECKS: [string, string][] = [["devKept", "Dev hasn't sold"], ["paid", "Dex paid"], ["pumpCa", "CA ends in pump"], ["noWarn", "No warnings"], ["aiRated", "AI rated"], ["aiBuy", "AI says buy"]];
