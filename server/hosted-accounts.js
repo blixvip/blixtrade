@@ -1,6 +1,7 @@
 // Hosted wallets bind to a verified Google subject. HTTP callers cannot choose a vault user ID.
 // refOf(email): who invited this member (server/handles.js), told to the wallet service with each trade.
-export function createHostedAccounts({ db, vault, launch, rewards, refOf = () => null, now = Date.now }) {
+// `busy(mint)`: why the coin cannot be traded this moment (it is migrating to its pool), else null.
+export function createHostedAccounts({ db, vault, launch, rewards, refOf = () => null, busy = () => null, now = Date.now }) {
   db.exec(`CREATE TABLE IF NOT EXISTS hosted_accounts (
     sub TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     vault_id INTEGER UNIQUE, address TEXT UNIQUE, consented INTEGER NOT NULL)`);
@@ -79,6 +80,8 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
       if (method === "POST" && (p === "/api/account/buy" || p === "/api/account/sell")) {
         const side = p.endsWith("/buy") ? "buy" : "sell";
         if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(body.mint || "")) throw fail(400, "Invalid coin address.");
+        const held = busy(body.mint);
+        if (held) throw fail(409, held, { migrating: true });
         send(res, 200, await vault(`${own}/swap`, { side, mint: body.mint, ...(side === "buy" ? { sol: body.sol } : { pct: body.pct }), slippageBps: body.slippageBps, referrer: refOf(identity.email) || req.walletRef || undefined })); return true;
       }
       if (p === "/api/account/withdraw" && method === "POST") { fresh(); send(res, 200, await vault(`${own}/withdraw`, { to: body.to, sol: body.sol })); return true; }

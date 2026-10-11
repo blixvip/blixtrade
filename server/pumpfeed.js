@@ -34,7 +34,7 @@ function slim(c) {
     // Newest activity first: a fresh update brings the callout back to the top, as on pump.fun.
     t: Math.max(posted || 0, ...updates.map((u) => u.t || 0)) || null, posted,
     pinned: false, likes: co.likes || 0, replies: co.replyCount || co.commentCount || 0, views: sig4(co.viewCount || 0),
-    user: { handle: null, pump: p.userName || null, name: p.userName || "anon", pic: p.profileImage || p.xProfileImage || null, verified: Boolean(p.verifiedBadgeVisible || p.isVerified), x: p.xUsername || null },
+    user: { handle: null, pump: p.userName || null, wallet: p.walletAddress || null, name: p.userName || "anon", pic: p.profileImage || p.xProfileImage || null, verified: Boolean(p.verifiedBadgeVisible || p.isVerified), x: p.xUsername || null },
     chain: SOLANA, mint: c.coinMint, ticker: c.symbol || null, name: c.coinName || null, img: c.coinImage || null, mc: sig4(num(c.marketCap)), price: sig4(num(p.tokenPriceUsd)),
     comment: co.thesis || null, media: co.mediaUrl || null, updates: updates.slice(-100),
     entryMc: sig4(num(co.calledOutAtMcap)), multiple: cents(num(co.multiple)), maxMultiple: cents(num(co.maxMultiplier)),
@@ -82,7 +82,7 @@ export function pumpFeed() {
 const leaned = new WeakMap();
 function lean(it) {
   let l = leaned.get(it);
-  if (!l) { const { name, posted, costUsd, maxMultiple, price, user, ...rest } = it; l = { ...rest, user: user && { handle: user.handle, pump: user.pump, name: user.name, pic: user.pic, verified: user.verified } }; leaned.set(it, l); }
+  if (!l) { const { name, posted, costUsd, maxMultiple, price, user, ...rest } = it; l = { ...rest, user: user && { handle: user.handle, pump: user.pump, wallet: user.wallet, name: user.name, pic: user.pic, verified: user.verified } }; leaned.set(it, l); }
   return l;
 }
 

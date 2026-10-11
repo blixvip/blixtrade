@@ -1,4 +1,5 @@
 // The radar loop: discover → enrich → safety check → score → signals → outcome tracking.
+import { startFastCreate } from "./fastcreate.js";
 import { EventEmitter } from "node:events";
 import * as coinIndex from "./coinindex.js";
 import { db, q, json, logEvent, prune } from "./db.js";
@@ -6,12 +7,13 @@ import * as src from "./sources.js";
 import { themesFor } from "./narratives.js";
 import { settings } from "./settings.js";
 import { startWallets, walletSignals, revalidateWinners } from "./wallets.js";
-import { CURVE_DEX, readingProblem, exitState, classifyAsset, safetyVerdict, cleanLinks, safeUrl } from "./quality.js";
+import { CURVE_DEX, MAJOR_MINTS, readingProblem, exitState, classifyAsset, safetyVerdict, cleanLinks, safeUrl } from "./quality.js";
 import * as health from "./health.js";
 import { meta } from "./db.js";
 import { onLiveCreate, live as liveCurves, feed as liveFeed } from "./livetrades.js";
 import { windowStats } from "./candles.js";
 import { startCoverage } from "./coverage.js";
+import { warmX } from "./xcard.js";
 
 export const bus = new EventEmitter();
 export const stats = { launchesSeen: 0, nursery: 0, graduated: 0, tracked: 0, signals: 0, pump: "connecting", pumpLast: 0, lastCycle: 0, errors: 0, quarantined: 0, startedAt: Date.now() };
@@ -113,7 +115,19 @@ export function bondedOnChain(mint, pool) {
 // One way in for a launch, whichever feed saw it first (PumpPortal, or the chain itself via the live feed).
 export const launchFeeds = { pumpportal: 0, chainOnly: 0 };
 function addLaunch(t) {
-  if (!t.mint || launchIndex.has(t.mint)) return false;
+  if (!t.mint) return false;
+  // Heard already (from the chain, a moment before PumpPortal): PumpPortal's extras (the dev's buy, the curve's
+  // start) fill in on the same row; the next board read shows them.
+  const had = launchIndex.get(t.mint);
+  if (had) {
+    if (t.mcapSol != null && had.mcapSol == null) had.mcapSol = t.mcapSol;
+    if (t.devSol != null && had.devSol == null) had.devSol = t.devSol;
+    if (t.pool && !had.pool) had.pool = t.pool;
+    if (!had.name && t.name) had.name = t.name;
+    if (!had.symbol && t.symbol) had.symbol = t.symbol;
+    if (!had.uri && t.uri) had.uri = t.uri;
+    return false;
+  }
   /-chain$/.test(t.source || "") ? launchFeeds.chainOnly++ : launchFeeds.pumpportal++;
   stats.launchesSeen++;
   const entry = { t: now(), name: t.name || "", symbol: t.symbol || "", creator: t.creator };
@@ -130,12 +144,11 @@ function addLaunch(t) {
   if (recentLaunches.length > 400) recentLaunches.splice(0, recentLaunches.length - 400);
   return true;
 }
-// A coin created on chain that PumpPortal has not announced within 2 seconds (it is usually ~0.2s ahead)
-// is added from the chain: the gaps in PumpPortal's feed no longer become invisible coins.
+// A coin created on chain goes on the board the moment the chain shows it (PumpPortal misses ~40% of creates,
+// and waiting 2 s for it put every such coin on the board 2-4 s after Axiom's; 2026-10-11). When PumpPortal does
+// announce it, its extras merge into the row (addLaunch).
 function fillLaunchGaps() {
-  onLiveCreate((c) => setTimeout(() => {
-    if (!launchIndex.has(c.mint)) addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.uri, creator: c.creator, pool: c.pool || "pump", mcapSol: null, devSol: null, source: c.source || "pump-chain" });
-  }, 2000));
+  onLiveCreate((c) => { addLaunch({ mint: c.mint, symbol: c.symbol, name: c.name, uri: c.uri, creator: c.creator, pool: c.pool || "pump", mcapSol: null, devSol: null, source: c.source || "pump-chain" }); });
 }
 const pendingGraduations = new Set();
 
@@ -253,21 +266,33 @@ function fromReserves(p) {
   const k = spot / px;
   return { ...p, priceUsd: String(spot), marketCap: (p.marketCap || 0) * k, fdv: (p.fdv || 0) * k, liquidity: { ...p.liquidity, usd: Math.min(p.liquidity.usd || liq, liq) } };
 }
+// DexScreener gives SOL itself no market cap: its price times the circulating supply (RPC getSupply, hourly).
+const WSOL = "So11111111111111111111111111111111111111112";
+const solCirc = { n: 0, t: 0 };
+function solSupply() {
+  if (now() - solCirc.t > 60 * MIN) {
+    solCirc.t = now();
+    import("./solana.js").then((s) => s.rpc("getSupply", [{ excludeNonCirculatingAccountsList: true }])).then((r) => { if (r?.value?.circulating > 0) solCirc.n = r.value.circulating / 1e9; }).catch(() => {});
+  }
+  return solCirc.n;
+}
 function applyPair(mint, p) {
   p = fromReserves(p);
+  if (mint === WSOL && !(p.marketCap || p.fdv) && solSupply()) p = { ...p, marketCap: (+p.priceUsd || 0) * solSupply() };
   const links = cleanLinks([
     ...(p.info?.websites || []).map((w) => ({ type: "website", url: w.url })),
     ...(p.info?.socials || []).map((s) => ({ type: s.type, url: s.url })),
   ]);
+  for (const l of links) if (/twitter|x\.com/i.test(`${l.type} ${l.url}`)) warmX(l.url);   // the X card, ahead of any hover (once per link)
   const t = q.getToken.get(mint);
   const mcap = p.marketCap || p.fdv || 0, liq = p.liquidity?.usd || 0;
   // A reading from an emptied pool is kept for display (flagged) but never becomes a peak or a return.
-  const problem = readingProblem({ dex: p.dexId, liquidity: liq, mcap }, settings.minExitLiq);
+  const cls = classifyAsset({ ...t, mint, symbol: p.baseToken?.symbol || t?.symbol, name: p.baseToken?.name || t?.name, mcap, liquidity: liq });
+  const problem = readingProblem({ dex: p.dexId, liquidity: liq, mcap, asset: cls }, settings.minExitLiq);
   if (problem && !t?.quarantine) {
     stats.quarantined++;
     if (t && !CURVE_DEX.has(t.dex) && (t.liquidity || 0) >= 5 * settings.minExitLiq && liq < settings.minExitLiq) pulled.add(mint);
   }
-  const cls = classifyAsset({ ...t, mint, symbol: p.baseToken?.symbol || t?.symbol, name: p.baseToken?.name || t?.name, mcap, liquidity: liq });
   db.prepare(`UPDATE tokens SET
     symbol = COALESCE(?, symbol), name = COALESCE(?, name), image = COALESCE(image, ?), header = COALESCE(?, header),
     pair = ?, dex = ?, pair_created = ?, price = ?, mcap = ?, liquidity = ?,
@@ -357,8 +382,10 @@ function reviveBusy() {
 function cull() {
   reviveBusy();
   const age = (t) => now() - t.first_seen;
-  const rows = db.prepare("SELECT mint, first_seen, mcap, liquidity, vol_h1, score FROM tokens WHERE status = 'active'").all();
-  const dead = rows.filter((t) => !busyNow(t.mint) && (
+  // SOL, stablecoins, wrapped BTC and other big non-memes score 0 (only memes are scored) but are never retired.
+  const keep = (t) => MAJOR_MINTS.has(t.mint) || (t.asset_class && t.asset_class !== "meme" && (t.mcap || 0) >= 5e7);
+  const rows = db.prepare("SELECT mint, first_seen, mcap, liquidity, vol_h1, score, asset_class FROM tokens WHERE status = 'active'").all();
+  const dead = rows.filter((t) => !busyNow(t.mint) && !keep(t) && (
     (age(t) > 45 * MIN && (t.mcap || 0) < 6000) ||
     (age(t) > 3 * 60 * MIN && (t.vol_h1 || 0) < 500) ||
     (age(t) > 36 * 60 * MIN && (t.score || 0) < 40)));
@@ -367,7 +394,7 @@ function cull() {
   const alive = rows.length - dead.length;
   if (alive > settings.maxTracked) {
     // Over the cap, the least traded go first (a hot coin with a low score must not drop off Discover).
-    const extra = db.prepare("SELECT mint FROM tokens WHERE status = 'active' ORDER BY COALESCE(vol_h1, 0) + 12 * COALESCE(vol_m5, 0) ASC, score ASC, first_seen ASC LIMIT ?").all(alive - settings.maxTracked);
+    const extra = db.prepare(`SELECT mint FROM tokens WHERE status = 'active' AND NOT (mint IN (${[...MAJOR_MINTS].map((m) => `'${m}'`).join(",")}) OR (COALESCE(asset_class, 'meme') != 'meme' AND mcap >= 5e7)) ORDER BY COALESCE(vol_h1, 0) + 12 * COALESCE(vol_m5, 0) ASC, score ASC, first_seen ASC LIMIT ?`).all(alive - settings.maxTracked);
     for (const t of extra) kill.run(now(), t.mint);
   }
 }
@@ -647,8 +674,8 @@ export function rebuildFromSnapshots() {
   // Current state: classify every coin, flag unreliable prices, and drop peaks that no snapshot backs up.
   const fix = db.prepare("UPDATE tokens SET asset_class = ?, quarantine = ?, links = ?, image = ?, peak_mcap = CASE WHEN ? THEN NULL ELSE peak_mcap END WHERE mint = ?");
   for (const t of toks.values()) {
-    const problem = t.pair ? readingProblem(t, floor) : null;
-    fix.run(classifyAsset(t), problem || (t.quarantine?.startsWith("no longer") ? t.quarantine : null), JSON.stringify(cleanLinks(json(t.links, []))), safeUrl(t.image),
+    const cls = classifyAsset(t), problem = t.pair ? readingProblem({ ...t, asset: cls }, floor) : null;
+    fix.run(cls, problem || (t.quarantine?.startsWith("no longer") ? t.quarantine : null), JSON.stringify(cleanLinks(json(t.links, []))), safeUrl(t.image),
       problem && !trusted.get(t.mint)?.peak ? 1 : 0, t.mint);
   }
   // Signal outcomes.
@@ -727,6 +754,25 @@ export function adoptLaunch(l) {
 export function adoptFound(list, source = "jupiter") {
   for (const t of list) if (t?.mint) adopt({ mint: t.mint, symbol: t.symbol, name: t.name, image: t.image, source });
 }
+// Any coin someone opens by address (SOL, cbBTC, a stablecoin, a coin the feeds never heard of): tracked from
+// then on when DexScreener lists a market for it. A miss is remembered for 5 minutes so a bad link costs one call.
+const lookedUp = new Map();   // mint -> time of a miss
+export async function lookupMint(mint) {
+  const had = q.getToken.get(mint);
+  // A major retired before it was exempt (USDC was), or priced before its supply was known (SOL): live again, re-read.
+  if (had && MAJOR_MINTS.has(mint) && (had.status !== "active" || had.quarantine || !(had.mcap > 0))) {
+    db.prepare("UPDATE tokens SET status = 'active' WHERE mint = ?").run(mint);
+    await enrichNow(mint).catch(() => {});
+  }
+  if (had) return true;
+  if (now() - (lookedUp.get(mint) || 0) < 5 * MIN) return false;
+  const p = (await src.dexTokens([mint]).catch(() => new Map())).get(mint);
+  if (!p) { lookedUp.set(mint, now()); if (lookedUp.size > 2000) lookedUp.clear(); return false; }
+  adopt({ mint, symbol: p.baseToken?.symbol, name: p.baseToken?.name, image: p.info?.imageUrl, source: "lookup" });
+  applyPair(mint, p);
+  safetyQueue.add(mint);
+  return true;
+}
 export function adoptMint(mint) {
   if (q.getToken.get(mint)) return;
   adopt({ mint, source: "wallet" });
@@ -743,6 +789,7 @@ export function start() {
     if (!nursery.has(c.mint) && !q.getToken.get(c.mint)) nursery.set(c.mint, { mint: c.mint, name: c.name, symbol: c.symbol, creator: c.creator, source: "restart", seen: c.created });
   const pump = startPump();
   fillLaunchGaps();
+  if (settings.marketFeeds !== false) { try { startFastCreate(); } catch {} }
   startCoverage();
   const stopWallets = startWallets((ev) => {
     bus.emit("walletTrade", ev);
@@ -752,6 +799,10 @@ export function start() {
   // The launches made while the radar was down: back to the newest coin the index already had (backfill above).
   const knownUntil = db.prepare("SELECT MAX(created) t FROM coins").get()?.t || now() - 30 * MIN;
   setTimeout(() => backfillLaunches(BACKFILL_PAGES, knownUntil).catch(() => {}), 20_000);
+  // SOL, the stablecoins, wrapped BTC and the other majors: searchable and charted from the first minute.
+  solSupply();
+  setTimeout(() => { for (const m of MAJOR_MINTS) lookupMint(m).catch(() => {}); }, 30_000);
+  setInterval(() => { for (const m of MAJOR_MINTS) lookupMint(m).catch(() => {}); }, 10 * MIN);
   const timers = [
     setInterval(() => backfillLaunches(4).catch(() => {}), 45_000),
     setInterval(cycle, 30_000),

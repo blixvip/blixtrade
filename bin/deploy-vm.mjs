@@ -35,6 +35,8 @@ const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
 const forced = new Set(args.filter((a) => !a.startsWith("--")).map((a) => a.replace(/\\/g, "/").replace(/^\.\//, "")));
 const DRY = flag("--dry-run"), ADOPT = flag("--adopt"), ONLY = flag("--only"), NO_WEB = flag("--no-web");
+// --force with --only: the named files override "changed on the server" (without --only every named file is forced).
+const FORCE = flag("--force");
 
 const SSH = ["-i", KEY, "-o", "ConnectTimeout=20", "-o", "BatchMode=yes"];
 const ssh = (cmd, input) => {
@@ -69,8 +71,8 @@ for (const [f, h] of local) {
   if (there === h) continue;
   if (ONLY && !forced.has(f)) continue;
   const touchedThere = there && manifest.size && manifest.get(f) !== there;
-  if (there && (!manifest.size && !ADOPT) && !(forced.has(f) && !ONLY)) { refused.push(`${f} (no deploy record on the server yet: run with --adopt once you have checked it)`); continue; }
-  if (touchedThere && !(forced.has(f) && !ONLY) && !ADOPT) { refused.push(`${f} (changed on the server since the last deploy: merge that change first, or --force ${f})`); continue; }
+  if (there && (!manifest.size && !ADOPT) && !(forced.has(f) && (!ONLY || FORCE))) { refused.push(`${f} (no deploy record on the server yet: run with --adopt once you have checked it)`); continue; }
+  if (touchedThere && !(forced.has(f) && (!ONLY || FORCE)) && !ADOPT) { refused.push(`${f} (changed on the server since the last deploy: merge that change first, or --force ${f})`); continue; }
   ship.push(f);
 }
 const serverOnly = [...remoteHashes.keys()].filter((f) => !local.has(f));

@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Snipers and bundlers for any coin, from its first blocks on the chain: for coins the holder ledger did not
 // see from their first trade (holders.js genesis), which is every older coin on Discover and Fomo's lists.
 // No public API carries these (Jupiter, RugCheck, DexScreener, GeckoTerminal checked 2026-10-08); Axiom and GMGN
@@ -14,7 +15,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { DATA } from "./db.js";
 import { settings } from "./settings.js";
-import { keyUrls, monthUsed, noteCall } from "./heliuskeys.js";
+import { keyUrls, monthUsed } from "./heliuskeys.js";
 import { onCurve } from "./holderslive.js";
 import { b58 } from "./livetrades.js";
 import * as jupdisc from "./jupdisc.js";
@@ -160,7 +161,7 @@ async function findLaunchFree(mint) {
   for (let i = 0; i < early.length; i += 8) {
     const url = cheapUrl();
     const body = early.slice(i, i + 8).map((x, j) => ({ jsonrpc: "2.0", id: i + j, method: "getTransaction", params: [x.signature, { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" }] }));
-    if (/helius/i.test(url)) { for (const _ of body) noteCall(url, "getTransaction"); spendCredits(body.length); }
+    if (/helius/i.test(url)) { spendCredits(body.length); }
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(25_000) });
     const arr = await r.json();
     if (!Array.isArray(arr)) throw new Error(arr?.error?.message || "batch refused");
@@ -186,7 +187,7 @@ function cheapUrl() {
 }
 async function cheapCall(method, params, timeout) {
   const url = cheapUrl();
-  if (/helius/i.test(url)) { noteCall(url, method); spendCredits(1); }
+  if (/helius/i.test(url)) {  spendCredits(1); }
   return call(url, method, params, timeout);
 }
 async function findLaunch(mint) {
@@ -209,7 +210,7 @@ async function findLaunch(mint) {
   let txs = [], token = null;
   for (let page = 0; page < 2; page++) {
     if (page && !spendFind()) break;
-    noteCall(url, "getTransactionsForAddress");
+
     const full = await call(url, "getTransactionsForAddress", [mint, { transactionDetails: "full", sortOrder: "asc", limit: 100, encoding: "json", maxSupportedTransactionVersion: 1, ...(token ? { paginationToken: token } : {}) }], 25_000);
     txs.push(...(full?.data || []).filter((t) => !t.meta?.err));
     token = full?.paginationToken || null;

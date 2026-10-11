@@ -6,6 +6,7 @@
 import { db } from "./db.js";
 import { getMeta } from "./pulse.js";
 import { cleanLinks } from "./quality.js";
+import { warmX } from "./xcard.js";
 
 const now = () => Date.now();
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -16,7 +17,9 @@ let active = 0;
 export const linkFillStats = { fromMeta: 0, fromPump: 0, none: 0, failed: 0 };
 
 const fromMeta = (m) => cleanLinks([m?.twitter && { type: "twitter", url: m.twitter }, m?.website && { type: "website", url: m.website }, m?.telegram && { type: "telegram", url: m.telegram }].filter(Boolean));
-const save = (mint, links) => { try { db.prepare("UPDATE tokens SET links = ? WHERE mint = ? AND (links IS NULL OR links = '[]' OR links = '')").run(JSON.stringify(links), mint); } catch {} };
+const save = (mint, links) => { try { db.prepare("UPDATE tokens SET links = ? WHERE mint = ? AND (links IS NULL OR links = '[]' OR links = '')").run(JSON.stringify(links), mint); } catch {}
+  for (const l of links) if (/twitter|x\.com/i.test(`${l.type} ${l.url}`)) warmX(l.url);   // the X card, ahead of any hover
+};
 
 // `links`: the row's own (cleaned). Answers them, else the metadata's; with neither, pump.fun is asked in the
 // background and the next answer has them.

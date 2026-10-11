@@ -8,7 +8,7 @@
 // from the launch log and the tokens table. Nothing here is estimated: a field Blix cannot know is null.
 import { db } from "./db.js";
 import * as coinIndex from "./coinindex.js";
-import { onLiveTrade, feed, liveStats } from "./livetrades.js";
+import { onLiveTrade, feed, liveStats, migrationOf } from "./livetrades.js";
 import { books } from "./holders.js";
 import { launchIndex, enrichNow } from "./engine.js";
 import { getJson, rugcheck } from "./sources.js";
@@ -387,6 +387,8 @@ function build(mint, top) {
   return {
     mint, symbol: t?.symbol || launchIndex.get(mint)?.symbol || coinIndex.nameOf(mint)?.symbol || null, name: t?.name || launchIndex.get(mint)?.name || coinIndex.nameOf(mint)?.name || null,
     solUsd, live: curveLive(L, t), onCurve: Boolean(L) && !t?.graduated,
+    // Curve full, pool not trading yet: pump.fun is migrating it and trades fail meanwhile ({ since } or null).
+    migrating: t?.graduated && t?.pair_created ? null : migrationOf(mint),
     // Live readings on the chart's level (candles.js levelNow), so the header and the chart's last candle agree.
     // Off the curve with no live price, the chart's newest close (seconds old while it is open) before the stored
     // DexScreener reading (minutes old: it showed $21K for a coin that had dumped to $2.4K).
@@ -478,7 +480,7 @@ function jupLine(wallet, { held, w, supply, priceUsd, solUsd, tagOf, pool, lastA
     // A program's account (the bonding curve, an AMM pool, a vault) is never a person: RugCheck's and Jupiter's
     // lists include the curve, which read as a 30% "holder" on every coin still bonding.
     wallet, ...tagOf(wallet), ...(pool || !onCurve(wallet) ? { label: "Pool" } : {}),
-    tokens: Math.round(held ?? 0), pct: held != null ? +((held / supply) * 100).toFixed(3) : 0, maxPct: 0,
+    tokens: held == null ? null : Math.round(held), pct: held != null ? +((held / supply) * 100).toFixed(3) : null, maxPct: 0,
     boughtSol: r2(inSol), soldSol: r2(outSol), valueSol: r2(valueSol), pnlSol: pnlUsd != null && solUsd ? r2(pnlUsd / solUsd) : null, realizedSol: null,
     boughtUsd: w ? +w.inUsd.toFixed(2) : null, soldUsd: w ? +w.outUsd.toFixed(2) : null, valueUsd: valueUsd == null ? null : +valueUsd.toFixed(2), pnlUsd: pnlUsd == null ? null : +pnlUsd.toFixed(2),
     avgBuyMc, avgSellMc, trades: w?.n ?? 0, first: w?.first ?? lastActive ?? null,
@@ -507,7 +509,7 @@ function fillFromJupiter(mint, { holders, traders, early, bonded, genesis, tagOf
   }
   if (needT && e.recent?.length) {
     const by = tally(e.recent);
-    out.traders = [...by.entries()].map(([wallet, w]) => jupLine(wallet, { held: held.get(wallet)?.tokens ?? (held.size ? Math.max(0, w.tokIn - w.tokOut) : null), w, supply, priceUsd, solUsd, tagOf, pool: held.get(wallet)?.pool }))
+    out.traders = [...by.entries()].map(([wallet, w]) => jupLine(wallet, { held: held.get(wallet)?.tokens ?? null, w, supply, priceUsd, solUsd, tagOf, pool: held.get(wallet)?.pool }))
       .filter((x) => x.label !== "Pool").sort((a, b) => ((b.boughtUsd ?? 0) + (b.soldUsd ?? 0)) - ((a.boughtUsd ?? 0) + (a.soldUsd ?? 0))).slice(0, 50);
     out.tradersWindow = { trades: e.recent.length, since: e.recent.at(-1)?.t ?? null };
     used.push("traders");

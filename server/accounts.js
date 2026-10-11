@@ -18,6 +18,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { initSocial, socialRoute } from "./social.js";
 import { createHostedAccounts } from "./hosted-accounts.js";
+import { migrationBlock } from "./livetrades.js";
 import { createHandles } from "./handles.js";
 import { initCreator, creatorRewards } from "./creator.js";
 
@@ -133,7 +134,7 @@ const onramp = () => { try { return JSON.parse(fs.readFileSync(path.join(DATA, "
 
 const MINT =/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const handles = adb ? createHandles({ db: adb }) : null;
-const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf }) : null;
+const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf, busy: migrationBlock }) : null;
 const HOME = "/#/account";
 // A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
 // builds, signs and sends the create (+ the creator's first buy) from this wallet. Used by both sign-ins.

@@ -13,14 +13,18 @@ export const illiquid = (t, floor = 1000) => Boolean(t?.pair) && !onCurve(t) && 
 // Is one market reading believable? Returns null when it is, else a short reason.
 // An emptied pool keeps quoting a "price" that nobody can trade at (one coin showed $3 trillion on $13 of
 // liquidity), so those readings must never feed peaks, multiples or returns.
-export function readingProblem({ dex, liquidity, mcap }, floor = 1000) {
+// `asset` (classifyAsset's answer) when known: stablecoins, wrapped and major tokens trade across hundreds of pools,
+// so the one pair DexScreener reports is a sliver of their market (USDC: $7.7B on a $1.3M pair) and says nothing.
+export function readingProblem({ dex, liquidity, mcap, asset }, floor = 1000) {
   if (!(mcap > 0)) return null;
+  const big = asset && asset !== "meme";
   // No traded coin is worth a few cents in total, or more than the largest companies on earth: a feed glitch.
-  if (mcap > 2e11 || mcap < 100) return "implausible market cap";
+  if (mcap > (big ? 5e12 : 2e11) || mcap < 100) return "implausible market cap";
   if (CURVE_DEX.has(dex)) return null;
   const liq = liquidity || 0;
   if (liq < floor) return `pool has only $${liq < 10 ? liq.toFixed(2) : Math.round(liq).toLocaleString()} of liquidity`;
-  if (mcap / liq > 2000) return "market cap is not backed by the pool";
+  // An emptied pool holds a few thousand dollars at most; one with $100K+ in it is a real market, just not its only one.
+  if (mcap / liq > 2000 && !big && liq < 100_000) return "market cap is not backed by the pool";
   return null;
 }
 
@@ -34,7 +38,9 @@ export function exitState(t, floor = 1000) {
 }
 
 // ---------- what kind of asset is this ----------
-const MAJOR_MINTS = new Set([
+// Opened like any coin, tracked from start-up (engine.js), and searched first by their tickers.
+export const MAJOR_MINTS = new Set([
+  "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g",
   "So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrajDsTVEb4f3xFeKbSkqvn9rk8Y3Y7xMhRzTsH",
   "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij", "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So", "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
   "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",

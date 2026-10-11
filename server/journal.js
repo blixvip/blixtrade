@@ -1,3 +1,4 @@
+import { validTrade } from "./chart-data.js";
 // The trade journal: every pump.fun curve and PumpSwap trade the radar hears, kept in SQLite for a day, so a
 // chart or a mini chart has the coin's real history the moment it opens and a restart loses nothing. All of
 // it is free: the trades come from the radar's own log feeds (livetrades.js, pumpswap.js), confirmation and
@@ -21,7 +22,7 @@
 import crypto from "node:crypto";
 import { db } from "./db.js";
 import { rpc } from "./solana.js";
-import { decode as decodeSwap } from "./pumpswap.js";
+import { decode as decodeSwap, poolInfoOf } from "./pumpswap.js";
 import { quotedTrade } from "./pumpquote.js";
 
 const now = () => Date.now();
@@ -127,7 +128,7 @@ export const heardTx = (sig, mint) => seenInTx.has(`${sig}|${mint}`) || blockCur
 // One trade as heard live: { mint, sig, venue, sol, tokens, buy, mcUsd, usd, slot, t }. `block`: read from a
 // confirmed block (written confirmed, src 2); the caller writes all of a transaction's trades of the coin.
 export function record(x) {
-  if (!x?.mint || !(x.mcUsd > 0) || !isFinite(x.mcUsd)) return;
+  if (!x?.mint || !validTrade(x.mcUsd, x.usd ?? 0, x.t ?? now())) return;
   if (x.sig && !x.block && (blockCur.has(`${x.sig}|${x.mint}`) || blockOld.has(`${x.sig}|${x.mint}`))) { stats.blockFirst = (stats.blockFirst || 0) + 1; return; }
   if (x.block) {
     const id = `${x.sig}|${x.mint}`;
@@ -157,26 +158,46 @@ export function record(x) {
 // thousands of coins seen for the first time, can make each row slow).
 let queued = 0, written = 0, beat = 0;
 export function flush(t = now(), max = 500, budgetMs = 10) {
+  // Another process may be checkpointing/backing up. Never freeze live feeds for SQLite's 5 s default wait.
+  // Failed batches stay queued; journalfeed's next drain retries them after releasing the event loop.
+  const timeout = db.prepare("PRAGMA busy_timeout").get().timeout;
+  try {
+    if (timeout > 25) db.exec("PRAGMA busy_timeout = 25");
+    return flushBatch(t, max, budgetMs);
+  } finally {
+    if (timeout > 25) db.exec(`PRAGMA busy_timeout = ${timeout}`);
+  }
+}
+function flushBatch(t, max, budgetMs) {
   const t0 = performance.now();
   if (queue.length) {
-    const rows = queue.splice(0, max), newest = new Map();
-    let done = 0;
-    db.exec("BEGIN");
+    const rows = queue.slice(0, max), newest = new Map();
+    let done = 0, inserted = 0, dupes = 0, began = false;
+    const oldGenAt = genAt, oldGenFirst = genFirst;
     try {
+      db.exec("BEGIN IMMEDIATE"); began = true;
       for (const r of rows) {
         if (done % 25 === 0 && done && performance.now() - t0 > budgetMs) break;
         done++;
         const mid = midOf(r[0]);
         const res = ins.run(mid, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], widOf(r[10]));
-        if (res.changes) stats.written++; else stats.dupes++;
+        if (res.changes) inserted++; else dupes++;
         if (!(newest.get(mid) >= r[1])) newest.set(mid, r[1]);
       }
       for (const [mid, t] of newest) setLast.run(t, mid, t);
-      if (t - beat >= 1000) { setMeta.run("alive", t); beat = t; }
-      db.exec("COMMIT");
-      written += done;
-      if (done < rows.length) queue.unshift(...rows.slice(done));   // the rest, first in line next time
-    } catch (e) { try { db.exec("ROLLBACK"); } catch {} throw e; }
+      if (t - beat >= 1000) setMeta.run("alive", t);
+      db.exec("COMMIT"); began = false;
+      queue.splice(0, done);
+      written += done; stats.written += inserted; stats.dupes += dupes;
+      if (t - beat >= 1000) beat = t;
+    } catch (e) {
+      if (began) {
+        try { db.exec("ROLLBACK"); } catch {}
+        // IDs allocated in the rolled-back transaction no longer exist. The queue stays intact for retry.
+        mids.clear(); wids.clear(); genAt = oldGenAt; genFirst = oldGenFirst;
+      }
+      throw e;
+    }
   } else if (t - beat >= 1000) { setMeta.run("alive", t); beat = t; }
   const ms = performance.now() - t0;
   stats.flushes++; stats.flushMs = +ms.toFixed(1); stats.flushMsMax = Math.max(stats.flushMsMax || 0, +ms.toFixed(1)); stats.lastFlush = t;
@@ -337,7 +358,7 @@ export function decodeCurveTrade(buf) {
 // is priced exactly as the live feed priced it. Side pools (under 3 SOL deep) are left out, as live.
 export function decodeSwapEvent(buf, buy) {
   const e = decodeSwap(buf, buy);
-  return e && e.depth >= 3 ? { venue: VENUE.pumpswap, pool: e.pool, buy, sol: e.sol, tokens: e.tokens, mcSol: e.mcSol } : null;
+  return e && e.depth >= 3 ? { venue: VENUE.pumpswap, pool: e.pool, buy, sol: e.sol, tokens: e.tokens, mcSol: e.mcSol, raw: buf } : null;
 }
 // Every trade event in a transaction's logs, in log order. Failed transactions say nothing happened.
 export function eventsFromLogs(logs, err = null) {
@@ -381,7 +402,7 @@ export const stored = (sig, mint) => Boolean(hasK.get(tradeKey(sig, mint, 0)));
 // Reads a coin's transactions in [t0, t1] back from the chain and stores the trades the feeds missed.
 // `poolMint(pool)` -> the coin a PumpSwap pool trades (or null), `supply(mint)` -> its supply for the market cap.
 // Returns { n: trades added, seen: transactions read, full: whether the whole interval was read }.
-export async function repairMint(mint, t0, t1, { poolMint = async () => null, supply = () => 1e9, maxTx = 400, call = rpc } = {}) {
+export async function repairMint(mint, t0, t1, { poolMint = async () => null, poolInfo = () => null, supply = () => 1e9, maxTx = 400, call = rpc } = {}) {
   const from = Math.floor(t0 / 1000) - 5, to = Math.ceil(t1 / 1000) + 5;
   const sigs = [];
   // Start from the first transaction heard after the outage when there is one (everything newer is stored).
@@ -397,7 +418,7 @@ export async function repairMint(mint, t0, t1, { poolMint = async () => null, su
   }
   if (sigs.length > maxTx) { sigs.length = maxTx; full = false; }
   let seenTx = 0;
-  const r = await readBack(mint, sigs, { poolMint, supply,
+  const r = await readBack(mint, sigs, { poolMint, poolInfo, supply,
     getTx: (sig) => { if ((++seenTx & 15) === 0) stats.repairStep = `${mint.slice(0, 8)} tx ${seenTx}/${sigs.length}`; return call("getTransaction", [sig, TX_OPTS]); } });
   return { n: r.n, seen: sigs.length, full: full && !r.incomplete };
 }
@@ -405,7 +426,9 @@ const TX_OPTS = { encoding: "json", maxSupportedTransactionVersion: 1, commitmen
 // Stores the trades of `mint` in the transactions ({ signature, blockTime }) the journal lacks, read with
 // `getTx(signature)` `conc` at a time. Returns { n: trades added, read: transactions fetched, failed:
 // signatures that could not be read, incomplete: whether anything was left out (unreadable or unpriced) }.
-export async function readBack(mint, sigs, { getTx, poolMint = async () => null, supply = () => 1e9, conc = 1 } = {}) {
+// `poolInfo(pool)` -> the pool's sides when it is quoted in another token ({ qmint, qdec }: pumpswap.js decode
+// prices its trades at the quote's dollar price), null for a SOL pool.
+export async function readBack(mint, sigs, { getTx, poolMint = async () => null, poolInfo = () => null, supply = () => 1e9, conc = 1 } = {}) {
   const todo = sigs.filter((s) => !hasK.get(tradeKey(s.signature, mint, 0)));   // heard live: its trades are stored
   const rows = [], failed = [];
   let incomplete = false, next = 0;
@@ -416,10 +439,15 @@ export async function readBack(mint, sigs, { getTx, poolMint = async () => null,
     if (!tx) { failed.push(s.signature); incomplete = true; return; }
     if (!tx.meta || tx.meta.err) return;
     let i = 0, occ = 0;
-    for (const e of eventsFromLogs(tx.meta.logMessages, tx.meta.err)) {
+    for (let e of eventsFromLogs(tx.meta.logMessages, tx.meta.err)) {
       const coin = e.venue === VENUE.curve ? e.mint : await poolMint(e.pool);
       if (coin !== mint) continue;
       const nth = occ++;   // its place among this coin's trades in the transaction, kept or not
+      // A pool quoted in another token: decoded again with its sides, in SOL-equivalents (as the live feed prices it).
+      if (e.venue === VENUE.pumpswap) {
+        const info = poolInfo(e.pool) ?? poolInfoOf(e.pool);
+        if (info?.qmint) { const d = decodeSwap(e.raw, e.buy, info); if (!d) { incomplete = true; continue; } e = { ...e, sol: d.sol, tokens: d.tokens, mcSol: d.mcSol }; }
+      }
       const mcSol = e.mcSol * ((supply(mint) ?? 1e9) / 1e9);   // both venues on the circulating supply, as live
       const t = (tx.blockTime ?? s.blockTime) * 1000 + 500 + i++;
       const px = solUsdAt(t);
@@ -476,16 +504,26 @@ export async function repairGap(gapId, { watched = [], limit = null, only = null
 
 // ---------- upkeep ----------
 // In slices of 200 coins with a pause between, so the radar keeps answering while a day of trades goes.
+// Bounded per pass (PRUNE_ROWS rows, then the next pass carries on where this one stopped): a pass that deleted a
+// day of trades for every coin at once dirtied index pages all over a 1.7 GB table and wrote ~2 GB of write-ahead
+// log in two minutes (2026-10-11 04:37); the checkpointer and the disk fell behind, every write waited seconds and
+// the charts froze with them. Smaller transactions, a real pause between them, and the cursor goes round the coins.
+const PRUNE_ROWS = 40_000, PRUNE_COINS = 50, PRUNE_PAUSE_MS = 40;
+let pruneAt = 0;   // where the last pass stopped in the coin list
 export async function prune(t = now()) {
   const cut = t - KEEP_MS;
   const del = db.prepare("DELETE FROM j_trades WHERE mid = ? AND t < ?");
   let n = 0;
-  const ids = db.prepare("SELECT id FROM j_mints").all();
-  for (let i = 0; i < ids.length; i += 200) {
+  const ids = db.prepare("SELECT id FROM j_mints ORDER BY id").all();
+  if (pruneAt >= ids.length) pruneAt = 0;
+  const start = pruneAt;
+  for (let done = 0; done < ids.length && n < PRUNE_ROWS; done += PRUNE_COINS) {
+    const i = (start + done) % ids.length;
     db.exec("BEGIN");
-    try { for (const { id } of ids.slice(i, i + 200)) n += Number(del.run(id, cut).changes); db.exec("COMMIT"); }
+    try { for (const { id } of ids.slice(i, i + PRUNE_COINS)) n += Number(del.run(id, cut).changes); db.exec("COMMIT"); }
     catch { try { db.exec("ROLLBACK"); } catch {} }
-    await new Promise((go) => setTimeout(go, 5));
+    pruneAt = (i + PRUNE_COINS) % ids.length;
+    await new Promise((go) => setTimeout(go, PRUNE_PAUSE_MS));
   }
   // Coins with nothing left: forgotten (their ids are not reused while any row could still point at them).
   db.prepare("DELETE FROM j_mints WHERE last < ? AND NOT EXISTS (SELECT 1 FROM j_trades WHERE mid = j_mints.id)").run(cut);
@@ -495,7 +533,9 @@ export async function prune(t = now()) {
   // generation began before the cut, every row below that next generation's first id can go.
   const gens = db.prepare("SELECT start, first_id FROM j_wgen ORDER BY start").all();
   for (let i = 0; i + 1 < gens.length && gens[i + 1].start < cut; i++) {
-    db.prepare("DELETE FROM j_wallets WHERE id < ?").run(gens[i + 1].first_id);
+    // A generation is hundreds of thousands of wallet rows: deleted 2,000 at a time with a pause, not in one statement.
+    const old = db.prepare("DELETE FROM j_wallets WHERE id IN (SELECT id FROM j_wallets WHERE id < ? LIMIT 2000)");
+    for (let k = 0; k < 2000; k++) { if (Number(old.run(gens[i + 1].first_id).changes) < 2000) break; await new Promise((go) => setTimeout(go, PRUNE_PAUSE_MS)); }
     db.prepare("DELETE FROM j_wgen WHERE start = ?").run(gens[i].start);
   }
   db.prepare("DELETE FROM j_repairs WHERE gap IN (SELECT id FROM j_gaps WHERE t1 IS NOT NULL AND t1 < ?)").run(cut);

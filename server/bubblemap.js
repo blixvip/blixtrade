@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Bubble maps (the coin page's Bubble map tab): the coin's biggest holders as bubbles sized by their share,
 // joined when the wallets are connected. Built fresh on every read from three sources, so it follows the coin:
 //
@@ -21,7 +22,7 @@
 import { db } from "./db.js";
 import { rpc, validAddress } from "./solana.js";
 import { coinPage } from "./coin.js";
-import { activeUrl, keyUrls, noteCall } from "./heliuskeys.js";
+import { activeUrl, keyUrls } from "./heliuskeys.js";
 import { getJson } from "./sources.js";
 import { coinFomo } from "./fomoboard.js";
 import { pumpPeople } from "./chartpeople.js";
@@ -54,6 +55,7 @@ const getF = db.prepare("SELECT funder FROM bubble_funders WHERE wallet = ?");
 // service (an exchange or bridge Blix has no name for), and sharing it says nothing about who owns a wallet.
 const fundedN = db.prepare("SELECT count(*) AS n FROM bubble_funders WHERE funder = ?");
 const HUB = 8;
+const DISTRIBUTOR = 6;          // holders one outside wallet sent to before it counts as a distributor, not a link
 const putF = db.prepare("INSERT OR REPLACE INTO bubble_funders (wallet, funder, t) VALUES (?, ?, ?)");
 
 export const bubbleStats = { reads: 0, rugcheck: { ok: 0, failed: 0, lastError: null }, traced: 0, day: "", today: 0, lastError: null };
@@ -89,7 +91,7 @@ async function call(method, params) {
   if (!ws) return rpc(method, params);
   const url = ws.replace(/^ws/i, "http");
   for (let tries = 0; ; tries++) {
-    noteCall(url, method);
+
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(20_000) });
     if (r.status === 429 && tries < 5) { await new Promise((ok) => setTimeout(ok, 600 * 2 ** tries + Math.random() * 400)); continue; }
     if (!r.ok) throw new Error(`Helius ${r.status}`);
@@ -241,8 +243,21 @@ function buildMap(mint) {
   const launch = nodes.filter((n) => n.kind === "holder" && (n.tag === "dev" || n.tag === "bundle"));
   if (launch.length > 1) { const dev = launch.find((n) => n.tag === "dev") || launch[0]; for (const n of launch) if (n !== dev) edge(dev.w, n.w, "launch"); }
 
+  // A wallet outside the holders that sent the coin or SOL to many of them is a distributor (an airdrop or rewards
+  // wallet, a bot's relay, a launchpad's fee wallet): receiving from it says nothing about who owns a wallet. One
+  // sent "API" to 111 of its top holders and the map drew a single 67% cluster (2026-10-10). No line passes
+  // through one; it is listed on its own. Counted on transfer links only: one wallet that opened several holders
+  // (a first funder) is still a cluster.
+  const distributors = [];
+  for (const [w, m] of adj) {
+    if (holderAt.has(w)) continue;
+    let k = 0;
+    for (const [y, e] of m) if (holderAt.has(y) && (e.kinds || [e.kind]).includes("transfer") && !(e.kinds || [e.kind]).includes("funded")) k++;
+    if (k >= DISTRIBUTOR) distributors.push({ w, holders: k });
+  }
+  const blocked = new Set(distributors.map((d) => d.w));
   // From each holder, every other holder within 4 hops (breadth-first, never passing through another holder:
-  // that holder has its own lines). These are the candidate lines.
+  // that holder has its own lines, nor a distributor). These are the candidate lines.
   const cands = [];
   for (const [i, n] of nodes.entries()) {
     if (!adj.has(n.w)) continue;
@@ -254,7 +269,7 @@ function buildMap(mint) {
         if (prev.has(y)) continue;
         prev.set(y, x);
         const j = holderAt.get(y);
-        if (j == null) { nextF.push(y); continue; }
+        if (j == null) { if (!blocked.has(y)) nextF.push(y); continue; }
         if (j <= i) continue;
         // Walk back for the path's kinds and, on a single hop, the direction.
         const path = [y]; for (let p = x; p; p = prev.get(p)) path.push(p);
@@ -294,6 +309,7 @@ function buildMap(mint) {
     nodes: outNodes,
     links: links.map(({ a, b, hops, kinds, dir, via }) => ({ a, b, hops, kinds, dir, via: via.slice(0, 3) })),
     clusters,
+    distributors: distributors.sort((a, b) => b.holders - a.holders).slice(0, 5),
     // For a page loaded before 2026-10-10's rewrite (its tab drew `map` after a Generate button).
     map: { nodes: outNodes, links: links.map((l) => [l.a, l.b]), clusters, traced, t: now() }, building: null, rebuildMs: 30 * MIN,
     sources: {
@@ -380,7 +396,7 @@ async function small(method, params) {
   if (!keys.length) return rpc(method, params);
   for (let tries = 0; tries < 6; tries++) {
     const url = keys[tries % keys.length];
-    noteCall(url, method);
+
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(20_000) }).catch(() => null);
     if (r?.ok) { const j = await r.json(); if (j.error) throw new Error(j.error.message || "RPC error"); return j.result; }
     await new Promise((ok) => setTimeout(ok, 300 * 2 ** Math.min(tries, 4) + Math.random() * 300));

@@ -24,6 +24,7 @@ import { holderSummary, parseKnownTokens, knownKey, SOL_NETWORK } from "./known-
 export const RANGES = ["24h", "7d", "30d", "all-time"];
 const FOLLOW_24H = 15, FOLLOW_7D = 10, PAUSE_DAYS = 7;
 const HOUR = 3600e3, DAY = 24 * HOUR, PROFILE_TTL = 6 * HOUR, PER_CALL = 3;
+const SHOW_FRESH = 10 * 60e3;   // an opened profile older than this is read again in the background
 const now = () => Date.now();
 const today = (t = now()) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
@@ -447,8 +448,8 @@ export function board({ range = "24h", day } = {}) {
 }
 const daysOnBoard = (handle, range) => db.prepare("SELECT COUNT(*) n FROM fomo_board WHERE handle = ? AND range = ?").get(handle, range).n;
 
-// One trader's page: their profile (read through Aside when missing or older than PROFILE_TTL, or on
-// ?fresh=1), where they rank on each of today's boards, and their real wallet if found.
+// One trader's page: their profile (read through Aside when missing; when older than SHOW_FRESH, or on
+// ?fresh=1, read again in the background while the kept one is answered), where they rank on each of today's boards, and their real wallet if found.
 const inflight = new Map();
 export async function trader(handle, { fresh = false } = {}) {
   handle = String(handle || "").replace(/^@/, "").trim();
@@ -456,12 +457,14 @@ export async function trader(handle, { fresh = false } = {}) {
   const known = db.prepare("SELECT uid FROM fomo_board WHERE handle = ? COLLATE NOCASE AND uid IS NOT NULL ORDER BY day DESC LIMIT 1").get(handle)?.uid
     || db.prepare("SELECT uid FROM fomo_profiles WHERE handle = ? COLLATE NOCASE").get(handle)?.uid || null;
   let row = known ? profileRow(known) : null;
-  if (fresh || !row || now() - row.t > PROFILE_TTL) {
-    const key = known || handle.toLowerCase();
-    if (!inflight.has(key)) inflight.set(key, fetchProfiles([{ uid: known, handle }], 0).finally(() => inflight.delete(key)));
-    try { await inflight.get(key); } catch (e) { if (!row) throw e; }
+  // A profile on record is answered at once; one older than SHOW_FRESH (or asked fresh) is read again behind it,
+  // so the next look has it. Only a trader never read waits for Fomo.
+  const key = known || handle.toLowerCase();
+  const reread = () => { if (!inflight.has(key)) inflight.set(key, fetchProfiles([{ uid: known, handle }], 0).finally(() => inflight.delete(key))); return inflight.get(key); };
+  if (!row) {
+    await reread();
     row = profileRow(known) || db.prepare("SELECT * FROM fomo_profiles WHERE handle = ? COLLATE NOCASE").get(handle);
-  }
+  } else if (fresh || now() - row.t > SHOW_FRESH) reread().catch(() => {});
   const p = safeJson(row?.data, null);
   if (!p || p.missing) throw Object.assign(new Error(`Fomo has no trader @${handle}.`), { status: 404 });
   delete p.rawSwaps;
@@ -482,7 +485,7 @@ export async function trader(handle, { fresh = false } = {}) {
     const swaps = safeJson(row.data, {})?.rawSwaps;
     if (swaps?.length && !resolving.has(p.uid)) { resolving.add(p.uid); resolveAndStore({ uid: p.uid, handle: p.handle, address: p.address, swaps }).catch(() => {}).finally(() => resolving.delete(p.uid)); }
   }
-  return { ...p, read: row?.t ?? null, ranks, day, history, ...walletInfo(p.uid), resolving: resolving.has(p.uid) };
+  return { ...p, read: row?.t ?? null, ranks, day, history, ...walletInfo(p.uid), resolving: resolving.has(p.uid), updating: inflight.has(key) };
 }
 const resolving = new Set();
 

@@ -2,6 +2,7 @@
 // (wallets that keep showing up early or as top holders in coins that later ran).
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
+import { rpcStreamAllowed, noteRpcBytes } from './heliuskeys.js';
 import * as sol from "./solana.js";
 import * as src from "./sources.js";
 import { handleOf } from "./fomo.js";
@@ -242,11 +243,14 @@ function startStream(emit) {
   const connect = () => {
     if (!alive) return;
     const url = settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : "wss://api.mainnet-beta.solana.com");
+    if (!rpcStreamAllowed(url)) { stream.error = 'RPC shared budget resting'; return setTimeout(connect, 15_000); }
     stream.url = url.replace(/api-key=[^&]+/, "api-key=…");
     try { ws = new WebSocket(url); } catch (e) { stream.error = e.message; return setTimeout(connect, 10_000); }
     subs = new Map(); pending = new Map();
     ws.onopen = () => { stream.connected = true; stream.since = opened = now(); stream.error = null; health.ok("wallet-stream"); sync(); };
     ws.onmessage = (m) => {
+      noteRpcBytes(url, Buffer.byteLength(String(m.data)));
+      if (!rpcStreamAllowed(url)) { try { ws.close(); } catch {} return; }
       let d; try { d = JSON.parse(m.data); } catch { return; }
       if (d.id && pending.has(d.id)) {
         const a = pending.get(d.id); pending.delete(d.id);

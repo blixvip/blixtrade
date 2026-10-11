@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // The developer's share of a coin, from the chain, for coins where neither Jupiter's audit nor RugCheck says it
 // (Jupiter names the dev wallet for most coins but leaves devBalancePercentage out for some). One
 // getTokenAccountsByOwner on the public RPC per coin, at most one every 3 s, kept 5 minutes; asked only for

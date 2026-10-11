@@ -6,6 +6,7 @@
 // bonded coin, comes from GeckoTerminal's OHLCV for the coin's busiest pool (free, cached a minute).
 // A coin that bonded minutes ago has neither (GeckoTerminal takes a while to chart a new pool), so the
 // pool prices the Pulse reads every 2 s are kept as price-only candles until it does.
+import { positive, validTrade, normalizeBars } from "./chart-data.js";
 import fs from "node:fs";
 import path from "node:path";
 import { onLiveTrade, feed } from "./livetrades.js";
@@ -27,7 +28,7 @@ const book = new Map();               // mint -> { b: [[t, o, h, l, c, vUsd, buy
 // copy of the same trade arriving seconds later on a busy link would be stamped late and drag the candle back.
 let isFast = () => false;
 export const setFastCheck = (fn) => { isFast = fn; };
-function onTrade(mint, s, sol, buy, x) { if (isFast(mint)) return; addTrade(mint, s.mc * feed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9), sol * feed.solUsd, s.side === "b", slotTime(x?.slot) ?? now()); }
+function onTrade(mint, s, sol, buy, x) { addTrade(mint, s.mc * feed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9), sol * feed.solUsd, s.side === "b", slotTime(x?.slot) ?? now()); }
 
 // One trade at market cap `mc` (USD) for `vol` USD: the curve feed above, and bonded coins' PumpSwap pool
 // trades (pumpswap.js, through pulse.js), so a bonded coin's chart moves trade by trade too.
@@ -36,18 +37,35 @@ function onTrade(mint, s, sol, buy, x) { if (isFast(mint)) return; addTrade(mint
 const poolLogs = (mint, pool) => import("./cointape.js").then((m) => m.watchPoolLogs(mint, pool)).catch(() => {});
 
 export function addTrade(mint, mc, vol, buy, atMs = now()) {
-  if (!(mc > 0)) return;
+  if (!validTrade(mc, vol, atMs)) return;
   const t = Math.floor(atMs / 1000 / STEP) * STEP;
   let e = book.get(mint);
   if (!e) { e = { b: [] }; book.set(mint, e); }
-  const last = e.b[e.b.length - 1];
-  if (last && last[0] === t) { last[2] = Math.max(last[2], mc); last[3] = Math.min(last[3], mc); last[4] = mc; last[5] += vol; buy ? last[6]++ : last[7]++; }
-  else {
+  const b = e.b, last = b[b.length - 1];
+  if (last && last[0] === t) { last[2] = Math.max(last[2], mc); last[3] = Math.min(last[3], mc); if (atMs >= (e.closeAt ?? last[0] * 1000)) last[4] = mc; last[5] += vol; buy ? last[6]++ : last[7]++; }
+  else if (last && t < last[0]) {
+    // A trade stamped before the newest bucket (a copy read back from a block, the twin stream, a pool trade list
+    // row): into the bucket of its own second, or a new one in time order. Pushed at the end it put the book out of
+    // order (HOD, 2026-10-11: the chart dropped that row, and a coarser size could show two candles for one
+    // interval). Its close is left alone: within a second the order of trades is not known.
+    let i = b.length - 1;
+    while (i >= 0 && b[i][0] > t) i--;
+    const hit = i >= 0 && b[i][0] === t ? b[i] : null;
+    if (hit) { hit[2] = Math.max(hit[2], mc); hit[3] = Math.min(hit[3], mc); hit[5] += vol; buy ? hit[6]++ : hit[7]++; }
+    else if (i >= 0 || b.length < KEEP) {
+      const o = i >= 0 ? b[i][4] : mc;
+      b.splice(i + 1, 0, [t, o, Math.max(o, mc), Math.min(o, mc), mc, vol, buy ? 1 : 0, buy ? 0 : 1]);
+      const next = b[i + 2];   // the bucket after it opens where this one closed
+      if (next) { next[1] = mc; next[2] = Math.max(next[2], mc); next[3] = Math.min(next[3], mc); }
+      if (b.length > KEEP) b.splice(0, b.length - KEEP);
+    }
+  } else {
     // A new bucket opens at the previous close, so candles join up like a real chart.
     const o = last ? last[4] : mc;
-    e.b.push([t, o, Math.max(o, mc), Math.min(o, mc), mc, vol, buy ? 1 : 0, buy ? 0 : 1]);
-    if (e.b.length > KEEP) e.b.splice(0, e.b.length - KEEP);
+    b.push([t, o, Math.max(o, mc), Math.min(o, mc), mc, vol, buy ? 1 : 0, buy ? 0 : 1]);
+    if (b.length > KEEP) b.splice(0, b.length - KEEP);
   }
+  e.closeAt = Math.max(e.closeAt ?? 0, atMs);
   e.last = now();
 }
 
@@ -59,7 +77,13 @@ export function bookAt(mint) {
   return e ? { at: e.last || 0, t: e.b[e.b.length - 1]?.[0] ?? 0 } : null;
 }
 
+function cleanBuckets(b) {
+  return normalizeBars((Array.isArray(b) ? b : []).filter(Array.isArray).map(([time, open, high, low, close, value, buys, sells]) =>
+    ({ time, open, high, low, close, value, buys, sells }))).map(x =>
+    [x.time, x.open, x.high, x.low, x.close, x.value, Number.isFinite(x.buys) && x.buys >= 0 ? x.buys : 0, Number.isFinite(x.sells) && x.sells >= 0 ? x.sells : 0]);
+}
 export function setBook(mint, b) {
+  b = cleanBuckets(b);
   if (b.length) book.set(mint, { b: b.slice(-KEEP), last: now() });
   else book.delete(mint);
 }
@@ -69,7 +93,7 @@ export function setBook(mint, b) {
 // prices, not trades, and the chart's volume pane shows nothing for them.
 const ticks = new Map();              // mint -> { b: [[t, o, h, l, c], ...], last }
 export function priceTick(mint, mc) {
-  if (!(mc > 0)) return;
+  if (!positive(mc)) return;
   const t = Math.floor(now() / 1000 / STEP) * STEP;
   let e = ticks.get(mint);
   if (!e) { e = { b: [] }; ticks.set(mint, e); }
@@ -141,9 +165,25 @@ function supplyOf(mint) {
 async function geckoCandles(mint, tf, ttl = 60_000, pages = 1) {
   const g = GT_TF[tf] || GT_TF[60];
   const key = `${mint}:${tf}`, c = hist.get(key);
-  if (c && now() - c.t < (c.rows.length ? ttl : 60_000) && (c.pages || 1) >= pages) return c.rows;   // "nothing yet" is asked again in a minute
+  if (c && (c.pages || 1) >= pages) {
+    if (now() - c.t < (c.rows.length ? ttl : 60_000)) return c.rows;   // "nothing yet" is asked again in a minute
+    // Candles in hand but old: they go out now and the fresh read runs behind them. The chart's refresh (every
+    // second, 0 ms to spare) used to find them expired, fall to the radar's own candles for one poll and flip back
+    // on the next: two full redraws of every 1m+ chart every 5 minutes. An empty new answer keeps the old candles.
+    if (c.rows.length) {
+      if (!c.busy) { c.busy = true; geckoPages(mint, g, pages).then((rows) => hist.set(key, { rows: rows.length ? rows : c.rows, t: now(), pages }), () => { c.busy = false; c.t = now() - ttl + 30_000; }); }
+      return c.rows;
+    }
+  }
+  const rows = await geckoPages(mint, g, pages);
+  hist.set(key, { rows, t: now(), pages });
+  if (hist.size > 600) for (const [k, v] of hist) if (now() - v.t > 10 * 60_000) hist.delete(k);
+  return rows;
+}
+// GeckoTerminal's candles for the coin's main pool, oldest first, as market caps: `pages` of 1,000 back from now.
+async function geckoPages(mint, g, pages) {
   const pool = await poolOf(mint);
-  if (!pool) { hist.set(key, { rows: [], t: now() }); return []; }
+  if (!pool) return [];
   const sup = supplyOf(mint);
   const page = async (before) => {
     const j = await gecko(`${GT}/pools/${pool}/ohlcv/${g[0]}?aggregate=${g[1]}&limit=1000&currency=usd&token=${mint}${before ? `&before_timestamp=${before}` : ""}`);
@@ -155,8 +195,6 @@ async function geckoCandles(mint, tf, ttl = 60_000, pages = 1) {
     if (!older.length) break;
     rows = [...older.filter((r) => r.time < rows[0].time), ...rows];
   }
-  hist.set(key, { rows, t: now(), pages });
-  if (hist.size > 600) for (const [k, v] of hist) if (now() - v.t > 10 * 60_000) hist.delete(k);
   return rows;
 }
 
@@ -331,12 +369,14 @@ function isPumpCoin(mint) {
 }
 async function ownHistory(mint, tf, since, own) {
   const key = `${mint}:${tf}`;
+  // When the coin was made (ms, 0 unknown): a coin minutes old is on no index yet, and is not waited for there.
+  const bornMs = createdOf(mint), young = bornMs > 0 && now() - bornMs < 3 * 60_000;
   // 1m and up: GeckoTerminal's candles are the chart (complete from the coin's first trade, read from the chain
   // by their indexer, re-read every 2 minutes), the live book only its newest edge. The radar's own gaps, feed
   // outages and retention never show in the history. Not yet on Gecko (a coin minutes old): the book's own.
-  if (tf >= 60) {
+  if (tf >= 60 && !young) {
     let gt = [];
-    try { gt = await soon(geckoCandles(mint, tf, 5 * 60_000, GT_PAGES(tf)), since ? 0 : keyedStats().on ? 3000 : 800); } catch {}
+    try { gt = await soon(geckoCandles(mint, tf, 5 * 60_000, GT_PAGES(tf)), since ? 0 : 250); } catch {}
     if (gt !== SLOW && gt.length) {
       const { all, fresh, gl } = onGecko(gt, own);
       levels.set(`book:${mint}`, { k: 1, t: now() });
@@ -350,9 +390,32 @@ async function ownHistory(mint, tf, since, own) {
   const bornS = tf < 60 ? Math.floor(createdOf(mint) / 1000) : 0, nowS = now() / 1000;
   const reach = tf < 60 && bornS > nowS - 7200 ? Math.min(bornS, nowS - store.REACH(tf) * tf) : nowS - store.REACH(tf) * tf;
   const stored = store.read(mint, tf, since ? since - tf : reach);
-  if (!stored.length) return null;
+  if (!stored.length) {
+    // Seconds old: the store (candleroll.js) has not rolled the first trades yet; the live book holds every one of
+    // them and is the chart, at once. It used to fall through to Jupiter and GeckoTerminal, which have nothing for a
+    // coin this young, and the first chart waited ~1 s on them (2026-10-11).
+    if (!(young && own.length)) return null;
+    levels.set(`book:${mint}`, { k: 1, t: now() });
+    lastShown.set(mint, { close: own[own.length - 1].close, t: now() }); if (lastShown.size > 500) lastShown.delete(lastShown.keys().next().value);
+    return { mint, tf, rows: since ? own.filter((r) => r.time >= since) : own, first: own[0].time, partial: Boolean(since), live: true, source: "Blix", note: null, solUsd: feed.solUsd, chainTo: null };
+  }
   // The live book's buckets from the last stored candle on (it holds the same trades plus the newest ones).
   const lastT = stored[stored.length - 1].time, tail = own.filter((r) => r.time >= lastT);
+  // A bonded coin can trade against a non-SOL quote that the local swap decoder doesn't support.
+  // Once our history stops, use the complete USD-priced provider history below instead of keeping
+  // an old curve chart alive by appending an unrelated current-price tick.
+  // "Stopped" means no trade for 2 minutes: the newest candle's END and the live book's last trade, not the candle's
+  // start, which on 5m+ sizes is up to tf seconds ago while trades are still landing in it (every bonded coin's 5m/15m
+  // chart fell to the slow Jupiter/GeckoTerminal path 60% of the time, ~1 s and "Jupiter 429" blanks, 2026-10-11).
+  // ...and "stopped" is half an hour, not two minutes: a bonded coin pauses for minutes all the time (and a migration
+  // itself is 2-10 quiet minutes), and at two minutes every such chart was handed to Jupiter (429 from this address) and
+  // GeckoTerminal (nothing yet for a new pool), so a freshly migrated coin's chart sat blank ~30 s (2026-10-11 probe).
+  // Even then the answer is only `superseded`, never dropped: candles() uses it when the providers have nothing.
+  let superseded = false;
+  if (Math.max(lastT, own.at(-1)?.time || 0) + tf < nowS - 1800 && (bookAt(mint)?.at || 0) < now() - 1800_000) {
+    const token = db.prepare('SELECT graduated FROM tokens WHERE mint = ?').get(mint);
+    if (token?.graduated) superseded = true;
+  }
   let rows = tail.length ? [...stored.filter((r) => r.time < tail[0].time), ...tail] : stored;
   // Before the radar heard the coin: Jupiter, once per 5 minutes, put on our level where the two meet. A slow
   // Jupiter (over 400 ms) is not waited for: the answer goes out without the prefix and is asked again on the
@@ -393,13 +456,19 @@ async function ownHistory(mint, tf, since, own) {
   levels.set(`book:${mint}`, { k: 1, t: now() });
   lastShown.set(mint, { close: all[all.length - 1].close, t: now() }); if (lastShown.size > 500) lastShown.delete(lastShown.keys().next().value);
   return { mint, tf, rows: since ? all.filter((r) => r.time >= since) : all, first: f.first, partial: Boolean(since), live: now() / 1000 - all[all.length - 1].time < 120,
-    source: pre.length ? "Blix + Jupiter before" : "Blix", note: null, solUsd: feed.solUsd, chainTo: pre.length ? pre[pre.length - 1].time + tf : null };
+    source: pre.length ? "Blix + Jupiter before" : "Blix", note: null, solUsd: feed.solUsd, chainTo: pre.length ? pre[pre.length - 1].time + tf : null, superseded };
 }
 
 export async function candles(mint, tf = 60, since = null) {
   tf = [1, 5, 15, 60, 300, 900, 3600, 14400, 86400].includes(+tf) ? +tf : 60;
   since = Number(since) > 0 ? Number(since) : null;
-  if (isPumpCoin(mint)) { try { const h = await ownHistory(mint, tf, since, fromBook(mint, Math.max(tf, STEP))); if (h) return h; } catch (e) { store.storeStats.readError = e.message; } }
+  // Quarantined quote-currency history is incomplete. Use independent USD history instead of
+  // joining the surviving curve candles directly to today's price across the missing interval.
+  const repairedQuote = db.prepare("SELECT v FROM meta WHERE k = ?").get(`quote_history_v1:${mint}`);
+  // `ownFallback`: our own history when a bonded coin's trades stopped long ago (superseded by the providers' USD
+  // history below); it is still the answer when they have nothing, so the chart is never blank.
+  let ownFallback = null;
+  if (!repairedQuote && isPumpCoin(mint)) { try { const h = await ownHistory(mint, tf, since, fromBook(mint, Math.max(tf, STEP))); if (h && !h.superseded) { delete h.superseded; return h; } if (h) { delete h.superseded; ownFallback = h; } } catch (e) { store.storeStats.readError = e.message; } }
   // A bonded coin outside PumpSwap: its pool is read on-chain while the chart is open (poolwatch.js), since
   // Jupiter's candles trail the chain by 6-10 s. PumpSwap pools are already read trade by trade (pumpswap.js).
   const tok = db.prepare("SELECT graduated, dex, pair FROM tokens WHERE mint = ?").get(mint);
@@ -413,7 +482,7 @@ export async function candles(mint, tf = 60, since = null) {
   // prices on its newest edge; Jupiter only when Gecko has nothing for the coin.
   if (tf >= 60) {
     let gt = [];
-    try { gt = await soon(geckoCandles(mint, tf, 5 * 60_000, GT_PAGES(tf)), since ? 0 : keyedStats().on ? 3000 : 800); } catch {}
+    try { gt = await soon(geckoCandles(mint, tf, 5 * 60_000, GT_PAGES(tf)), since ? 0 : 250); } catch {}
     if (gt !== SLOW && gt.length) {
       const { all, fresh, bridge, gl } = onGecko(gt, own, snaps);
       levels.set(`book:${mint}`, { k: 1, t: now() });
@@ -465,6 +534,7 @@ export async function candles(mint, tf = 60, since = null) {
   const all = [...before, ...own, ...after, ...bridge];
   const rows = since ? all.filter((r) => r.time >= since) : all;
   const source = [own.length && "live trades", (before.length || after.length) && "GeckoTerminal", bridge.length && "pool prices (no volume)"].filter(Boolean).join(" + ") || null;
+  if (!all.length && ownFallback) return ownFallback;   // the providers have nothing: our own candles, never a blank chart
   return { mint, tf, rows, first: all[0]?.time ?? null, partial: Boolean(since), live: own.length > 0 && now() / 1000 - ownEnd < 120, source, note, solUsd: feed.solUsd };
 }
 
@@ -498,10 +568,18 @@ async function saveState() {
 export function loadState(file = STATE_FILE) {
   try {
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!(now() - j.t < RESUME_MS)) return 0;
+    if (!Number.isFinite(j.t) || j.t > now() || now() - j.t >= RESUME_MS) return 0;
     // Pool prices saved before 2026-10-05 for non-pump.fun coins could be scaled by a wrong 1B supply; those are
     // re-read within seconds, so only pump.fun coins' saved pool prices are kept.
-    for (const [name, map] of [["book", book], ["ticks", ticks]]) for (const [mint, last, b] of j[name] || []) if (!map.has(mint) && Array.isArray(b) && (name === "book" || /pump$/.test(mint))) map.set(mint, { b, last });
+    for (const [name, map] of [["book", book], ["ticks", ticks]]) {
+      for (const row of Array.isArray(j[name]) ? j[name] : []) {
+        if (!Array.isArray(row)) continue;
+        const [mint, last, b] = row;
+        if (typeof mint !== "string" || map.has(mint) || !Number.isFinite(last) || last > now() || now() - last >= RESUME_MS || (name === "ticks" && !/pump$/.test(mint))) continue;
+        const clean = cleanBuckets(b).slice(-KEEP);
+        if (clean.length) map.set(mint, { b: clean, last });
+      }
+    }
     candleStats.restored = book.size + ticks.size;
   } catch {}
   return candleStats.restored;

@@ -39,7 +39,7 @@ async function readUsage(slot) {
     const pctUsed = limit ? Math.round((used / limit) * 1000) / 10 : null;
     st.usage = { used, remaining, limit, pctUsed, plan: j.subscriptionDetails?.plan || "", cycleStart: cycle.start || null, cycleEnd: cycle.end || null, resetAt: Number.isFinite(resetAt) ? resetAt : null, prepaidRemaining: +j.prepaidCreditsRemaining || 0, byService: j.credits || null };
     st.fetchedAt = Date.now(); st.error = null;
-    if (pctUsed != null) markMonth(slot.url, pctUsed, st.usage.resetAt);
+    if (pctUsed != null) markMonth(slot.url, pctUsed, st.usage.resetAt, st.usage);
     health.ok("helius");
   } catch (e) {
     st.error = String(e?.message || e).slice(0, 200);

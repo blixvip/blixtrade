@@ -118,6 +118,12 @@ export const DEFAULTS = {
   // the server this PC hands its Fomo sign-in token to (fomorelay.js), e.g. https://origin.blixvip.com; blank = none
   fomoRelayTo: "",
   runningAi: false,          // Narratives' "Running now" grouped by Claude on this PC (running-ai.js); off: Blix's own themes
+  // Narratives desk (desk.js): Grok researches and writes the day's narratives and runners. grokLanes: the Grok lanes
+  // that stay on while grokOff is true (the owner allowed "desk" on 2026-10-10).
+  desk: true,
+  deskModel: "grok-4.7",
+  deskBudget: 5,             // dollars of Grok credit the desk may spend a day, paced through the day (0 = no limit); 5 = the owner's 5% of a $100 plan
+  grokLanes: [],
   // paper desk: the one-click buy buttons on every Pulse row (SOL sizes) and the exit rule each new paper position starts with (0 = none)
   quickSizes: ["0.1", "0.25", "0.5", "1"],
   paperTake: 0,              // sell everything at this multiple

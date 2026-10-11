@@ -1,10 +1,11 @@
+import { rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 // Live pump.fun trade feed, free: subscribe to the pump.fun program's logs over a Solana RPC websocket
 // (the public one works, ~50 trades/s) and decode each TradeEvent (mint, SOL size, side, trader,
 // virtual + real reserves). From that every coin on the bonding curve gets a live market cap, exact
 // bonding progress, buys/sells, volume and trader count, pushed to the Pulse page as they happen.
 import fs from "node:fs";
 import path from "node:path";
-import { DATA } from "./db.js";
+import { DATA, db } from "./db.js";
 import { settings } from "./settings.js";
 import { setSolPrice } from "./research.js";
 import { jupiterGet } from "./jupiter.js";
@@ -45,7 +46,7 @@ export const twinOf = (main) => PUBLIC_WS_POOL.find((u) => u !== main) || PUBLIC
 // feed has moved onto its endpoint (checked every 10 s).
 export function startTwin(stats, mainUrl, request, onEvent) {
   let stop = null;
-  const go = () => { stop = startRpcStream({ url: () => (stats.url = twinOf(mainUrl())), request, onStatus: ({ connected }) => { stats.connected = connected; }, onEvent: (d) => { stats.msgs++; stats.lastMsg = now(); onEvent(d); } }); };
+  const go = () => { stop = startRpcStream({ admit: rpcStreamAllowed, meter: noteRpcBytes, url: () => (stats.url = twinOf(mainUrl())), request, onStatus: ({ connected }) => { stats.connected = connected; }, onEvent: (d) => { stats.msgs++; stats.lastMsg = now(); onEvent(d); } }); };
   go();
   setInterval(() => { if (stats.url && mainUrl() === stats.url) { stats.moved = (stats.moved || 0) + 1; try { stop?.(); } catch {} go(); } }, 10_000).unref?.();
 }
@@ -139,6 +140,9 @@ export function recordTrade({ mint, sol, tokens, buy, user, mcSol, progress, vSo
   if (!s) { s = { mint, first: now(), mc0: mcSol, ath: mcSol, buys: 0, sells: 0, vol: 0, traders: new Set(), hist: [] }; if (pad) s.pad = pad; live.set(mint, s); }
   s.mc = mcSol; s.ath = Math.max(s.ath, mcSol); s.last = now(); s.side = buy ? "b" : "s";
   s.progress = Math.max(0, Math.min(1, progress));
+  // The curve just filled: pump.fun now moves the coin to its PumpSwap pool, and until that pool trades nothing can
+  // be bought or sold (migrationOf below).
+  if (s.progress >= 0.999 && !s.completeAt && !s.pool) s.completeAt = now();
   // The curve's reserves after this trade, so a buy or sell can be quoted as the chain would fill it.
   s.vSol = vSol; s.vTok = vTok; s.resT = now();
   if (feeBps) s.feeBps = feeBps;
@@ -182,6 +186,34 @@ export function curveLiqUsd(mcapUsd, usd = feed.solUsd) {
 
 // What a row needs, in USD. `liq`: both sides of the pool, the way DexScreener and Axiom count it (on the curve
 // the virtual SOL reserve, as /api/sparks already shows it; in a PumpSwap pool its SOL side), or null when unknown.
+// A coin between its full bonding curve and its first PumpSwap trade: pump.fun is migrating it and every trade fails
+// meanwhile. { since } or null. Three minutes at most: a real migration takes seconds, and a pool trade the feed
+// missed must not hold a coin there (it was 15 minutes; a bonded coin sat on "Migrating" for all of it, 2026-10-11).
+// The page applies the same limit (web components/Migrating.tsx MIGRATE_MAX_MS).
+export const MIGRATE_MAX_MS = 3 * 60_000;
+// The pool's trades can be missed by the feed, so the token's own record is asked too: once it says the coin has
+// bonded into a pool (graduated, or a pair that is not the curve's), the migration is over. Without this a bonded
+// "Machinefun" sat on "Migrating" in Discover for its whole 15 minutes while its pool traded (2026-10-11).
+const bondedRow = db.prepare("SELECT graduated, dex, pair_created FROM tokens WHERE mint = ?");
+const bondedSeen = new Map();   // mint -> when last asked (at most once every 5 s a coin)
+export function migrationOf(mint) {
+  const s = live.get(mint);
+  if (!s?.completeAt || s.pool || s.pad || now() - s.completeAt > MIGRATE_MAX_MS) return null;
+  if (now() - (bondedSeen.get(mint) || 0) > 5000) {
+    bondedSeen.set(mint, now());
+    if (bondedSeen.size > 2000) bondedSeen.clear();
+    let r = null;
+    try { r = bondedRow.get(mint); } catch {}
+    if (r && (r.graduated || (r.dex && r.dex !== "pumpfun" && r.pair_created))) { s.pool = true; return null; }
+  }
+  return { since: s.completeAt };
+}
+
+// The refusal a buy or sell gets while its coin migrates (every trade route checks it), else null.
+export function migrationBlock(mint) {
+  return migrationOf(mint) ? "This coin is migrating to its PumpSwap pool. Trading opens again in a few seconds, as soon as the pool is live." : null;
+}
+
 export function liveStats(mint) {
   const s = live.get(mint);
   if (!s) return null;
@@ -260,7 +292,7 @@ export function pumpLogs(v, slot = null, src = null) {
 }
 
 function connect() {
-  startRpcStream({
+  startRpcStream({ admit: rpcStreamAllowed, meter: noteRpcBytes,
     url: () => (feed.url = rpcWsUrl()),
     request: { method: "logsSubscribe", params: [{ mentions: [PUMP] }, { commitment: "processed" }] },
     behind: () => behindOf("pump"),   // minutes of queued logs are dropped for a fresh subscription (rpc-stream.js)

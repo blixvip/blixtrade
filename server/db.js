@@ -200,7 +200,9 @@ export function thinSnapshots(now = Date.now()) {
 const yieldNow = () => new Promise((r) => setImmediate(r));
 async function sliced(sql, ...args) {
   const st = db.prepare(sql);
-  for (let i = 0; i < 500; i++) { if (Number(st.run(...args).changes) < 2000) return; await yieldNow(); }
+  // A real pause between slices (not only a turn of the event loop): back to back, 500 slices wrote their dirtied
+  // index pages to the write-ahead log faster than the checkpointer and the disk could fold them (2026-10-11).
+  for (let i = 0; i < 500; i++) { if (Number(st.run(...args).changes) < 2000) return; await new Promise((go) => setTimeout(go, 40)); }
 }
 export async function prune() {
   const now = Date.now();

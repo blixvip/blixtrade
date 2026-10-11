@@ -1,3 +1,4 @@
+import { rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 // Live trades and launches from Raydium LaunchLab, the program behind Bonk (letsbonk.fun) and the other
 // launchpads built on it. Free, the same way as pump.fun: the program prints every TradeEvent and
 // PoolCreateEvent in its logs, so one websocket subscription shows the whole market.
@@ -149,7 +150,7 @@ async function save() {
 
 export function startLaunchLab() {
   load();
-  startRpcStream({
+  startRpcStream({ admit: rpcStreamAllowed, meter: noteRpcBytes,
     url: rpcWsUrl,
     request: { method: "logsSubscribe", params: [{ mentions: [LAUNCHLAB] }, { commitment: "processed" }] },
     onStatus: ({ connected, error }) => { labStats.connected = connected; labStats.error = error; if (connected) labStats.lastMsg = now(); },

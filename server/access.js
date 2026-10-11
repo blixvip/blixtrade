@@ -4,8 +4,11 @@
 // this PC, or remotely with the access key.
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
 const OPEN = [
-  /^\/api\/(me|pulse|overview|bot|signals|tokens|discover|running|xcard|sparks|market|narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/,
-  new RegExp(`^/api/(holders|candles|token|research|fomo/bars|gecko/price|replay)/${MINT}$`),   // fomo/bars: the coin's Fomo chart (fomochart.js)
+  /^\/api\/metrics$/,
+  /^\/api\/(me|pulse|overview|bot|signals|tokens|discover|running|desk|xcard|sparks|market|narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/,
+  // fomo/bars: the coin's Fomo chart (fomochart.js). chartfocus: the TradingView chart (coins past their first day) marks
+  // itself open so the radar sends its trades live; refused, a member's chart moved only on Jupiter's trailing candles.
+  new RegExp(`^/api/(holders|candles|token|research|fomo/bars|gecko/price|replay|chartfocus)/${MINT}$`),
   new RegExp(`^/api/coin/${MINT}(/trades|/big)?$`),
   /^\/api\/replay\/peaks$/,   // Practice list: highs of the day (replay.js)
   /^\/api\/fast\/stream$/,   // the open chart's price stream (fastlane.js): one coin's price, nothing of the owner's
@@ -33,6 +36,11 @@ const MEMBER_READS = [
   // fomo/known: the Pulse rows' faces; feed/hot: the Feed page's most-bought coins (both refused before: blank faces, empty list).
   /^\/api\/(fomo|fomo\/board|fomo\/feed|fomo\/list|fomo\/known|feed\/stream|feed\/hot|pump\/feed|pump\/board|x|narrative-feed|ext-sparks|picks\/all)$/,
   /^\/api\/fomo\/trader\/[A-Za-z0-9_.-]{1,64}$/,
+  // Any wallet's page from the chain (walletpage.js), a followed wallet's PnL detail and the smart-money ranking: reads
+  // only, and what the /api docs promise an account. Following, labels and the owner's own list stay the owner's
+  // (server.js answers a member with less on /api/wallets and /api/wallet/<address>).
+  /^\/api\/wallets$/,
+  new RegExp(`^/api/(wallet|wallet-page)/${MINT}$`),
   /^\/api\/banner$/,               // a coin's DexScreener banner for Discover's coin card (banner.js)
   new RegExp(`^/api/coin/${MINT}/(people|callouts|fomo)$`),
 ];

@@ -7,7 +7,7 @@
 // maxBehind 60 (~24 s): a public node itself sits 20-40 slots behind the tip at busy hours (2026-10-07), and
 // resubscribing for that only opened a gap every minute. A lag resubscription reconnects at once, not after
 // the 3 s a dead socket waits, so the gap it opens is the handshake alone.
-export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStatus = () => {}, onEvent = () => {}, silentMs = 30_000, behind = null, maxBehind = 60 }) {
+export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStatus = () => {}, onEvent = () => {}, silentMs = 30_000, behind = null, maxBehind = 60, admit = () => true, meter = () => {} }) {
   let socket, timer, retry, stopped = false, upAt = 0, lateSince = 0;
   const lagCheck = behind && setInterval(() => {
     if (!socket || !upAt || Date.now() - upAt < 15_000) { lateSince = 0; return; }
@@ -37,9 +37,13 @@ export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStat
     if (stopped) return;
     onStatus({ connected: false, error: null });
     let ws;
-    try { socket = ws = new WebSocketImpl(url()); }
+    const endpoint = url();
+    if (!admit(endpoint)) { fail('RPC shared budget resting', 15_000); return; }
+    try { socket = ws = new WebSocketImpl(endpoint); }
     catch { fail("RPC connection failed"); return; }
-    let subscribed = false;
+    let subscribed = false, admitAt = 0, admitOk = true;
+    // The budget check once a second, not on every message (a busy program's logs: 100 a second).
+    const admitted = () => { const t = Date.now(); if (t - admitAt > 1000) { admitAt = t; admitOk = admit(endpoint); } return admitOk; };
     watch(10_000, "RPC subscription timed out");
     ws.onopen = () => {
       if (socket !== ws) return;
@@ -48,6 +52,8 @@ export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStat
     };
     ws.onmessage = (message) => {
       if (socket !== ws) return;
+      meter(endpoint, typeof message.data === "string" ? message.data.length : Buffer.byteLength(String(message.data)));
+      if (!admitted()) { fail('RPC shared budget resting', 15_000); return; }
       let data;
       try { data = JSON.parse(message.data); } catch { return; }
       if (!data || typeof data !== "object") return;

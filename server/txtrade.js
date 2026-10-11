@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // One swap of a coin, read from its transaction, for pools whose logs say nothing decodable (Raydium, Orca,
 // Meteora). chartstream.js hears the signature within the slot; the transaction is fetched at "confirmed"
 // (about a second later) from the per-coin RPC, and the trade is read from the token balances before and

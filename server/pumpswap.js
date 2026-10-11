@@ -1,3 +1,4 @@
+import { rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 // Live PumpSwap trades (pump.fun's own pool program, where a coin goes when it bonds), straight from the
 // chain: subscribe to the program's logs at "processed" and decode each BuyEvent / SellEvent. Every event
 // carries the pool's reserves before the trade, so the price after it is exact and lands within a slot,
@@ -10,7 +11,8 @@
 // with the sides swapped, and priced only when Jupiter knows the coin's supply (it is not a 1B pump.fun coin).
 import { startRpcStream } from "./rpc-stream.js";
 import { noteSlot, behindOf } from "./feedlag.js";
-import { b58, rpcWsUrl, sigGate, dupes, live, twin, twinOn, startTwin } from "./livetrades.js";
+import { b58, rpcWsUrl, sigGate, dupes, live, twin, twinOn, startTwin, feed as liveFeed } from "./livetrades.js";
+import { quoteUsd } from "./pumpquote.js";
 import { rpc } from "./solana.js";
 import { db } from "./db.js";
 import { supplyOf } from "./jup.js";
@@ -23,6 +25,8 @@ const now = () => Date.now();
 
 const poolMint = new Map();   // pool -> coin mint, or null for a pool not priced here
 const pending = new Map();    // pool -> its latest event while the pool is being looked up
+const firstSeen = new Map();  // pool -> when its first event was heard, until the pool is known
+const readBackAt = new Map(); // mint -> when its fresh pool was last read back (side pools open within minutes: once per coin)
 export const swapFeed = { connected: false, lastMsg: 0, trades: 0, priced: 0, lookups: 0, pools: 0, error: null, sidePool: 0, unpriced: 0 };
 // Kept on a function (ready before any module code runs), so a module that registers while this one is
 // still loading (an import cycle) cannot hit an uninitialized binding.
@@ -34,13 +38,23 @@ export function onPoolTrade(fn) { listeners().push(fn); }
 export const poolOfEvent = (buf) => buf.length >= POOL_AT + 64 ? b58(buf.subarray(POOL_AT, POOL_AT + 32)) : null;
 // `rev`: SOL is the pool's base and the coin its quote, so the event's sides are read the other way round (a
 // BuyEvent buys SOL with the coin: a sell of the coin). `dec`: the coin's decimals (6 on pump.fun).
-export function decode(buf, buy, { rev = false, dec = 6, supply = false } = {}) {
+export function decode(buf, buy, { rev = false, dec = 6, supply = false, qmint = null, qdec = 9 } = {}) {
   if (buf.length < POOL_AT + 64) return null;
   const u = (i) => buf.readBigUInt64LE(8 + i * 8);
-  const lpFee = u(9);
+  let lpFee = u(9);
   let amount = u(1), quote = u(7);
   // Reserves are the pool's before the trade (checked against the next event's: they match); move them on.
   let baseR = u(5), quoteR = u(6);
+  // A pool quoted in another token (PUMP, a dollar coin, another coin: since 2026-10 a coin can bond into one):
+  // its quote amounts become SOL-equivalents at the quote's dollar price, so the price, the depth and the cap
+  // read as for a SOL pool. Unpriceable yet (no quote price, no SOL price): null, like a pool awaiting its
+  // supply. Read as SOL, a PUMP-quoted pool's trades came out 13-20x too high (714We6BW, DZ6Q25aa, 2026-10-10).
+  if (qmint && qmint !== WSOL) {
+    const q = quoteUsd(qmint), s = liveFeed.solUsd;
+    if (!q || !(s > 0)) return null;
+    const f = (q.usd / 10 ** qdec) / s * 1e9, cv = (x) => BigInt(Math.round(Number(x) * f));
+    quote = cv(quote); quoteR = cv(quoteR); lpFee = cv(lpFee);
+  }
   if (buy) { baseR -= amount; quoteR += quote + lpFee; } else { baseR += amount; quoteR -= quote - lpFee; }
   if (baseR <= 0n || quoteR <= 0n) return null;
   if (rev) { [amount, quote] = [quote, amount]; [baseR, quoteR] = [quoteR, baseR]; buy = !buy; }
@@ -116,6 +130,11 @@ async function lookup() {
           // Another coin the radar lists, in a normal pool: priced once Jupiter says its supply (emit()).
           else if (tracked(base)) { mint = base; info = { rev: false, dec: await decimalsOf(base), supply: true }; }
         } else if (base === WSOL && quote !== WSOL && (quote.endsWith("pump") || tracked(quote))) { mint = quote; info = { rev: true, dec: await decimalsOf(quote), supply: true }; }
+        // The coin against another token (PUMP, a dollar coin, another coin): priced at the quote's dollar price (decode).
+        else if (quote !== WSOL && base !== WSOL && (isPump(base) || tracked(base))) {
+          const qdec = await decimalsOf(quote);
+          if (qdec != null) { mint = base; info = { rev: false, dec: isPump(base) ? 6 : await decimalsOf(base), supply: !isPump(base), qmint: quote, qdec }; quoteUsd(quote); }
+        }
       } else if (!a) {
         // Not on the node yet (just created), or the radar already knows the pair from the tokens table.
         const known = knownPair(pool);
@@ -155,12 +174,27 @@ const unpricedAt = new Map();   // pool -> when it was found not to be priced he
 // skipped; journalfeed.js reads them back from the chain).
 const learned = [];
 export const onPoolLearned = (fn) => learned.push(fn);
+// What this feed knows of a pool, for trades read back from the chain (journalfeed.js): the coin (undefined:
+// never heard, null: not priced here) and its sides.
+export const knownMint = (pool) => poolMint.get(pool);
+export const poolInfoOf = (pool) => poolInfo.get(pool) ?? null;
 function remember(pool, mint, info = null) {
-  if (poolMint.size > 60_000) { poolMint.clear(); unpricedAt.clear(); poolInfo.clear(); }
+  if (poolMint.size > 60_000) { poolMint.clear(); unpricedAt.clear(); poolInfo.clear(); firstSeen.clear(); }
   if (info) poolInfo.set(pool, info); else poolInfo.delete(pool);
   const missedSince = mint && poolMint.get(pool) === null ? unpricedAt.get(pool) : null;
+  // A fresh migration's pool, heard for the first time: between its first event and this answer only its latest
+  // event was kept, and those first seconds (snipers moving the price most, a 3x in a minute on 3DqVEvHW,
+  // 2026-10-10) drew as one tall candle. Read back from the chain, as a pool mistaken for "not ours" is.
+  // Only for a coin whose curve filled minutes ago (livetrades.js completeAt): after a restart every live pool is
+  // heard anew, and a guard on "traded lately" read back 1,300 pools in six minutes (2026-10-11 03:49 UTC).
+  const s = mint && !poolMint.has(pool) ? live.get(mint) : null;
+  let fresh = s?.completeAt && now() - s.completeAt < 10 * 60_000 ? firstSeen.get(pool) ?? null : null;
+  if (fresh && now() - (readBackAt.get(mint) || 0) < 10 * 60_000) fresh = null;
+  if (fresh) { readBackAt.set(mint, now()); if (readBackAt.size > 5000) readBackAt.delete(readBackAt.keys().next().value); }
+  firstSeen.delete(pool);
   poolMint.set(pool, mint);
-  if (missedSince) for (const fn of learned) { try { fn(mint, missedSince - 5000); } catch {} }
+  const since = missedSince ?? fresh;
+  if (since) for (const fn of learned) { try { fn(mint, since - 5000); } catch {} }
   if (mint === null) unpricedAt.set(pool, Date.now()); else unpricedAt.delete(pool);
   swapFeed.pools = poolMint.size;
 }
@@ -199,7 +233,7 @@ export function swapLogs(v, slot = null, src = null) {
     const mint = poolMint.get(pool), buy = disc === BUY;
     if (mint) { const e = decode(buf, buy, poolInfo.get(pool)); if (e) emit(mint, e, slot, v.signature || null); }
     // A pool not priced here is looked at again after 10 minutes (an answer read mid-migration is not final).
-    else if (mint === undefined || (mint === null && Date.now() - (unpricedAt.get(pool) || 0) > 10 * 60_000)) { pending.set(pool, { buf, buy, slot, sig: v.signature || null }); lookSoon(); }
+    else if (mint === undefined || (mint === null && Date.now() - (unpricedAt.get(pool) || 0) > 10 * 60_000)) { if (!firstSeen.has(pool)) firstSeen.set(pool, now()); pending.set(pool, { buf, buy, slot, sig: v.signature || null }); lookSoon(); }
     else swapFeed.unpriced++;
   }
 }
@@ -213,7 +247,7 @@ export function startPumpSwap() {
     noteSlot("pumpswap-twin", d.params?.result?.context?.slot);
     swapLogs(d.params?.result?.value, d.params?.result?.context?.slot ?? null, "twin");
   });
-  return startRpcStream({
+  return startRpcStream({ admit: rpcStreamAllowed, meter: noteRpcBytes,
     url: () => (swapFeed.url = rpcWsUrl()),
     request: { method: "logsSubscribe", params: [{ mentions: [AMM] }, { commitment: "processed" }] },
     behind: () => behindOf("pumpswap"),

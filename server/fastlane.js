@@ -8,6 +8,7 @@
 // Node built-ins only: this thread must start fast and never wait on the radar's modules.
 import http from "node:http";
 import { parentPort, workerData } from "node:worker_threads";
+import { createPriceGuard } from "./price-guard.js";
 
 const PORT = workerData?.port || 4423;
 const now = () => Date.now();
@@ -37,6 +38,7 @@ function sub(key, acct, fn) {
   };
 }
 function close() {
+  flushMeter();
   const old = m.ws; m.ws = null;
   m.asked.clear(); m.byId.clear();
   for (const x of m.subs.values()) x.sid = null;
@@ -57,7 +59,7 @@ function connect() {
   sock.onmessage = (msg) => {
     if (m.ws !== sock) return;
     const text = typeof msg.data === "string" ? msg.data : Buffer.from(msg.data).toString();
-    bytes += text.length;
+    bytes += Buffer.byteLength(text);
     let d; try { d = JSON.parse(text); } catch { return; }
     if (d.method && d.params && m.byId.has(d.params.subscription)) {
       const slot = d.params.result?.context?.slot;
@@ -81,14 +83,18 @@ function tidy() {
 }
 // Bytes and the newest slot go to the main thread in one message a second (its daily budget and lag figures).
 let bytes = 0, lastSlot = 0;
-setInterval(() => { if (bytes || lastSlot) post({ op: "meter", bytes, slot: lastSlot }); bytes = 0; lastSlot = 0; }, 1000).unref?.();
+function flushMeter() { if (bytes || lastSlot) post({ op: "meter", bytes, slot: lastSlot, url: m.url }); bytes = 0; lastSlot = 0; }
+setInterval(flushMeter, 250).unref?.();
 
 // ---------- pricing (as fastpx.js described) ----------
+const guard = createPriceGuard();
+const latest = new Map();
 function emit(mint, mcSol, sol, buy, slot) {
-  if (!(mcSol > 0) || mcSol > 1e8) return;
+  if (!guard.accept(mint, mcSol, slot)) return;
+  latest.set(mint, { mcSol, at: now(), buy, slot });
   post({ op: "px", mint, mcSol, sol, buy, slot });
   const k = mult.get(mint), usd = solUsdOf.get(mint);
-  if (k > 0 && usd > 0) push(mint, [mint, now(), +(mcSol * k).toPrecision(8), +(sol * usd).toFixed(2), buy ? 1 : 0, slot]);
+  if (k > 0 && usd > 0) push(mint, [mint, now(), +(mcSol * k).toPrecision(8), 0, buy ? 1 : 0, slot]);
 }
 const solUsdOf = new Map();   // mint -> SOL price in USD, posted with its multiplier
 
@@ -102,7 +108,6 @@ function watchCurve(mint, curve, w) {
     if (!(vTok > 0)) return;
     const d = lastSol == null ? 0 : vSol - lastSol;
     lastSol = vSol;
-    if (d === 0) return;
     emit(mint, (vSol / vTok) * 1e9, Math.abs(d), d > 0, res?.context?.slot ?? null);
   }));
 }
@@ -115,7 +120,7 @@ function watchPool(mint, baseV, quoteV, w, virt = 0) {
     timer = null;
     const dB = delta.base, dQ = delta.quote;
     delta.base = 0; delta.quote = 0;
-    if (!(last.base > 0) || !(last.quote + virt > 0)) return;
+    if (!(last.base > 0) || !(last.quote + virt > 0) || slot.base !== slot.quote) return;
     const ratio = ((last.quote + virt) / last.base) * 1e9;   // virt: the pool's virtual SOL (fastpx.js), part of its price
     const buy = dB < 0 && dQ > 0, sell = dB > 0 && dQ < 0;
     if ((buy || sell) && Math.abs(dQ) >= 0.0005) {
@@ -148,12 +153,18 @@ function unwatch(mint) {
   if (!w) return;
   for (const s of w.stops) try { s(); } catch {}
   watches.delete(mint);
+  latest.delete(mint); mult.delete(mint); solUsdOf.delete(mint);
   tidy();
 }
 
 parentPort.on("message", (msg) => {
   if (msg.op === "cfg") { url = msg.url || ""; overBudget = Boolean(msg.overBudget); tidy(); }
-  else if (msg.op === "mult") { mult.set(msg.mint, msg.k); solUsdOf.set(msg.mint, msg.solUsd); }
+  else if (msg.op === "mult") {
+    const changed = mult.get(msg.mint) !== msg.k;
+    mult.set(msg.mint, msg.k); solUsdOf.set(msg.mint, msg.solUsd);
+    const quote = latest.get(msg.mint);
+    if (changed && msg.k > 0 && quote && now() - quote.at < 60_000) push(msg.mint, [msg.mint, quote.at, +(quote.mcSol * msg.k).toPrecision(8), 0, quote.buy ? 1 : 0, quote.slot]);
+  }
   else if (msg.op === "unwatch") unwatch(msg.mint);
   else if (msg.op === "watch") {
     if (watches.has(msg.mint)) return;
@@ -170,7 +181,7 @@ function push(mint, row) {
   const set = clients.get(mint);
   if (!set?.size) return;
   const line = `event: trade\ndata: ${JSON.stringify({ u: [row] })}\n\n`;
-  for (const res of set) try { res.write(line); } catch {}
+  for (const res of set) try { if (res.writableLength > 128 * 1024) { res.end(); continue; } res.write(line); } catch {}
 }
 const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const server = http.createServer((req, res) => {
@@ -187,7 +198,7 @@ const server = http.createServer((req, res) => {
   res.on("close", () => { set.delete(res); if (!set.size) clients.delete(mint); });
 });
 setInterval(() => {
-  for (const [mint, set] of clients) { post({ op: "want", mint }); for (const res of set) try { res.write(": k\n\n"); } catch {} }
+  for (const [mint, set] of clients) { post({ op: "want", mint }); for (const res of set) try { if (res.writableLength > 128 * 1024) { res.end(); continue; } res.write("event: tick\ndata: {}\n\n"); } catch {} }
 }, 5000).unref?.();
 // A radar that is restarting may still hold the port for a moment: try again until it lets go.
 server.on("error", (e) => { post({ op: "error", message: e.message }); if (e.code === "EADDRINUSE") setTimeout(() => server.listen(PORT, "127.0.0.1"), 2000); });

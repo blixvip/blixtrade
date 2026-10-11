@@ -27,7 +27,7 @@ import zlib from "node:zlib";
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
 // Market data: the same for everyone, and nothing the reader does changes it.
 const MARKET = [
-  /^\/api\/(overview|market|sparks|ext-sparks|tokens|signals|narratives|narrative-feed|clusters|perf|health|briefs|events|fomo\/list|fomo\/feed|pump\/feed|pump\/board|triage|journal|discover|running|feed\/hot)$/,
+  /^\/api\/(overview|market|sparks|ext-sparks|tokens|signals|narratives|narrative-feed|clusters|perf|health|briefs|events|fomo\/list|fomo\/feed|pump\/feed|pump\/board|triage|journal|discover|running|desk|feed\/hot)$/,
   new RegExp(`^/api/(holders|candles)/${MINT}$`),
   new RegExp(`^/api/coin/${MINT}/(trades|big|people|callouts|fomo)$`),
 ];

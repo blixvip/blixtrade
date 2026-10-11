@@ -2,6 +2,7 @@
 // its latest trades, for any Solana coin. The coin page's chart and trade list use it first; GeckoTerminal,
 // whose small allowance is shared with discovery (gtgate.js), is only the fallback. Answers are cached briefly
 // per coin and size, and at most a few requests run at once.
+import { MAJOR_MINTS } from "./quality.js";
 const API = "https://datapi.jup.ag";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
 const now = () => Date.now();
@@ -35,8 +36,8 @@ function memo(key, ttl, fn, stale = false) {
   const c = cache.get(key);
   if (c && (c.p || now() - c.t < (c.err ? 10_000 : ttl))) return c.p || (c.err ? Promise.reject(c.err) : Promise.resolve(c.v));
   if (stale && c && !c.err && "v" in c && now() - c.t < (stale === true ? 30 * 60_000 : stale)) {
-    if (c.bg) return Promise.resolve(c.v);   // already being refreshed
-    const p = fn().then((v) => { cache.set(key, { t: now(), v }); return v; }, () => { cache.set(key, { t: now(), v: c.v }); });
+    if (c.bg || now() < (c.retryAt || 0)) return Promise.resolve(c.v);
+    const p = fn().then((v) => { cache.set(key, { t: now(), v }); return v; }, () => { cache.set(key, { t: c.t, v: c.v, retryAt: now() + 10_000 }); });
     cache.set(key, { ...c, p: null, bg: p });
     return Promise.resolve(c.v);
   }
@@ -187,7 +188,21 @@ let looking = 0;              // background reads at a time: two, so the chart's
 export function supplyOf(mint) {
   const s = supplies.get(mint);
   if ((!s || now() - s.t > 10 * 60_000) && looking < 2) { looking++; jupAsset(mint).catch(() => {}).finally(() => looking--); }
+  if (!s && MAJOR_MINTS.has(mint)) chainSupply(mint);
   return s?.v ?? null;
+}
+// Jupiter 429s the VM most of the time, and a major read meanwhile on DexScreener's supply sat on another scale
+// (USDC: its $73B all-chain cap against $7.7B on Solana, both on one chart). The chain's figure stands in until
+// Jupiter answers: the mint's supply, and SOL's own circulating supply for wrapped SOL.
+const chainAsked = new Map();   // mint -> last ask
+function chainSupply(mint) {
+  if (now() - (chainAsked.get(mint) || 0) < 60_000) return;
+  chainAsked.set(mint, now());
+  const sol = mint === "So11111111111111111111111111111111111111112";
+  import("./solana.js").then((m) => m.rpc(sol ? "getSupply" : "getTokenSupply", sol ? [{ excludeNonCirculatingAccountsList: true }] : [mint])).then((r) => {
+    const v = sol ? r?.value?.circulating / 1e9 : +r?.value?.uiAmountString;
+    if (v > 0 && !supplies.has(mint)) supplies.set(mint, { v, t: now() });
+  }).catch(() => {});
 }
 
 // The supply when already known, without asking Jupiter: for paths that run on every trade in the market

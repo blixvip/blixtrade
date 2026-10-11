@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Holders straight from the chain while a coin's page is open: every token account of the coin, read once
 // (getProgramAccounts by mint), then kept current by a subscription to the same accounts (programSubscribe at
 // "processed"), so the holder count, top 10 and every wallet's balance move with each trade instead of waiting
@@ -9,7 +10,6 @@
 // BIG holders are left to Jupiter (see BIG); until the first read lands the page shows Jupiter's or RugCheck's.
 import { settings } from "./settings.js";
 import { coinRpcUrl } from "./txtrade.js";
-import { noteCall } from "./heliuskeys.js";
 import { streamSub } from "./chartstream.js";
 import { startRpcStream } from "./rpc-stream.js";
 import { rpcWsUrl, b58 } from "./livetrades.js";
@@ -62,7 +62,7 @@ function balanceFns() { return (balanceFns.list ||= []); }
 export function onBalance(fn) { balanceFns().push(fn); }
 
 async function call(url, method, params, timeout = 90_000) {
-  noteCall(url, method);
+
   const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(timeout) });
   const j = await r.json();
   if (j.error) throw new Error(j.error.message || "RPC error");

@@ -1,47 +1,54 @@
-// What traders have paid to trade each coin, in SOL, on top of the trades themselves: the network fee (base +
-// priority) and their tips and bot fees (blockworker.js feeOf), like Axiom's "F" (global fees paid). Fed by the
-// block follower (journalfeed.js onBlock) with every pump.fun and PumpSwap transaction in the blocks it reads; a
-// transaction trading several coins is split between them. The follower reads most blocks, not all (the free
-// sources give ~2.5-3 of the chain's ~4.6 a second, 2026-10-09), so each block's share is scaled by the share of
-// blocks read lately: an estimate, close on a busy coin. Counting began 2026-10-10: `since` says from when, so a
-// coin older than that shows what it paid since. Kept in radar.db (coin_fees), 7 days after its last trade.
-import { db } from "./db.js";
-
-const KEEP = 7 * 86400_000;
-db.exec("CREATE TABLE IF NOT EXISTS coin_fees (mint TEXT PRIMARY KEY, sol REAL NOT NULL, txs INTEGER NOT NULL, since INTEGER NOT NULL, at INTEGER NOT NULL)");
-const fees = new Map();   // mint -> { sol, txs, since, at }
-for (const r of db.prepare("SELECT mint, sol, txs, since, at FROM coin_fees WHERE at > ?").all(Date.now() - KEEP)) fees.set(r.mint, { sol: r.sol, txs: r.txs, since: r.since, at: r.at });
-const dirty = new Set();
-export const feeStats = { coins: 0, txs: 0, sol: 0, cover: 1 };
-
-// `sol`: what one transaction paid toward this coin, already scaled for the blocks not read.
-export function addFee(mint, sol, at = Date.now()) {
-  if (!(sol > 0) || !mint) return;
-  let f = fees.get(mint);
-  if (!f) { f = { sol: 0, txs: 0, since: at, at }; fees.set(mint, f); }
-  f.sol += sol; f.txs++; f.at = Math.max(f.at, at);
-  dirty.add(mint);
-  feeStats.txs++; feeStats.sol += sol;
+// Confirmed observed fees plus explicitly estimated missing-block coverage.
+import { db } from './db.js';
+import { createFeeLedger } from './fee-ledger.js';
+import { metricState } from './metricstate.js';
+const KEEP = 7 * 864e5;
+db.exec('CREATE TABLE IF NOT EXISTS coin_fees (mint TEXT PRIMARY KEY, sol REAL NOT NULL, txs INTEGER NOT NULL, since INTEGER NOT NULL, at INTEGER NOT NULL)');
+db.exec('CREATE TABLE IF NOT EXISTS coin_fee_ledger (mint TEXT PRIMARY KEY, payload TEXT NOT NULL, at INTEGER NOT NULL)');
+const ledger = createFeeLedger(), loaded = new Set(), dirty = new Set();
+for (const row of db.prepare('SELECT mint,payload FROM coin_fee_ledger WHERE at > ?').all(Date.now() - KEEP)) {
+  try { ledger.restore([JSON.parse(row.payload)]); loaded.add(row.mint); } catch {}
 }
-// { sol, since } or null (no trade of it seen in a block yet).
-export function feesOf(mint) {
-  const f = fees.get(mint);
-  return f ? { sol: Math.round(f.sol * 1000) / 1000, since: f.since } : null;
+for (const row of db.prepare('SELECT * FROM coin_fees WHERE at > ?').all(Date.now() - KEEP)) if (!loaded.has(row.mint)) {
+  ledger.restore([{ mint: row.mint, legacyEstimatedSol: row.sol, since: row.since, at: row.at, buckets: [] }]); dirty.add(row.mint);
 }
-
-const putQ = db.prepare("INSERT INTO coin_fees (mint, sol, txs, since, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(mint) DO UPDATE SET sol = excluded.sol, txs = excluded.txs, at = excluded.at");
+export const feeStats = { coins: loaded.size, txs: 0, sol: 0, cover: 1 };
+// Told the moment a coin's fees grow (server.js pushes them to open pages at once: the Pulse columns filter on them).
+const feeHooks = [];
+export const onFee = (fn) => { feeHooks.push(fn); };
+export function addFee(mint, sol, at = Date.now(), signature) {
+  if (ledger.add(mint, { sol, at, signature, coverage: feeStats.cover })) { feeStats.txs++; feeStats.sol += sol; for (const fn of feeHooks) fn(mint); }
+}
+export const updateFeeCoverage = (at, coverage) => ledger.setCoverage(at, coverage);
+export const feesOf = mint => ledger.get(mint);
+const put = db.prepare('INSERT INTO coin_fee_ledger(mint,payload,at) VALUES(?,?,?) ON CONFLICT(mint) DO UPDATE SET payload=excluded.payload,at=excluded.at');
+function publish() {
+  for (const mint of ledger.drain()) {
+    dirty.add(mint); const f = ledger.get(mint); if (!f) continue;
+    metricState.put(mint, { fees: f.sol, feesSince: f.since, feesObserved: f.observedSol, feesEstimated: f.estimatedSol },
+      { source: 'confirmed-block-fees', rank: 3, observedAt: f.at, estimated: true, partial: true, coverage: f.coverage, maxAgeMs: 60_000 });
+  }
+}
+setInterval(publish, 500).unref?.();
+// Written a slice at a time (about 120 ms every 2 s): a payload is a week of per-minute buckets with their
+// signatures, and writing every changed coin in one go held the event loop ~2.5 s every 5 s (Oct 2026, 646
+// times in an hour); the rest stay dirty for the next tick.
 setInterval(() => {
-  feeStats.coins = fees.size;
-  if (!dirty.size) return;
+  publish(); if (!dirty.size) return;
+  const t0 = Date.now(), done = [];
   try {
-    db.exec("BEGIN");
-    for (const m of dirty) { const f = fees.get(m); if (f) putQ.run(m, f.sol, f.txs, f.since, f.at); }
-    db.exec("COMMIT");
-    dirty.clear();
-  } catch { try { db.exec("ROLLBACK"); } catch {} }
-}, 30_000).unref?.();
+    db.exec('BEGIN');
+    for (const mint of dirty) {
+      const row = ledger.snapshotOne(mint);
+      if (row) put.run(row.mint, JSON.stringify(row), row.at);
+      done.push(mint);
+      if (done.length % 10 === 0 && Date.now() - t0 > 80) break;
+    }
+    db.exec('COMMIT');
+    for (const mint of done) dirty.delete(mint);
+  } catch { try { db.exec('ROLLBACK'); } catch {} }
+}, 4000).unref?.();   // 80 ms every 4 s: this writer was 7% of the main thread at 120 ms every 2 s (2026-10-11 profile)
 setInterval(() => {
-  const cut = Date.now() - KEEP;
-  for (const [m, f] of fees) if (f.at < cut) fees.delete(m);
-  try { db.prepare("DELETE FROM coin_fees WHERE at < ?").run(cut); } catch {}
+  ledger.prune();
+  try { db.prepare('DELETE FROM coin_fee_ledger WHERE at < ?').run(Date.now() - KEEP); } catch {}
 }, 3600_000).unref?.();

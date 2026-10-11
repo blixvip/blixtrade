@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Holders: a live ledger for every pump.fun coin, built from the trade feed and nothing else.
 // Every TradeEvent says who traded, how many tokens and in which block, so for a coin whose first
 // trade the radar saw it knows, this second: who holds what (holders, top-10 share), what the dev
@@ -216,6 +217,7 @@ const SEED_MAX = 6000;
 const SEED_GAP = 2500;           // one read every 2.5 s at most (the public RPC's allowance is shared with the feeds)
 const SEED_RETRY = 60_000;       // a mint the node does not know yet (seconds old): asked again after this
 const SEED_WANT_MS = 30_000;     // a page that stopped asking: its coins are not read
+const RESEED_MS = 90_000;        // an open coin page's book is read again this often (balances drift on missed trades)
 const wantSeed = new Map();      // mint -> when a page last showed it
 let seedBusy = false, seedLast = 0;
 // Coins on a page right now (pulse.js `watched`): the partial ones among them are seeded, busiest first.
@@ -228,14 +230,30 @@ export function seedWanted(mints) {
   }
   holderStats.seedQueue = wantSeed.size;
 }
+// Coins whose page is open right now (server.js chartFocus): a book seeded more than RESEED_MS ago is read from the
+// chain again, so the holder list and top-10 share stay what the chain says while someone looks at them. The free log
+// sockets miss a share of trades, and a book moved only by trades drifted (ZPAD, 2026-10-11: top wallet 19% drawn, 8%
+// on chain). Genesis books too: their sniper/bundle sets stay, only balances are set.
+export function reseedWanted(mints) {
+  const t = now();
+  for (const m of mints) {
+    const b = books.get(m);
+    if (!b || b.seeding || (b.seedFail || 0) >= 2 || t < (b.seedAfter || 0)) continue;
+    if (b.seeded && t - b.seeded < RESEED_MS) continue;
+    if (!b.seeded && !isPartial(b) && t - b.t0 < RESEED_MS) continue;   // a genesis book minutes old is exact
+    b.reseed = true; wantSeed.set(m, t);
+  }
+  holderStats.seedQueue = wantSeed.size;
+}
 async function seedOne() {
   if (seedBusy || now() - seedLast < SEED_GAP || !wantSeed.size) return;
   const t = now();
   let pick = null;
   for (const [m, at] of wantSeed) {
     const b = books.get(m);
-    if (!b || t - at > SEED_WANT_MS || b.seeded || !isPartial(b) || (b.seedFail || 0) >= 2 || t < (b.seedAfter || 0)) { wantSeed.delete(m); continue; }
-    if (!pick || b.trades > pick.trades) pick = b;
+    if (!b || t - at > SEED_WANT_MS || (!b.reseed && (b.seeded || !isPartial(b))) || (b.seedFail || 0) >= 2 || t < (b.seedAfter || 0)) { wantSeed.delete(m); continue; }
+    // An open coin page (reseedWanted) goes before the board: its holders are being looked at right now.
+    if (!pick || (Boolean(b.reseed) !== Boolean(pick.reseed) ? b.reseed : b.trades > pick.trades)) pick = b;
   }
   holderStats.seedQueue = wantSeed.size;
   if (!pick) return;
@@ -251,7 +269,7 @@ async function seedOne() {
     if (/rate limit|429|too many/i.test(e.message)) { seedLast = now() + 20_000; pick.seedFail--; }
     // A coin seconds old is not on the node yet: not a failure, just asked again a minute later.
     else if (/mint not found/.test(e.message)) { pick.seedFail--; pick.seedAfter = now() + SEED_RETRY; }
-  } finally { pick.seeding = false; seedBusy = false; }
+  } finally { pick.seeding = false; pick.reseed = false; seedBusy = false; }
 }
 const hintQ = db.prepare("SELECT safety FROM tokens WHERE mint = ?");
 function holdersHint(mint) {
@@ -307,7 +325,7 @@ export function startHolders() {
   // A bonded coin's pool trades carry on its ledger (the curve is done: progress 1, no genesis question).
   onPoolLedger((mint, s, sol, buy, x) => onTrade(mint, { progress: 1 }, sol, buy, x));
   setInterval(prune, 30_000);
-  setInterval(saveState, 20_000);
+  setInterval(saveState, 40_000);   // a save is ~1 s of main-thread work spread over yields; a resume reads it back within 2 min
   setInterval(() => { seedOne().catch(() => {}); }, 500);
 }
 

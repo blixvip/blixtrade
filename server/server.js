@@ -1,5 +1,7 @@
 // Blix (Blix Trade) — HTTP API + live event stream + dashboard.
 import "./timing.js";
+import { metricState } from "./metricstate.js";
+import { createMetricInterests } from "./metric-interests.js";
 import { marketPrices } from "./market.js";
 import http from "node:http";
 import zlib from "node:zlib";
@@ -7,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, json, logEvent, meta, backupInBackground, backups, DB_FILE, DATA, dbStats, checkpointStats } from "./db.js";
-import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound, wantSafety, backfill } from "./engine.js";
+import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound, wantSafety, backfill, lookupMint } from "./engine.js";
 import * as jupdisc from "./jupdisc.js";
 import { jupCandles, knownSupply } from "./jup.js";
 import { candlePts, downsample, holdFlat } from "./spark.js";
@@ -28,24 +30,24 @@ import * as fomo from "./fomo.js";
 import * as fomoBoard from "./fomoboard.js";
 import * as research from "./research.js";
 import * as brain from "./brain.js";
-import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, focusPrice, rugFigures, onChainMc, setPulseFastCheck } from "./pulse.js";
+import { pulseData, antiSlop, startPulse, watched, getMeta, metaNow, onMigratedPrices, pictureHooks, nameOf, focusPrice, rugFigures, onChainMc, setPulseFastCheck, fastMcap } from "./pulse.js";
 import { dexPaid } from "./dexpaid.js";
-import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, feed as liveFeed, live as liveCurves } from "./livetrades.js";
+import { startLiveTrades, drainUpdates, liveStats, onLiveTrade, onLiveCreate, recordPoolTrade, curveLiqUsd, migrationBlock, migrationOf, feed as liveFeed, live as liveCurves } from "./livetrades.js";
 import { startPumpSwap, onPoolTrade, swapFeed, poolOf } from "./pumpswap.js";
 import { bondedOnChain } from "./engine.js";
 import { startChartStream, focusChart, chartStream } from "./chartstream.js";
 import { startHelius, heliusStatus } from "./helius.js";
-import { startFeedLag, lagSummary } from "./feedlag.js";
+import { startFeedLag, lagSummary, slotTime } from "./feedlag.js";
 import { watchFast, onFastPx, isFast, priceAt, setFastScale, laneStats, fastStats } from "./fastpx.js";
 import { rpcStats } from "./solana.js";
 import { startLaunchLab, labStats } from "./launchlab.js";
-import { startHolders, holdersFor, liveHolders, holderStats, rowHolders, seedWanted } from "./holders.js";
+import { startHolders, holdersFor, liveHolders, holderStats, rowHolders, seedWanted, reseedWanted } from "./holders.js";
 import { devShare, quickHolders } from "./devbal.js";
 import { snipeFor, snipeStats, snipeDebug } from "./snipe.js";
 import * as paper from "./paper.js";
 import { membersReport } from "./adminmembers.js";
 import { quote } from "./quote.js";
-import { candles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade, bookAt } from "./candles.js";
+import { candles, startCandles, series as liveSeries, windowStats, levelNow, setFastCheck, addTrade as addCandleTrade, priceTick, bookAt, chartClose } from "./candles.js";
 import { startTunnel, tunnelStats } from "./tunnel.js";
 import { startTriage, triageRecord, triageFor } from "./triage.js";
 import { testFast } from "./fast.js";
@@ -53,7 +55,7 @@ import { testGrok, detectVersion, grokTier, grokBilling } from "./grok.js";
 import { startTape, tapeStats } from "./tape.js";
 import { startClusters, clusterBoard } from "./clusters.js";
 import { coverageStats } from "./coverage.js";
-import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL } from "./quality.js";
+import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL, MAJOR_MINTS } from "./quality.js";
 import * as health from "./health.js";
 import { visitorMay, memberMay, visitorHealth } from "./access.js";
 import { startWebApp, webStats } from "./webapp.js";
@@ -67,7 +69,7 @@ import { fomoFeed, relayIn, relayedStats } from "./fomofeed.js";
 import { bubbleMap, makeBubbleMap, holderFaces } from "./bubblemap.js";
 import { banner } from "./banner.js";
 import { feedViews, feedLike, viewerOf } from "./feedviews.js";
-import { fomoBars, onFomoBar, fomoChartStatus, setFomoToken } from "./fomochart.js";
+import { fomoBars, onFomoBar, fomoChartStatus, setFomoToken, supplyFor as fomoSupply } from "./fomochart.js";
 import { relayStats } from "./fomorelay.js";
 import { linksFor } from "./linkfill.js";
 import { wantFomoPrices, onFomoPrice, fomoPricesStatus } from "./fomoprices.js";
@@ -78,12 +80,15 @@ import { feedHistory } from "./feed-history.js";
 import { runningNarratives, runningAiIn, runningAiState } from "./running.js";
 import { xcard } from "./xcard.js";
 import { runningAiStats } from "./running-ai.js";
+import { deskView, deskStats } from "./desk.js";
 import { feedHot } from "./feedhot.js";
 import { pumpBoard } from "./pumpboard.js";
+import { walletPage, warmWalletPages } from "./walletpage.js";
 import { warmBoard } from "./feedwarm.js";
 import { coinPeople } from "./chartpeople.js";
 import { extSparks } from "./extsparks.js";
-import { feesOf } from "./coinfees.js";
+import { feesOf, onFee } from "./coinfees.js";
+import { vaultPeople } from "./vaultpeople.js";
 
 const fomoOverview = () => ({ ...fomo.status(), hot: fomo.hotCoins(60, 15), traders: fomo.topTraders(25) });
 
@@ -306,6 +311,8 @@ function fillRow(t, j, r) {
     if (rep0.totalHolders == null || rep0.top10 == null) { const qx = quickHolders(t.mint); if (qx) { r.holders ??= qx.h; r.top10 ??= qx.t10; } }
   }
   if (r.dev == null) r.dev = snipeFor(t.mint)?.dev ?? null;
+  const mig = migrationOf(t.mint);   // curve full, pool not trading yet (livetrades.js)
+  if (mig) r.migrating = mig.since;
   const fees = feesOf(t.mint);   // what traders paid to trade it (coinfees.js)
   if (fees) { r.fees = fees.sol; r.feesSince = fees.since; }
   const rep = json(row.safety, {}) || {};
@@ -418,8 +425,10 @@ const hasLink = (types) => `EXISTS (SELECT 1 FROM json_each(COALESCE(links, '[]'
 const list = (v, max) => String(v || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, max);
 // A typed search, with LIKE's wildcards taken literally ("a_b" is not "a?b", "%" is not everything).
 const likeArg = (s) => `%${String(s).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+// A chain's name finds its coin by ticker ("bitcoin" → cbBTC and WBTC).
+const ASSET_ALIAS = { bitcoin: "BTC", solana: "SOL", ethereum: "ETH", ether: "ETH", hyperliquid: "HYPE", tether: "USDT" };
 function tokensQuery(p = {}) {
-  const q = String(p.q || "").trim().slice(0, 64);
+  const typed = String(p.q || "").trim().slice(0, 64), q = ASSET_ALIAS[typed.toLowerCase()] || typed;
   // A search looks everywhere (dead and flagged coins, and coins still waiting for their first pool too);
   // browsing shows live, believable, real memecoins.
   // `mints`: exactly these coins, whatever their state (Discover's Fomo tabs look up the coins Fomo lists).
@@ -459,8 +468,9 @@ function tokensQuery(p = {}) {
   const limit = Math.max(1, Math.min(+p.limit || 100, 400)), offset = Math.max(0, +p.offset || 0);
   // A search with no sort asked for puts the best match first (the CA, then the exact ticker, then tickers and
   // names that start with it), so "BONK" finds Bonk before the hundred coins with "bonk" somewhere in the name.
-  const rank = q && !(p.sort in SORTS) ? "CASE WHEN mint = ? THEN 0 WHEN lower(symbol) = lower(?) THEN 1 WHEN symbol LIKE ? ESCAPE '\\' THEN 2 WHEN name LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, " : "";
-  const rankArgs = rank ? [q, q, likeArg(q).slice(1), likeArg(q).slice(1)] : [];
+  // The real asset before its namesakes: "SOL" or "USDC" is Solana's or Circle's coin, not a meme with that ticker.
+  const rank = q && !(p.sort in SORTS) ? `CASE WHEN mint = ? THEN 0 WHEN mint IN (${[...MAJOR_MINTS].map((m) => `'${m}'`).join(",")}) AND (symbol LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\') THEN 0.2 WHEN COALESCE(asset_class, 'meme') != 'meme' AND (symbol LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\') THEN 0.5 WHEN lower(symbol) = lower(?) THEN 1 WHEN symbol LIKE ? ESCAPE '\\' THEN 2 WHEN name LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, ` : "";
+  const rankArgs = rank ? [q, likeArg(q), likeArg(q), likeArg(q), likeArg(q), q, likeArg(q).slice(1), likeArg(q).slice(1)] : [];
   const total = db.prepare(`SELECT COUNT(*) n FROM tokens WHERE ${where.join(" AND ")}`).get(...args).n;
   const rows = db.prepare(`SELECT * FROM tokens WHERE ${where.join(" AND ")} ORDER BY ${rank}(${expr}) IS NULL, ${expr} ${dir}, mint LIMIT ? OFFSET ?`).all(...args, ...rankArgs, limit, offset);
   // Lists don't need each coin's full holder list and risk text; the coin page loads those.
@@ -669,6 +679,7 @@ function healthReport() {
   const now = Date.now(), parts = [];
   const add = (key, name, state, summary, extra = {}) => parts.push({ key, name, state, summary, ...extra });
   const hp = (key) => { const p = health.part(key); return { lastOk: p.lastOk, lastFail: p.lastFail, lastError: p.lastError, ok: p.ok, fail: p.fail }; };
+  add('metric-freshness', 'Shared live metrics', 'ok', `${metricState.stats().coins} coins · ${metricInterests.snapshot().mints} visible interests`, { fields: metricState.stats(), interests: metricInterests.snapshot() });
   const ago = (t) => !t ? "never" : now - t < MIN ? `${Math.round((now - t) / 1000)}s ago` : now - t < HOUR ? `${Math.round((now - t) / MIN)}m ago` : `${Math.round((now - t) / HOUR)}h ago`;
 
   const cr = crashes(now), upMs = now - stats.startedAt;
@@ -698,7 +709,7 @@ function healthReport() {
     liveFeed.connected ? `${liveFeed.perSec} trades/s, last message ${ago(liveFeed.lastMsg)}` : `${liveFeed.lastError || "Connecting to RPC"}; retry every 3s`, { lastOk: liveFeed.lastMsg || null });
   add("pumpswap", "Live PumpSwap pool trades (bonded coins' prices)", !swapFeed.connected ? "down" : now - swapFeed.lastMsg > 30_000 ? "degraded" : "ok",
     swapFeed.connected ? `${swapFeed.trades} pool trades, ${swapFeed.priced} priced, ${swapFeed.pools} pools known, last message ${ago(swapFeed.lastMsg)}` : `${swapFeed.error || "Connecting to RPC"}; retry every 3s`, { lastOk: swapFeed.lastMsg || null });
-  if (chartStream.on) add("chartstream", "Open charts' own trade stream (fast RPC, one subscription per coin)", chartStream.overBudget ? "degraded" : !chartStream.connected ? (chartStream.coins || chartStream.error ? "down" : "ok") : "ok",
+  if (chartStream.on) add("chartstream", "Open charts' own trade stream (fast RPC, one subscription per coin)", chartStream.overBudget ? "degraded" : !chartStream.connected ? (chartStream.coins ? "down" : "ok") : "ok",   // idle (no chart open) is fine, whatever old note .error still holds
     `${chartStream.connected ? `${chartStream.coins} charts streaming, ${chartStream.msgs} messages` : "idle until a chart opens"}; ${(chartStream.bytesToday / 1e6).toFixed(0)} MB today of the ${settings.chartDailyMB} MB budget${chartStream.keys > 1 ? ` · on key ${chartStream.key || "?"} of ${chartStream.keys}` : ""}${chartStream.side ? ` · side socket ${chartStream.side.on ? "on" : "off"} (${chartStream.side.n} subs) · fast socket ${chartStream.fast.on ? "on" : "off"} (${chartStream.fast.n} subs) · ${chartStream.extra.n} extra` : ""}${chartStream.error ? `; ${chartStream.error}` : ""}${lagSummary() ? `; ${lagSummary()}` : ""}${laneStats.on ? "; fast lane on" : `; fast lane off${laneStats.error ? ` (${laneStats.error})` : ""}`}`, { lastOk: chartStream.lastMsg || null, sockets: { side: chartStream.side, fast: chartStream.fast, extra: chartStream.extra } });
   // Helius credits (helius.js): each key's month at Helius (Admin API; needs the project ID in Settings next to
   // the key) and what the stream counted on it today (heliuskeys.js). One row per key.
@@ -747,6 +758,12 @@ function healthReport() {
     if (st.on || st.runs) add("runningai", "Running narratives (AI read on this PC)", st.lastError && (!st.lastOk || now - st.lastOk > 10 * MIN) ? "degraded" : st.lastOk ? "ok" : "idle",
       `${st.runs} reads${st.lastOk ? `, last ${ago(st.lastOk)} (${st.stories} stories)` : ""}${st.sent ? ` · sent to the server ${st.sent}×, last ${ago(st.lastSent)}` : ""}${st.lastError ? ` · problem: ${String(st.lastError).slice(0, 140)}` : ""}${st.sendError ? ` · send problem: ${String(st.sendError).slice(0, 140)}` : ""}`, { lastOk: st.lastOk || null });
     else if (rel) add("runningai", "Running narratives (AI read from the owner's PC)", now - rel.at > 10 * MIN ? "degraded" : "ok", `${rel.stories.length} stories, last ${ago(rel.at)}${now - rel.at > 8 * MIN ? " · too old: Blix's own themes are used" : ""}`, { lastOk: rel.at }); }
+  // The Narratives desk (desk.js): Grok writing the day's narratives and runners.
+  if (settings.desk !== false && (deskStats.runs || deskStats.why)) {
+    const st = deskStats, fresh = st.lastError && now - st.lastErrorAt < 30 * MIN && (!st.lastOk || st.lastErrorAt > st.lastOk);
+    add("desk", "Narratives desk (Grok write-ups)", st.on ? (fresh ? "degraded" : "ok") : "off",
+      `${st.on ? `${st.written} written since start${st.lastOk ? `, last ${ago(st.lastOk)}` : ""}` : `not writing: ${st.why}`}${st.writing.length ? ` · writing ${st.writing.join(", ")}` : ""}${st.lastError ? ` · last problem: ${String(st.lastError).slice(0, 160)}` : ""}`, { lastOk: st.lastOk || null });
+  }
   // The server's side of it: Fomo's feed as the owner's PC relays it (fomofeed.js relayIn); only shown once a post came.
   if (relayedStats.posts) {
     const age = now - relayedStats.lastAt;
@@ -761,6 +778,9 @@ function healthReport() {
   const svc = (key, name, staleMs) => { const p = hp(key); add(key, name, health.stateOf(key, staleMs), p.lastOk ? `Last answer ${ago(p.lastOk)} · ${p.ok.toLocaleString()} ok, ${p.fail} failed${p.lastFail && p.lastFail > p.lastOk ? ` · failing: ${p.lastError}` : ""}` : p.lastError ? `Never answered: ${p.lastError}` : "Not used yet", p); };
   svc("dexscreener", "Prices (DexScreener)", 3 * MIN);
   svc("jupiter", "Quotes and prices (Jupiter)", 3 * MIN);
+  // Keyless Jupiter rate-limits now and then and the next call goes through: degraded only while it is actually
+  // failing (its latest answer a failure, or none for a minute), not for a recovered blip in the last 10 minutes.
+  { const j = parts[parts.length - 1], p = hp("jupiter"); if (j.state === "degraded" && p.lastOk && (!p.lastFail || p.lastOk > p.lastFail) && now - p.lastOk < MIN) j.state = "ok"; }
   // Keyless, quotes, Discover and Blix Vault's real swaps share one Jupiter allowance on this PC.
   { const j = parts[parts.length - 1]; if (j.state !== "ok" && !settings.jupiterKey) j.fix = "Jupiter is rate-limiting this PC's free allowance. A free API key from portal.jup.ag (Settings → Jupiter key) gives quotes, prices and swaps their own allowance."; }
   svc("geckoterminal", "Discovery (GeckoTerminal)", 10 * MIN);
@@ -774,7 +794,10 @@ function healthReport() {
 
   const tr = wallets.tracking();
   const rpc = tr.rpc, cooling = rpc.coolingUntil > now;
-  add("rpc", `Solana RPC (${rpc.public ? "free public" : "your own"})`, cooling ? "degraded" : health.stateOf("rpc", 5 * MIN),
+  add("rpc", `Solana RPC (${rpc.public ? "free public" : "your own"})`,
+    // The free public RPC throttles all the time and the calls are retried: degraded only when real errors are recent
+    // or nothing has answered for a minute, not for 429s that were retried through.
+    rpc.lastOk && now - rpc.lastOk < MIN && !(rpc.lastErrorAt && now - rpc.lastErrorAt < 5 * MIN && !/rate limit|429/i.test(rpc.lastError || "")) ? "ok" : cooling ? "degraded" : health.stateOf("rpc", 5 * MIN),
     `${rpc.calls.toLocaleString()} calls · ${rpc.errors} errors · rate limited ${rpc.limited}×${cooling ? ` · resting ${Math.ceil((rpc.coolingUntil - now) / 1000)}s` : ""}${rpc.lastError ? ` · last problem ${ago(rpc.lastErrorAt)}: ${rpc.lastError}` : ""}`,
     { lastOk: rpc.lastOk || null, lastFail: rpc.lastErrorAt || null, lastError: rpc.lastError, fix: rpc.public && rpc.limited > 5 ? "The free public RPC is throttling. A free Helius RPC URL in Settings reads wallets about 10x faster and rarely limits." : null });
   const lagged = tr.wallets.filter((w) => now - w.checked > 5 * MIN).length, missed = tr.wallets.reduce((s, w) => s + (w.missed || 0), 0);
@@ -812,26 +835,29 @@ function healthReport() {
     !settings.publicHost || !settings.tunnelKey ? "Switched off (no public hostname or tunnel key)" : !tn.exe ? "cloudflared is not installed on this PC" : tn.url ? `https://${settings.publicHost} → ${tn.url}${tn.registered ? ` · registered ${ago(tn.registered)}` : ""}${tn.registerError ? ` · register failing: ${tn.registerError}` : ""} · ${tn.restarts} tunnel restarts` : `Tunnel starting${tn.lastExit ? ` (cloudflared exited with ${tn.lastExit.code} ${ago(tn.lastExit.t)})` : ""}`,
     { lastOk: tn.registered, lastError: tn.registerError || tn.lastError, url: tn.url });
   const pd = paper.desk();
-  add("paper", "Paper desk", pd.open.some((p) => p.stale) ? "degraded" : pd.open.length ? "ok" : "idle",
+  add("paper", "Paper desk", pd.open.filter((p) => p.stale).length * 2 > pd.open.length ? "degraded" : pd.open.length ? "ok" : "idle",   // a few dead coins without a price are normal; most of them is a fault
     `${pd.open.length} open paper position${pd.open.length === 1 ? "" : "s"}${pd.open.some((p) => p.stale) ? ` (${pd.open.filter((p) => p.stale).length} without a live price right now)` : ""} · today ${pd.summary.todayN} closed, ${pd.summary.todayPnl >= 0 ? "+" : "−"}$${Math.abs(pd.summary.todayPnl).toFixed(0)} · all time ${pd.summary.allN} closed, ${pd.summary.allPnl >= 0 ? "+" : "−"}$${Math.abs(pd.summary.allPnl).toFixed(0)} (after ${pd.cost}% costs each way; nothing is really traded)`);
   add("groq", "Groq (optional fast fallback)", !pv.groq.configured ? "off" : pv.groq.cooling.length ? "degraded" : health.stateOf("groq", HOUR),
     pv.groq.configured ? `${pv.groq.calls} calls, ${pv.groq.errors} errors` : "No key saved. Free at console.groq.com/keys; keeps fast reads running when Grok is out.", { ...hp("groq"), lastError: pv.groq.lastError });
   add("claude", "Claude (briefs, fallback reads)", !pv.claude.ok ? (/No Claude login/.test(pv.claude.loginError || "") ? "off" : "down") : health.stateOf("claude", 3 * HOUR) === "down" ? "degraded" : pv.claude.calls ? health.stateOf("claude", 3 * HOUR) : "idle",
     pv.claude.ok ? `${pv.claude.calls} calls, ${pv.claude.errors} errors, ${pv.claude.truncated} cut off · ${pv.claude.usedThisHour}/${pv.claude.perHour} research reads this hour` : pv.claude.loginError,
     { lastOk: pv.claude.lastOk, lastFail: pv.claude.lastErrorAt, lastError: pv.claude.lastError, fix: pv.claude.ok ? null : "Open Claude Code once on this PC to refresh the login." });
-  add("ai-lanes", "Who is reading coins right now", pv.fast.fallback || pv.deep.fallback ? "degraded" : "ok",
+  // The owner switched Grok off for Blix (settings.grokOff, only the lanes in grokLanes allowed): the AI parts that
+  // need it are off by choice, not broken, so they read "off" here rather than down or degraded.
+  const aiByChoice = Boolean(settings.grokOff) && !pv.claude.ok;
+  add("ai-lanes", "Who is reading coins right now", (pv.fast.fallback || pv.deep.fallback) ? (aiByChoice ? "off" : "degraded") : "ok",
     `First reads: ${pv.fast.actualName || "none available"}${pv.fast.fallback ? ` (set to ${pv.fast.configuredName}; ${pv.fast.reason})` : ""} · Deep reads: ${pv.deep.actualName || "none available"}${pv.deep.fallback ? ` (set to ${pv.deep.configuredName}; ${pv.deep.reason})` : ""}`, { fix: pv.recovery });
-  add("queue", "Research queue", !qs.perHour && qs.size ? "down" : "ok",
+  add("queue", "Research queue", !qs.perHour && qs.size ? (aiByChoice ? "off" : "down") : "ok",
     `${qs.size} waiting (limit ${qs.cap}), oldest ${qs.oldestMin}m · about ${qs.perHour} reads/hour, so ~${qs.etaMin ?? "?"}m to clear · ${qs.expiredHour} dropped as stale or outranked this hour · ${qs.errors} failed in 24h`, qs);
   const sc = brain.scoutStatus();
-  add("scout", "Narrative scout", settings.scoutEveryMin <= 0 ? "off" : !sc.available ? "down" : sc.overdue ? "degraded" : "ok",
+  add("scout", "Narrative scout", settings.scoutEveryMin <= 0 ? "off" : !sc.available ? (aiByChoice ? "off" : "down") : sc.overdue ? "degraded" : "ok",
     sc.why || `Last scouted ${ago(sc.lastOk)}, every ${sc.every}m`, { lastOk: sc.lastOk, lastError: sc.last?.outcome !== "ok" ? sc.last?.detail : null });
   const cb = clusterBoard();
   add("clusters", "Live narrative detection", cb.stats.lastError && !cb.stats.cards ? "degraded" : "ok",
     `${cb.stats.launches.toLocaleString()} launches compared this session · ${cb.stats.forming} burst${cb.stats.forming === 1 ? "" : "s"} forming now · ${cb.stats.cards} named · ${cb.armed.length} narrative${cb.armed.length === 1 ? "" : "s"} armed, ${cb.stats.armedHits} matching launches caught${cb.grok ? "" : " · Grok is unavailable, so bursts are recorded but not looked up on X"}`,
     { lastError: cb.stats.lastError });
   const lb = db.prepare("SELECT t, status, stop FROM briefs ORDER BY t DESC LIMIT 1").get();
-  add("briefs", "AI briefs", !settings.aiBriefs ? "off" : !lb ? "idle" : lb.status !== "complete" ? "degraded" : now - lb.t > settings.briefEveryMin * MIN * 2.5 ? "degraded" : "ok",
+  add("briefs", "AI briefs", !settings.aiBriefs || aiByChoice ? "off" : !lb ? "idle" : lb.status !== "complete" ? "degraded" : now - lb.t > settings.briefEveryMin * MIN * 2.5 ? "degraded" : "ok",
     !settings.aiBriefs ? "Switched off" : !lb ? "None written yet" : `Last brief ${ago(lb.t)}${lb.status !== "complete" ? ` was incomplete (${lb.stop})` : ""}`, { lastOk: lb?.t || null });
 
   const dest = destinations();
@@ -841,7 +867,7 @@ function healthReport() {
       !d.configured ? "Not set up" : failing ? `Last send failed ${ago(d.lastFail.t)}: ${d.lastFail.error}` : d.lastOk ? `Last delivered ${ago(d.lastOk.t)} · ${d.sent24h} sent, ${d.failed24h} failed in 24h` : "Set up, nothing sent yet. Use Send test message.",
       { lastOk: d.lastOk?.t || null, lastFail: d.lastFail?.t || null, lastError: d.lastFail?.error || null });
   }
-  if (!dest.any) add("delivery", "Alert delivery", "degraded", "No Discord or Telegram destination is set up, so alerts only reach this browser while the page is open.", { fix: "Add a Discord webhook or Telegram bot in Settings to get alerts on your phone and when the page is closed." });
+  if (!dest.any) add("delivery", "Alert delivery", "off", "No Discord or Telegram destination is set up, so alerts only reach this browser while the page is open.", { fix: "Add a Discord webhook or Telegram bot in Settings to get alerts on your phone and when the page is closed." });
   const fs_ = fomo.status();
   add("fomo", "Fomo trade tracking", fs_.connected ? "ok" : "off", fs_.connected ? `${fs_.tradesLastHour} Fomo trades seen this hour${fs_.sampled ? " (sampled)" : ""}` : `Not connected: ${fs_.fomoWallets ? `${fs_.fomoWallets} Fomo wallet added, still learning Fomo's fee payer` : "add one Fomo wallet on the Wallets page"}. Buy on Fomo links work either way.`);
   const bt = +meta.get("backup_t", 0);
@@ -1080,11 +1106,70 @@ function cached(key, ms, fn) {
 const forget = (prefix) => { for (const k of memo.keys()) if (k.startsWith(prefix)) memo.delete(k); };
 
 const clients = new Set();
+const metricInterests = createMetricInterests();
+const metricFlags = {
+  canonical: process.env.BLIX_METRIC_CANONICAL !== '0',
+  subscriptions: process.env.BLIX_METRIC_SUBSCRIPTIONS !== '0',
+  deltas: process.env.BLIX_METRIC_DELTAS !== '0',
+  hotCoins: Math.max(1, Math.min(64, Math.floor(Number(process.env.BLIX_METRIC_HOT_COINS) || 8))),
+};
+const metricSession = (res, session) => /^[A-Za-z0-9_-]{1,64}$/.test(session || '') ? `${crypto.createHash('sha256').update(res.blixAs || 'public').digest('hex').slice(0, 16)}:${session}` : '';
+// One collection lease per coin, shared across pages. Existing provider queues coalesce the work.
+let metricSelected = [];
+function refreshMetricInterests(reselect = true) {
+  if (reselect) metricSelected = metricInterests.select(metricFlags.hotCoins);
+  const selected = metricSelected;
+  for (const mint of selected) {
+    if (metricFlags.subscriptions) {
+      watchFast(mint, metricInterests.isActive(mint));
+      if (!isFast(mint)) focusPrice(mint);
+    }
+    const c = liveCurves.get(mint);
+    if (c?.last && Date.now() - c.last < 30_000) {
+      if (c.mc > 0 && liveFeed.solUsd > 0) pxMove(mint, c.mc * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9), 2, { source: 'feed', observedAt: c.last });
+      metricState.put(mint, { progress: c.pool ? 1 : c.progress, liq: c.pool ? c.depth > 0 ? 2 * c.depth * liveFeed.solUsd : null : c.vSol > 0 ? 2 * c.vSol * liveFeed.solUsd : null },
+        { source: 'reserve-estimate', rank: 2, estimated: true, provisional: true, observedAt: c.last, maxAgeMs: 15_000 });
+    }
+    for (const [win, seconds] of [['5m', 300], ['1h', 3600], ['24h', 86400]]) {
+      const j = jupdisc.figures(mint, win);
+      if (j) {
+        metricState.put(mint, { [`vol${win}`]: j.vol, [`buys${win}`]: j.buys, [`sells${win}`]: j.sells, [`chg${win}`]: j.chg, holders: j.holders, top10: j.top10, dev: j.dev, liq: j.liq },
+          { source: 'jupiter-index', rank: 1, observedAt: j.t, maxAgeMs: 30_000 });
+        pxRaw(mint, j.mc, 1, { source: 'jupiter-index', observedAt: j.t });
+      }
+      const w = windowStats(mint, Date.now() / 1000 - seconds);
+      // Candle span alone cannot prove uninterrupted coverage. Preserve indexed full-window totals.
+      if (w && c?.last && !j) metricState.put(mint, { [`vol${win}`]: w.vol, [`buys${win}`]: w.buys, [`sells${win}`]: w.sells },
+        { source: 'observed-trades', rank: 1, observedAt: c.last, partial: true, provisional: true, maxAgeMs: 15_000 });
+    }
+    const fees = feesOf(mint);
+    if (fees) metricState.put(mint, { fees: fees.sol, feesSince: fees.since, feesObserved: fees.observedSol, feesEstimated: fees.estimatedSol },
+      { source: 'confirmed-block-fees', rank: 3, observedAt: fees.at, estimated: true, partial: true, coverage: fees.coverage, maxAgeMs: 60_000 });
+  }
+  if (metricFlags.subscriptions) jupdisc.want(selected);
+}
+setInterval(refreshMetricInterests, 5000).unref?.();
+setInterval(() => refreshMetricInterests(false), 1000).unref?.();
+let metricKick = null;
+setInterval(() => {
+  const coins = metricState.drain(undefined, true);
+  if (!coins.length || !metricFlags.deltas) return;
+  if (!metricFlags.canonical) for (const coin of coins) { delete coin.fields.mc; delete coin.fields.priceUsd; }
+  for (const res of clients) {
+    const wanted = metricInterests.get(res.metricSession);
+    const update = coins.filter(c => wanted.has(c.mint));
+    if (res.writableLength > 256 * 1024) { res.end(); continue; }
+    if (update.length) (res.blixOut || res.write).call(res, `event: metrics\ndata: ${JSON.stringify({ boot: stats.startedAt, t: Date.now(), coins: update })}\n\n`);
+  }
+}, 100).unref?.();
 // `who`: only that person's streams ('' the owner's, a member's email), for what is theirs alone.
 function broadcast(event, data, who) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   // A visitor (public view) reaches here as the owner ('' too), so is left out of everything addressed to someone.
-  for (const res of clients) if (who === undefined || (!res.blixVisitor && (res.blixAs || "") === who)) (res.blixOut || res.write).call(res, msg);
+  for (const res of clients) if (who === undefined || (!res.blixVisitor && (res.blixAs || "") === who)) {
+    if (res.writableLength > 256 * 1024) { res.end(); continue; }
+    (res.blixOut || res.write).call(res, msg);
+  }
 }
 
 const paceBook = new Map();   // key -> { t: window start, n }
@@ -1105,11 +1190,14 @@ const server = http.createServer((req, res) => {
     if (!memberMay(req.method, p0)) return send(res, 403, { error: "Members can't use this part of Blix." });
     // What costs the server real work or an outside call per request (quotes and sell previews ask Jupiter;
     // trades re-price every second; a chart focuses live prices on a coin) is paced per member: 40 quotes,
-    // 20 paper trades and 30 chart focuses a minute.
+    // 20 paper trades and 600 candle reads a minute. The chart's refresh (`since`, answered from memory) runs up to
+    // 200 times a minute on the second sizes; at the old 30 a member's chart got "Slow down" after 9 s and sat on
+    // its stream alone, backing off to one read every 10 s (2026-10-11). Three open charts fit under 600.
     const kind = p0 === "/api/quote" || /^\/api\/paper\/\d+\/preview$/.test(p0) ? "q" : req.method !== "GET" && p0.startsWith("/api/paper") ? "t" : p0.startsWith("/api/candles/") ? "c" : null;
-    if (kind && overPace(`${kind}:${as}`, kind === "q" ? 40 : kind === "c" ? 30 : 20)) return send(res, 429, { error: "Slow down a little: too many requests in the last minute." });
+    if (kind && overPace(`${kind}:${as}`, kind === "q" ? 40 : kind === "c" ? 600 : 20)) return send(res, 429, { error: "Slow down a little: too many requests in the last minute." });
     // A fresh read of a Fomo profile goes out with the owner's own Fomo login: members get what is on record.
-    if (p0.startsWith("/api/fomo/trader/") && /[?&]fresh=/.test(req.url)) { const u = new URL(req.url, "http://x"); u.searchParams.delete("fresh"); req.url = u.pathname + u.search; }
+    // Likewise a wallet page's fresh=1 (a rebuild from the chain per call): members get the kept page, rebuilt on its own clock.
+    if ((p0.startsWith("/api/fomo/trader/") || p0.startsWith("/api/wallet-page/")) && /[?&]fresh=/.test(req.url)) { const u = new URL(req.url, "http://x"); u.searchParams.delete("fresh"); req.url = u.pathname + u.search; }
     res.blixAs = as;
   }
   return paper.asUser(as, () => handleRequest(req, res));
@@ -1140,6 +1228,7 @@ async function handleRequest(req, res) {
       return res.end(staticFile(file));
     }
     if (p === "/api/stream") {
+      res.metricSession = metricSession(res, params.session);
       // no-transform keeps proxies from compressing the stream; the 2 KB comment pushes it through any proxy
       // that waits for a first block. (The public quick tunnel still holds streamed bodies back ~20 s whatever
       // is sent, so the page falls back to polling there; see connect() in app.js.)
@@ -1155,7 +1244,7 @@ async function handleRequest(req, res) {
       if (gzip) {
         const gz = zlib.createGzip({ level: 5 });
         gz.pipe(res);
-        res.blixOut = (text) => { if (!gz.destroyed) { gz.write(text); gz.flush(zlib.constants.Z_SYNC_FLUSH); } };
+        res.blixOut = (text) => { if (gz.writableLength > 256 * 1024 || res.writableLength > 256 * 1024) { gz.destroy(); res.end(); return; } if (!gz.destroyed) { gz.write(text); gz.flush(zlib.constants.Z_SYNC_FLUSH); } };
         req.on("close", () => gz.destroy());
       }
       (res.blixOut || res.write).call(res, `:${" ".repeat(2048)}\n\nevent: hello\ndata: {}\n\n`);
@@ -1164,6 +1253,19 @@ async function handleRequest(req, res) {
       return;
     }
     const POST = req.method === "POST";
+    if (p === '/api/metrics' && req.method === 'GET') {
+      const mints = [...new Set(String(params.m || '').split(',').filter(m => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m)))].slice(0, 200);
+      const session = metricSession(res, params.session);
+      if (session && !overPace(`metric:${session}`, 40)) {
+        const rows = mints.length ? db.prepare(`SELECT mint,pair_created FROM tokens WHERE mint IN (${mints.map(() => '?').join(',')})`).all(...mints) : [];
+        const born = new Map(rows.map(t => [t.mint, t.pair_created]));
+        metricInterests.renew(session, mints.map(mint => ({ mint, born: born.get(mint) || 0, active: mint === params.active })));
+        if (!metricKick) metricKick = setTimeout(() => { metricKick = null; refreshMetricInterests(); }, 100);
+      }
+      const coins = metricFlags.deltas ? metricState.snapshot(mints) : [];
+      if (!metricFlags.canonical) for (const coin of coins) { delete coin.fields.mc; delete coin.fields.priceUsd; }
+      return send(res, 200, { boot: stats.startedAt, t: Date.now(), coins });
+    }
     // A write empties the kept answers, except the PC's relays and page error reports: those change nothing the
     // answers hold, and arriving every few seconds they emptied every cache as fast as it filled.
     if ((POST || req.method === "DELETE") && !/^\/api\/(fomo\/(coin|feed)\/relay|running\/ai|client-error)$/.test(p)) forget("");
@@ -1231,6 +1333,16 @@ async function handleRequest(req, res) {
       if (!overPace("client-error", 30)) logEvent("error", `page ${String(b.where || "page").slice(0, 20)} #/${String(b.route || "").slice(0, 80)}: ${String(b.message || "").slice(0, 200)} @ ${String(b.at || "").slice(0, 160)}${res.blixAs ? " (member)" : ""}`);
       return send(res, 200, { ok: true });
     }
+    // The owner's wallet dashboard (blix-vault, same machine): who each member is (vaultpeople.js). Only with the
+    // vault's own service token (the one this server uses to reach it, BLIX_VAULT_CONFIG), never a member's request.
+    if (p === "/api/vault/people") {
+      let token = "";
+      try { token = JSON.parse(fs.readFileSync(process.env.BLIX_VAULT_CONFIG || "", "utf8")).serviceToken || ""; } catch {}
+      const bearer = /^Bearer (.+)$/.exec(String(req.headers.authorization || ""))?.[1] || "";
+      const ok = token.length >= 16 && bearer.length === token.length && crypto.timingSafeEqual(Buffer.from(bearer), Buffer.from(token));
+      if (res.blixAs || res.blixVisitor || !ok) return send(res, 404, { error: "Not found" });
+      return send(res, 200, await vaultPeople());
+    }
     // The owner's dashboard (blixvip.com/__admin): every member's paper desk and hosted wallet balance. Owner only.
     if (p === "/api/admin/members") {
       if (res.blixAs || res.blixVisitor) return send(res, 404, { error: "Not found" });
@@ -1263,6 +1375,8 @@ async function handleRequest(req, res) {
     if (p === "/api/repair" && POST) return send(res, 200, rebuildFromSnapshots());
     if (p === "/api/wallets") {
       if (POST) { const b = await readBody(req); return send(res, 200, wallets.addWallet(String(b.address || "").trim(), String(b.label || "").trim())); }
+      // A member gets the market intelligence (the smart-money ranking, the Fomo overview), never the owner's own list.
+      if (res.blixAs) return send(res, 200, warmPics({ smart: wallets.smartMoney(40), fomo: fomoOverview() }));
       return send(res, 200, warmPics({ wallets: wallets.listWallets(), smart: wallets.smartMoney(40), activity: wallets.activity(80), tracking: wallets.tracking(), rpc: { ...wallets.tracking().rpc, custom: !!settings.rpcUrl }, fomo: fomoOverview() }));
     }
     if (p === "/api/fomo") return send(res, 200, fomoOverview());
@@ -1289,7 +1403,18 @@ async function handleRequest(req, res) {
     if (p === "/api/fomo/feed/relay" && POST) { if (res.blixAs) return send(res, 403, { error: "Only the owner's PC relays Fomo's feed." }); return send(res, 200, relayIn(await readBody(req))); }
     // Fomo's own chart bars for a coin (fomochart.js), read through the kept Fomo tab while the chart is open.
     const gpm = p.match(new RegExp(`^/api/gecko/price/(${MINT})$`));
-    if (gpm) return send(res, 200, geckoPrice(gpm[1]));
+    if (gpm) {
+      const g = geckoPrice(gpm[1]);
+      // GeckoTerminal's lane is often full: a major's chart is then kept on the radar's own price (Jupiter's, else
+      // DexScreener's) on the same supply, so it still tracks the market tick for tick.
+      if (!g.mc && MAJOR_MINTS.has(gpm[1])) {
+        focusPrice(gpm[1]);
+        const t = db.prepare("SELECT price FROM tokens WHERE mint = ?").get(gpm[1]), sup = fomoSupply(gpm[1]);
+        const mc = fastMcap(gpm[1]) ?? (t?.price > 0 && sup ? t.price * sup : null);
+        if (mc) Object.assign(g, { mc, price: sup ? mc / sup : null, t: Date.now(), src: "radar" });
+      }
+      return send(res, 200, g);
+    }
     const fbm = p.match(new RegExp(`^/api/fomo/bars/(${MINT})$`));
     if (fbm) return send(res, 200, await fomoBars(fbm[1], params.res, params.since));
     // The Feed page's live push: only what changed, the moment a read lands (feedstream.js).
@@ -1297,6 +1422,8 @@ async function handleRequest(req, res) {
     if (p === "/api/feed/history") return send(res, 200, feedHistory(params));
     // Narratives running right now: where the money is going this hour, grouped into stories (running.js).
     if (p === "/api/running") return send(res, 200, warmPics(runningNarratives()));
+    // The Narratives desk: Grok's write-ups of the day's narratives and runners (desk.js).
+    if (p === "/api/desk") return send(res, 200, warmPics(deskView()));
     // What a coin's X link points at, for the hover card on X icons (xcard.js, FxTwitter: free).
     if (p === "/api/xcard") return send(res, 200, await xcard(params.u));
     // The owner's PC hands this server its AI read of those stories (running-ai.js there).
@@ -1312,10 +1439,13 @@ async function handleRequest(req, res) {
     // Fomo's leaderboard, read daily through Aside (fomoboard.js); its top traders are followed for wallet tracking.
     if (p === "/api/fomo/board") { if (!params.day) fomoBoard.boardLive(); const b = fomoBoard.board({ range: params.range, day: params.day }); try { warmBoard(b.rows); } catch {} return send(res, 200, b); }
     // pump.fun's PnL leaderboard (daily, weekly, monthly), read live while someone is looking (pumpboard.js).
-    if (p === "/api/pump/board") { const b = await pumpBoard({ range: params.range }); try { warmBoard(b?.rows); } catch {} return send(res, 200, warmPics(b)); }
+    if (p === "/api/pump/board") { const b = await pumpBoard({ range: params.range }); try { warmBoard(b?.rows); warmWalletPages((b?.rows || []).map((r) => r.wallet)); } catch {} return send(res, 200, warmPics(b)); }
     if (p === "/api/fomo/board/refresh" && POST) { await fomoBoard.refreshBoard(wallets.addWallet, wallets.removeWallet); return send(res, 200, fomoBoard.board({ range: params.range })); }
     const ftm = p.match(/^\/api\/fomo\/trader\/([A-Za-z0-9_.-]{1,64})$/);
     if (ftm) return send(res, 200, warmPics(await fomoBoard.trader(ftm[1], { fresh: params.fresh === "1" })));
+    // Any Solana wallet as a trader page, built from the chain (walletpage.js): pump.fun's traders, Feed callers.
+    const wpm = p.match(/^\/api\/wallet-page\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (wpm) return send(res, 200, warmPics(await walletPage(wpm[1], { fresh: params.fresh === "1" })));
     if (p === "/api/research") return send(res, 200, cached("research", 6000, research.desk));
     if (p === "/api/pulse") return send(res, 200, pulseData());
     if (p === "/api/bot") return send(res, 200, cached("bot", 3000, () => ({ anti: antiSlop(), day: cached("bot-day", 10_000, brain.dayData), live: pulseData().live, scout: research.scoutStats, early: cached("bot-early", 10_000, earlyData) })));
@@ -1332,6 +1462,12 @@ async function handleRequest(req, res) {
     if (p === "/api/quote") return send(res, 200, await quote(String(params.mint || ""), params.side, params.amount, { slippageBps: params.slip, estimate: true }));
     // The trade journal's health (journal.js): rows kept, confirmations, drops, outages and their repair.
     if (p === "/api/journal") return send(res, 200, { ...journal.summary(), candles: candleStoreStats, coins: coinIndex.indexStats, pictures: images.imgStats, fast: fastStats, rpc: rpcStats });
+    // A chart that reads its candles elsewhere (the TradingView chart in the browser: coins past their first day) still
+    // wants the coin's trades as they land: this marks the chart open for 10 s (chartTrade below sends them) without the
+    // coin's own fast subscription (chartstream.js: first-day coins only, the Helius budget). Its holder book is read
+    // from the chain again while it is open (reseedWanted, every 5 s below).
+    const cf = p.match(new RegExp(`^/api/chartfocus/(${MINT})$`));
+    if (cf) { chartFocus.set(cf[1], Date.now()); return send(res, 200, { ok: true, level: levelNow(cf[1]) }); }
     const cm = p.match(new RegExp(`^/api/candles/(${MINT})$`));
     if (cm) {
       chartFocus.set(cm[1], Date.now()); focusChart(cm[1]); watchFast(cm[1]);
@@ -1365,13 +1501,17 @@ async function handleRequest(req, res) {
     if (p === "/api/paper/reset" && POST) { const b = await readBody(req); forget("paper-wallet"); return send(res, 200, { wallet: paper.resetWallet(b.sol), desk: paper.desk() }); }
     if (p === "/api/paper/balance" && POST) { const b = await readBody(req); const wallet = paper.setPaperBalance(b.sol); forget("paper-wallet"); return send(res, 200, { wallet }); }
     if (p === "/api/paper/deposit" && POST) { const b = await readBody(req); const wallet = paper.depositPaper(b.sol); forget("paper-wallet"); return send(res, 200, { wallet }); }
-    if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
+    // A coin migrating to its pool cannot be traded on chain, so paper does not fill it either (livetrades.js).
+    const paperHeld = (mint) => { const why = migrationBlock(mint); if (why) throw Object.assign(new Error(why), { status: 409 }); };
+    const paperMint = (id) => db.prepare("SELECT mint FROM paper WHERE id = ?").get(id)?.mint;
+    if (p === "/api/paper/quoted" && POST) { const b = await readBody(req); paperHeld(String(b.mint || "")); return send(res, 200, { position: await paper.openQuoted(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
     if (p === "/api/paper") {
-      if (POST) { const b = await readBody(req); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
+      if (POST) { const b = await readBody(req); paperHeld(String(b.mint || "")); return send(res, 200, { position: paper.open(String(b.mint || ""), b.sol, b), desk: paper.desk() }); }
       return send(res, 200, paper.desk());
     }
     const pm = p.match(/^\/api\/paper\/(\d+)(\/sell|\/rule|\/sellq|\/preview)?$/);
     if (pm) {
+      if ((pm[2] === "/sellq" || pm[2] === "/sell") && POST) paperHeld(paperMint(+pm[1]));
       if (pm[2] === "/sellq" && POST) { const b = await readBody(req); return send(res, 200, { position: await paper.sellQuoted(+pm[1], b.pct ?? 100, { why: b.why || "sold" }), desk: paper.desk() }); }
       if (pm[2] === "/preview") return send(res, 200, await paper.previewSell(+pm[1], params.pct));
       if (pm[2] === "/sell" && POST) { const b = await readBody(req); return send(res, 200, { position: paper.sell(+pm[1], b.pct ?? 100, { why: b.why || "sold" }), desk: paper.desk() }); }
@@ -1405,6 +1545,12 @@ async function handleRequest(req, res) {
         else wallets.updateWallet(wm[1], b);
       }
       const d = await wallets.walletDetail(wm[1]);
+      // A member reads the wallet as the chain shows it: not the owner's label, source, mute or alert rule.
+      if (res.blixAs) {
+        d.wallet = { ...d.wallet, label: null, source: null, muted: 0 };
+        if (d.wallet.group?.members) d.wallet.group.members = d.wallet.group.members.map((m) => ({ ...m, name: null }));
+        return send(res, 200, d);
+      }
       d.rule = db.prepare("SELECT effect FROM alert_rules WHERE scope = 'wallet' AND target = ?").get(wm[1])?.effect || null;
       return send(res, 200, d);
     }
@@ -1431,6 +1577,8 @@ async function handleRequest(req, res) {
       // A member or visitor asking the radar itself (the page server inside this process): the owner's followed
       // wallets, their trades and the alert rule are the owner's alone (webapp.js memberToken does the same).
       let d = tokenDetail(m[1]);
+      // Never heard of it: look it up (majors and older coins open like any other), at most a few seconds.
+      if (!d && !m[2] && await Promise.race([lookupMint(m[1]), new Promise((ok) => setTimeout(ok, 6000, false))]).catch(() => false)) d = tokenDetail(m[1]);
       if (d && (res.blixAs || res.blixVisitor)) d = { ...d, walletTrades: [], wallets: [], rule: null };
       return d ? send(res, 200, d) : send(res, 404, { error: "The radar has never seen this coin." });
     }
@@ -1471,20 +1619,34 @@ images.onPictureReady((mint) => {
   if (!watched.has(mint)) { broadcast("pic", { mint }); return; }
   images.inline(mint).then((data) => { if (clients.size) broadcast("pic", data ? { mint, data } : { mint }); }).catch(() => { if (clients.size) broadcast("pic", { mint }); });
 });
-onMigratedPrices((u) => { if (clients.size) broadcast("mig", { u }); });
+onMigratedPrices((u) => { for (const [mint, mc] of u) pxRaw(mint, mc, 1, { source: 'jupiter-price', observedAt: Date.now() }); });
 pictureHooks(images.hasPicture, images.retry);
 setInterval(() => {
   if (!clients.size) return;
-  // Each row: the live numbers from the trade feed, then the holder ledger's figures for that coin.
+  // Each row: the live numbers from the trade feed, then the holder ledger's figures for that coin, then the fees
+  // traders have paid to trade it (coinfees.js): the Pulse columns hide a coin until its fees cross a floor, and this
+  // is how one shows up with the trade that lifts it there, not on the next 12 s poll.
   // The market cap on the same scale as the px event (circulating supply, chart level): on the curve's 1B alone
   // the two feeds disagreed for such a coin and its figures flickered between them every 100 ms.
   const u = drainUpdates(watched).map((row) => {
     const k = ((knownSupply(row[0]) ?? 1e9) / 1e9) * levelNow(row[0]);
     if (row[1] && k > 0 && k !== 1) row[1] = Math.round(row[1] * k);
-    return [...row, ...liveHolders(row[0])];
+    const fees = feesOf(row[0]);
+    return [...row, ...liveHolders(row[0]), fees ? +fees.sol.toFixed(4) : null];
   });
   if (u.length) broadcast("live", { u, sol: liveFeed.solUsd });
+  // Fees arrive from blocks a few seconds after the trade, so a coin's fees usually grow without a live row of its
+  // own going out: every board coin whose fees grew in the last 100 ms goes out as [mint, sol] the same tick (the
+  // columns' fee floors decide on these, and the owner's filters are built on them).
+  if (feeDirty.size) {
+    const f = [];
+    for (const m of feeDirty) { const x = feesOf(m); if (x) f.push([m, +x.sol.toFixed(4)]); }
+    feeDirty.clear();
+    if (f.length) broadcast("fees", { u: f });
+  }
 }, 100);
+const feeDirty = new Set();
+onFee((mint) => { if (clients.size && watched.has(mint)) feeDirty.add(mint); });
 // An open chart moves trade by trade: every trade on a coin whose candles were asked for in the last 10 s
 // (curve trades and bonded coins' pool trades) goes out as [mint, ms, mcUsd, volUsd, buy] at once: trades that
 // land in the same message burst share one event, nothing waits on a timer.
@@ -1495,7 +1657,16 @@ function chartTrade(mint, mc, vol, buy, slot = null) {
   if (!t || !clients.size || !(mc > 0)) return;
   mc *= levelNow(mint);   // on the chart's level (candles.js), so a pushed trade never steps off the candles
   if (Date.now() - t > 10_000) { chartFocus.delete(mint); return; }
-  tradeOut.push([mint, Date.now(), +mc.toPrecision(8), +vol.toFixed(2), buy ? 1 : 0, slot]);   // slot: for measuring (bench-live.mjs)
+  // A price with no trade behind it (a pool account read at "processed", a chain price) that sits far off the
+  // candles is a misread (a dropped fork, the wrong side of a pool: fastpx "disagreed" 191× in 10 min, 2026-10-11),
+  // not a move: drawn, it wicked the chart to the floor for a second and the next poll pulled it back. A real trade
+  // carries its volume and moves the chart however far it moved the coin.
+  if (!(vol > 0)) { const c = chartClose(mint); if (c && Math.abs(mc / c - 1) > 0.3) return; }
+  // Stamped with the chain's time of its slot, as the candle store stamps it: stamped with the clock, a copy that
+  // arrived late (the twin stream runs ~8 s behind, a block read-back more) opened a candle at "now" on the chart
+  // while the store put it seconds back, and the next poll's redraw shoved the candles about.
+  const at = slot != null ? (slotTime(slot) ?? Date.now()) : Date.now();
+  tradeOut.push([mint, at, +mc.toPrecision(8), +vol.toFixed(2), buy ? 1 : 0, slot]);   // slot: for measuring (bench-live.mjs)
   if (!tradeTimer) tradeTimer = setImmediate(() => { tradeTimer = null; const u = tradeOut; tradeOut = []; broadcast("trade", { u }); });
 }
 // Every coin's market cap moves everywhere it shows (Discover, the launcher, watchlists, narratives...), not only
@@ -1513,32 +1684,43 @@ function pxFrom(mint, rank) {
   if (pxBest.size > 50_000) pxBest.clear();
   return true;
 }
-function pxMove(mint, mc, rank = 3) {
-  if (!clients.size || !(mc > 0) || !pxFrom(mint, rank)) return;
-  mc *= levelNow(mint);
-  pxOut.set(mint, Math.round(mc));
-  if (!pxTimer) pxTimer = setTimeout(() => { pxTimer = null; const u = [...pxOut]; pxOut.clear(); broadcast("px", { u }); }, 100);
+function pxMove(mint, mc, rank = 3, metadata = {}) {
+  pxRaw(mint, mc * levelNow(mint), rank, metadata);
 }
 // A market cap that is already on the chart's scale (Fomo's bars: USD price × supply, fomochart.js): out as is.
-function pxRaw(mint, mc, rank = 1) {
-  if (!clients.size || !(mc > 0) || !pxFrom(mint, rank)) return;
+function pxRaw(mint, mc, rank = 1, metadata = {}) {
+  if (!(mc > 0) || !Number.isFinite(mc)) return;
+  const supply = knownSupply(mint);
+  const accepted = metricState.put(mint, { mc, ...(supply > 0 ? { priceUsd: mc / supply } : {}) },
+    { source: rank >= 3 ? 'trade' : rank === 2 ? 'pool-account' : 'quote', rank, observedAt: Date.now(), maxAgeMs: 5000, estimated: !supply, provisional: rank >= 2, ...metadata });
+  if (!clients.size || (metricFlags.canonical ? !accepted.mc : !pxFrom(mint, rank))) return;
   pxOut.set(mint, Math.round(mc));
   if (!pxTimer) pxTimer = setTimeout(() => { pxTimer = null; const u = [...pxOut]; pxOut.clear(); broadcast("px", { u }); }, 100);
 }
 // On the circulating supply, the scale of the chart's history (jup.js supplyOf); the curve's own figure is on 1B.
 // An open chart whose price comes from its accounts (fastpx.js) is moved by that feed alone: the logs' copy of
 // the same trade arrives later on a busy connection and would step the candle back.
-onLiveTrade((mint, s, sol) => { if (isFast(mint)) return; const mc = s.mc * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9); pxMove(mint, mc); chartTrade(mint, mc, sol * liveFeed.solUsd, s.side === "b"); });
-onPoolTrade((mint, e) => { if (isFast(mint)) return; const mc = e.mcSol * liveFeed.solUsd; pxMove(mint, mc); chartTrade(mint, mc, e.sol * liveFeed.solUsd, e.buy); });
+onLiveTrade((mint, s, sol, _buy, x) => { if (isFast(mint)) return; const mc = s.mc * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9); pxMove(mint, mc); chartTrade(mint, mc, sol * liveFeed.solUsd, s.side === "b", x?.slot ?? null); });
+onPoolTrade((mint, e) => { if (isFast(mint)) return; const mc = e.mcSol * liveFeed.solUsd; pxMove(mint, mc); chartTrade(mint, mc, e.sol * liveFeed.solUsd, e.buy, e.slot ?? null); });
 // The same pool trades keep a bonded coin's counts, volume, traders, depth and holder ledger moving (livetrades.js, holders.js),
 // and the first of them marks a pump.fun coin bonded in the tokens table (engine.js), so it moves to Migrated at once.
 onPoolTrade((mint, e) => { try { recordPoolTrade(mint, e); if (!e.rev) bondedOnChain(mint, poolOf(mint)); } catch {} });
 const fastLast = new Map();   // mint -> { mc, t }: the header's live figure while the fast feed leads (coin.js)
 onFastPx((mint, x) => {
   const mc = x.mcSol * liveFeed.solUsd * ((knownSupply(mint) ?? 1e9) / 1e9);
-  fastLast.set(mint, { mc, t: Date.now() }); if (fastLast.size > 100) fastLast.delete(fastLast.keys().next().value);
-  addCandleTrade(mint, mc, x.sol * liveFeed.solUsd, x.buy); pxMove(mint, mc); chartTrade(mint, mc, x.sol * liveFeed.solUsd, x.buy, x.slot);
+  fastLast.set(mint, { mc, mcSol: x.mcSol, slot: x.slot, solUsd: liveFeed.solUsd, supply: knownSupply(mint), t: Date.now() }); if (fastLast.size > 100) fastLast.delete(fastLast.keys().next().value);
+  // Account deltas price the coin; actual trades alone supply candle volume.
+  priceTick(mint, mc); pxMove(mint, mc, 3, { source: 'account-processed', slot: x.slot }); chartTrade(mint, mc, 0, x.buy, x.slot);
 });
+// FX/supply changes revalue estimates immediately, without inventing a new token trade or volume.
+setInterval(() => {
+  for (const [mint, x] of fastLast) {
+    const supply = knownSupply(mint);
+    if (Date.now() - x.t > 60_000 || (x.solUsd === liveFeed.solUsd && x.supply === supply)) continue;
+    x.solUsd = liveFeed.solUsd; x.supply = supply; x.mc = x.mcSol * x.solUsd * ((supply ?? 1e9) / 1e9);
+    pxMove(mint, x.mc, 3, { source: 'account-processed', slot: x.slot, observedAt: x.t, inputObservedAt: { token: x.t, fx: liveFeed.solT || 0 } });
+  }
+}, 500).unref?.();
 // A bonded coin whose pool the chain stream is not delivering (no trade in its candles for 15 s): the pool's trade
 // list (coin.js, Jupiter's / GeckoTerminal's, read for the trade list) fills the candles and the live figure, so the
 // chart never sits frozen at the migration candle. Only trades at or after the newest candle (the book is in order).
@@ -1547,6 +1729,10 @@ coin.onPoolList((mint, x) => {
   const b = bookAt(mint);
   if (b && Date.now() - b.at < 15_000 && b.at > (poolFilled.get(mint) || 0) + 50) return;
   if (b && x.t / 1000 < b.t) return;
+  // The list's market cap is Jupiter's / GeckoTerminal's, on their supply figure; far off the candles' level it would
+  // draw a step down (or up) that the next chain trade steps back from. Only a figure on the chart's own level fills.
+  const c = chartClose(mint);
+  if (c && Math.abs(x.mcUsd / c - 1) > 0.3) return;
   addCandleTrade(mint, x.mcUsd, x.usd || 0, x.side === "buy", x.t);
   poolFilled.set(mint, Date.now()); if (poolFilled.size > 500) poolFilled.delete(poolFilled.keys().next().value);
   if (Date.now() - x.t < 60_000) pxMove(mint, x.mcUsd);
@@ -1587,15 +1773,23 @@ onHolders((mint) => {
   if (!h) return;
   const supply = knownSupply(mint) ?? 1e9;
   const top10 = h.top.filter(([w]) => isWallet(w)).slice(0, 10).reduce((s, [, n]) => s + n, 0) / supply * 100;
+  metricState.put(mint, { holders: h.count, top10: +top10.toFixed(2) }, { source: 'holder-accounts', rank: 3, provisional: true, partial: true, observedAt: Date.now(), maxAgeMs: 30_000 });
   broadcast("cholders", { mint, holders: h.count, top10: +top10.toFixed(2), devPct: null, source: "chain (live)", t: Date.now() });
 });
 // A paper position closed by its own exit rule: tell the page (and the event log keeps it).
 paper.exitHook((pos) => broadcast("paper", { pos }, pos?.who || ""));
 paper.nameHook(nameOf);
 
-// A bad API response should never take the radar down.
-process.on("unhandledRejection", (e) => logEvent("error", `unhandled: ${e?.message || e}`));
-process.on("uncaughtException", (e) => logEvent("error", `uncaught: ${e?.message || e}`));
+// A bad API response should never take the radar down. Nor should noting it: the event row is a database write,
+// and when the database was locked (an outside checkpoint, 2026-10-11) the handler itself threw and the process
+// exited with 7, taking every chart down for half a minute. The log line goes to stdout as well, so the cause shows.
+const noteFatal = (kind, e) => {
+  const msg = `${kind}: ${e?.message || e}`;
+  try { logEvent("error", msg); } catch { /* the database is busy: never a second failure inside the handler */ }
+  try { console.error(`[${kind}]`, e?.stack || msg); } catch {}
+};
+process.on("unhandledRejection", (e) => noteFatal("unhandled", e));
+process.on("uncaughtException", (e) => noteFatal("uncaught", e));
 
 // Also answer on IPv6 loopback: browsers try "localhost" as ::1 first and stall before falling back to IPv4.
 // Requests are timed the same way as the repeating jobs: one that holds the radar up is recorded by its path.
@@ -1717,6 +1911,7 @@ server.listen(PORT, "127.0.0.1", () => {
     // never traded again stayed forever and, first in the set, crowded Pulse's coins out of wantFomoPrices' cap.
     const want = new Set();
     for (const [m, t] of chartFocus) { if (Date.now() - t > 5 * MIN) chartFocus.delete(m); else if (Date.now() - t < 10_000) want.add(m); }
+    try { reseedWanted([...want]); } catch {}   // open coin pages: holder books read from the chain again (holders.js)
     try { mintsOf(pulseData(), want); } catch {}
     wantFomoPrices(want);
   }, 5000).unref();

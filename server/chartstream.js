@@ -137,7 +137,7 @@ function connect() {
   sock.onmessage = (msg) => {
     if (ws !== sock) return;
     const text = typeof msg.data === "string" ? msg.data : Buffer.from(msg.data).toString();
-    count(text.length, sock.url);
+    count(Buffer.byteLength(text), sock.url);
     let d; try { d = JSON.parse(text); } catch { return; }
     if (d.method === "logsNotification" && !extraById.has(d.params?.subscription)) {
       chartStream.msgs++; chartStream.lastMsg = now();
@@ -220,7 +220,7 @@ function mux(tag) {
     sock.onmessage = (msg) => {
       if (m.ws !== sock) return;
       const text = typeof msg.data === "string" ? msg.data : Buffer.from(msg.data).toString();
-      count(text.length, m.url);
+      count(Buffer.byteLength(text), m.url);
       let d; try { d = JSON.parse(text); } catch { return; }
       if (d.method && d.params && m.byId.has(d.params.subscription)) {
         chartStream.msgs++;

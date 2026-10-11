@@ -72,10 +72,12 @@ const unsure = () => Boolean(usage.blockedSince) || !usage.lastOk;
 const recheckBusy = () => unsure() && probing;
 const usage = { calls: 0, errors: 0, tokens: 0, searches: 0, lastMs: null, avgMs: null, lastModel: null, lastError: null, lastErrorAt: null, lastOk: null, blockedSince: null, limits: null, tier: null, billing: null };
 
-// settings.grokOff: the owner turned Grok off for Blix; every lane then treats it as not logged in.
-export const grokInstalled = () => !settings.grokOff && fs.existsSync(path.join(DIR, "auth.json"));
+// settings.grokOff: the owner turned Grok off for Blix; every lane then treats it as not logged in, except the
+// lanes listed in settings.grokLanes (the owner let the Narratives desk use it on 2026-10-10: desk.js).
+const laneOn = (lane) => !settings.grokOff || (Array.isArray(settings.grokLanes) && settings.grokLanes.includes(lane));
+export const grokInstalled = (lane) => laneOn(lane) && fs.existsSync(path.join(DIR, "auth.json"));
 // Can this lane use Grok right now: logged in, not out of credits, and inside the daily budget.
-export const grokReady = (lane) => grokInstalled() && !grokBlocked() && !grokOver(lane);
+export const grokReady = (lane) => grokInstalled(lane) && !grokBlocked() && !grokOver(lane);
 export const grokStatus = () => ({ installed: grokInstalled(), ...usage, coolingSecs: cooling > Date.now() ? Math.ceil((cooling - Date.now()) / 1000) : 0,
   blocked: grokBlocked() ? blockedReason : null, blockedUntil: grokBlocked() ? blockedUntil : null, spend: grokSpend() });
 
@@ -129,8 +131,16 @@ function textOf(j) {
   return (msg || j.choices?.[0]?.message?.content || j.output_text || "").trim();
 }
 
+// The pages Grok's searches read (the Responses API lists them as url_citation notes on the message, and some
+// answers also carry a top-level citations list of plain URLs).
+function citationsOf(j) {
+  const urls = [...(Array.isArray(j.citations) ? j.citations : []).map((c) => (typeof c === "string" ? c : c?.url)),
+    ...(j.output || []).filter((o) => o.type === "message").flatMap((o) => o.content || []).flatMap((c) => c.annotations || []).map((a) => a?.url)];
+  return [...new Set(urls.filter((u) => typeof u === "string" && /^https:\/\//.test(u)))];
+}
+
 async function post(model, body, retried = false, timeout = 90_000, lane = "other") {
-  if (settings.grokOff) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
+  if (!laneOn(lane)) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
   const t0 = Date.now();
   const endpoint = body.input ? "responses" : "chat/completions";
   const r = await fetch(`${BASE}/${endpoint}`, {
@@ -167,14 +177,14 @@ async function post(model, body, retried = false, timeout = 90_000, lane = "othe
   usage.lastOk = Date.now(); usage.blockedSince = null;
   health.ok("grok");
   const cost = record(lane, model, ms, j.usage);
-  return { text: textOf(j), model, ms, searches: j.usage?.num_server_side_tools_used || 0, cost, tokens: j.usage?.total_tokens || 0, outTokens: j.usage?.output_tokens ?? j.usage?.completion_tokens ?? null };
+  return { text: textOf(j), citations: citationsOf(j), model, ms, searches: j.usage?.num_server_side_tools_used || 0, cost, tokens: j.usage?.total_tokens || 0, outTokens: j.usage?.output_tokens ?? j.usage?.completion_tokens ?? null };
 }
 
 // search: let Grok search X (and the web) itself before answering.
 // maxSearches + low reasoning keep a searched read around 7-10s instead of 30s (it otherwise runs ~12 searches).
 let plainSearch = false;
 export async function askGrok(system, prompt, { model = GROK_MODELS[0], search = true, maxTokens = 2000, maxSearches = 3, effort = "low", chatEffort = null, timeout = 90_000, lane = "other", fallback = true } = {}) {
-  if (settings.grokOff) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
+  if (!laneOn(lane)) throw Object.assign(new Error("Grok is switched off for Blix (Settings: grokOff)"), { busy: true, blocked: true });
   if (cooling > Date.now()) throw Object.assign(new Error("Grok is cooling down after a rate limit"), { busy: true });
   if (grokBlocked() || recheckBusy()) throw Object.assign(new Error(blockedReason || "Grok is being re-checked"), { busy: true, blocked: true });
   const probe = unsure();

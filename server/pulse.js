@@ -5,7 +5,7 @@ import { db, q, json } from "./db.js";
 import { recentLaunches, devLaunches, launchIndex } from "./engine.js";
 import { candidates, ipfs, bondingProgress, providers, queueStatus, liveTraction } from "./research.js";
 import { safeUrl, publicUrl, cleanLinks, readingProblem } from "./quality.js";
-import { liveStats, feed, live, closeToBonding, curveLiqUsd } from "./livetrades.js";
+import { liveStats, feed, live, closeToBonding, curveLiqUsd, migrationOf } from "./livetrades.js";
 import { dexTokens } from "./sources.js";
 import { triageFor, triageStats } from "./triage.js";
 import { earlyFor } from "./early.js";
@@ -20,6 +20,7 @@ import { jupiterGet } from "./jupiter.js";
 import { supplyOf } from "./jup.js";
 import { priceTick, addTrade } from "./candles.js";
 import { onPoolTrade } from "./pumpswap.js";
+import { warmX } from "./xcard.js";
 import { onPoolPrice, watchSol } from "./poolwatch.js";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 import { gtGet, gtReady } from "./gtgate.js";
@@ -92,12 +93,20 @@ function ledgerFor(r) {
   if (!hl?.p) return hl;
   return { ...hl, h: r.holders > (hl.h ?? 0) ? r.holders : hl.h, t10: r.top10 ?? hl.t10, dev: r.dev ?? hl.dev };
 }
+// What traders paid to trade a coin (network, priority, tips), the row's "F" (coinfees.js): on every column's rows,
+// so each column's fee floor (New Pairs 0.001 SOL, Final Stretch 0.05, Migrated 1; pulse/ColumnFilters.tsx DEFAULTS) can hide rugs.
+function withFees(r) {
+  const fees = feesOf(r.mint);
+  return fees ? { ...r, fees: fees.sol, feesSince: fees.since } : r;
+}
 function withLive(r) {
   // pump.fun Mayhem Mode (its AI agent trades the coin for the first 24 h), from the launch feed.
   if (launchIndex.get(r.mint)?.mayhem) r = { ...r, mayhem: true };
   // What traders paid to trade it (network, priority, tips), the row's "F" (coinfees.js).
-  const fees = feesOf(r.mint);
-  if (fees) r = { ...r, fees: fees.sol, feesSince: fees.since };
+  // Curve full, pool not trading yet: the row says "Migrating" and its buy button waits (livetrades.js migrationOf).
+  const mig = r.graduated && r.pair_created ? null : migrationOf(r.mint);
+  if (mig) r = { ...r, migrating: mig.since };
+  r = withFees(r);
   const x = liveStats(r.mint);
   const bonded = r.graduated || (x?.progress ?? 0) >= 0.995;
   // The ledger follows a coin into its PumpSwap pool (x.pool); one that bonded elsewhere keeps it LEDGER_AFTER_BOND.
@@ -157,6 +166,7 @@ async function fetchMeta(l) {
     const r = await fetch(uri, { signal: AbortSignal.timeout(6000) });
     const m = JSON.parse((await r.text()).slice(0, 200_000));
     meta.set(l.mint, { image: safeUrl(m.image ? ipfs(m.image) : null), twitter: safeUrl(m.twitter), website: safeUrl(m.website), telegram: safeUrl(m.telegram), description: String(m.description || "").slice(0, 200) });
+    warmX(safeUrl(m.twitter));   // its X card, read now so the hover is instant and a post deleted later still shows
   } catch { meta.set(l.mint, { failed: true, t: now(), n: (tries.get(l.mint) || 0) + 1 }); tries.set(l.mint, (tries.get(l.mint) || 0) + 1); }
   finally { fetching--; }
 }
@@ -474,7 +484,7 @@ export function pulseData() {
   const migrated = [...seconds, ...older].map((t) => {
     const b = bare(t.mint), r = row({ ...t, graduated: 1 }, ai.get(t.mint)), x = liveStats(t.mint);
     // Bonded seconds ago: its last price on the curve stands in until the new pool is priced, and says so.
-    const out = withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 }));
+    const out = withFees(withPool(withFastPrice({ ...r, symbol: r.symbol || b.symbol, name: r.name || b.name, image: r.image || b.image, mcap: r.mcap ?? (x ? x.mc : null), progress: 1 })));
     return r.mcap == null && x && out.priceT == null ? { ...out, warn: { kind: "stale", text: "Just bonded: this is the last price on the curve until the pool is priced" } } : staleness(out);
   }).filter((r) => r.symbol && (r.mcap || 0) >= 5000).map(rankRow).sort((a, b) => a.age - b.age).slice(0, 80);
   bondedSeen.clear();

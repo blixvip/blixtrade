@@ -7,8 +7,8 @@
 //   POST /api/edge/invite             the Worker only: { email, handle } a new sign-up came through <h>'s link
 // invites.ref is the inviter's email (emails never change; handles can). The wallet service is told it with each
 // trade (hosted-accounts.js): the inviter earns a share of the fee and the invited trader pays less.
-// A handle someone moved off stays theirs for KEEP_OLD (handles_old): links already shared keep opening their page
-// and keep crediting them, and nobody else can take the name and collect their invites. They can take it back.
+// A handle someone moved off is free for anyone at once (the user, 2026-10-10: names are not held). Until someone
+// takes it, links already shared still open its old owner's page and credit them (handles_old, KEEP_OLD).
 const HANDLE = /^[a-z0-9_]{3,20}$/;
 const DAY = 86400_000, KEEP_OLD = 30 * DAY;
 // Every first path part the site or the terminal uses, plus names nobody should be able to pass themselves off as
@@ -56,8 +56,6 @@ export function createHandles({ db, now = Date.now }) {
     if (v.error) return v.error;
     const live = ownerOf(v.handle);
     if (live && !same(live.email, email)) return "That handle is taken.";
-    const old = oldOwnerOf(v.handle);
-    if (old && !same(old.email, email)) return "That handle is taken.";
     return null;
   }
   // The member's own name, cleaned into a free handle (adding a number when the plain one is taken), or null.

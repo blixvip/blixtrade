@@ -18,6 +18,7 @@ import { supplyOf } from "./jup.js";
 import { onCurve } from "./holderslive.js";
 import { rpc } from "./solana.js";
 import { db } from "./db.js";
+import { createPriceGuard } from './price-guard.js';
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -62,14 +63,9 @@ const lastEmit = new Map();  // mint -> ms
 // A price more than 20x from the last one within 10 s is held back until a second reading agrees with it
 // (XPAD, 2026-10-07: one mispaired pair of vault deltas priced a $106K coin at $67 for a minute of chart):
 // a real move that size shows in the next slot too; a wrong pairing does not.
-const lastPx = new Map();    // mint -> { mcSol, t, held }
-function emit(mint, mcSol, sol, buy, slot = null) {
-  if (!(mcSol > 0) || mcSol > 1e8) return;
-  const p = lastPx.get(mint);
-  if (p && now() - p.t < 10_000 && (mcSol / p.mcSol > 20 || mcSol / p.mcSol < 0.05)) {
-    if (!(p.held && (mcSol / p.held > 0.5 && mcSol / p.held < 2))) { p.held = mcSol; fastStats.held++; return; }
-  }
-  lastPx.set(mint, { mcSol, t: now() }); if (lastPx.size > 500) lastPx.delete(lastPx.keys().next().value);
+const priceGuard = createPriceGuard();
+function emit(mint, mcSol, sol, buy, slot = null, validated = false) {
+  if (!validated && !priceGuard.accept(mint, mcSol, slot)) { fastStats.held++; return; }
   fastStats.updates++;
   lastEmit.set(mint, now());
   if (slot != null) {
@@ -92,8 +88,8 @@ function startLane() {
     lane = new Worker(new URL("./fastlane.js", import.meta.url), { workerData: { port: laneStats.port } });
     laneStats.on = true;
     lane.on("message", (m) => {
-      if (m.op === "px") emit(m.mint, m.mcSol, m.sol, m.buy, m.slot);
-      else if (m.op === "meter") { if (m.bytes) count(m.bytes); noteSlot("fast", m.slot); }
+      if (m.op === "px") emit(m.mint, m.mcSol, m.sol, m.buy, m.slot, true);
+      else if (m.op === "meter") { if (m.bytes) count(m.bytes, m.url); noteSlot("fast", m.slot); }
       else if (m.op === "want") watchFast(m.mint);
       else if (m.op === "done") { const w = watches.get(m.mint); if (w) { for (const s of w.stops) try { s?.(); } catch {} watches.delete(m.mint); } }
       else if (m.op === "error") laneStats.error = m.message;
@@ -131,7 +127,6 @@ function watchCurve(mint, w) {
     if (!(vTok > 0)) return;
     const d = lastSol == null ? 0 : vSol - lastSol;
     lastSol = vSol;
-    if (d === 0) return;
     emit(mint, (vSol / vTok) * 1e9, Math.abs(d), d > 0, res?.context?.slot ?? null);
   }));
 }
@@ -141,10 +136,13 @@ async function watchPool(mint, pool, w) {
   // (139..203), lp supply, coin creator, two flags, then virtual_quote_reserves (i128 at 245): SOL the pool prices
   // with on top of (or, since 2026-09-30, possibly below) what its vault holds. Without it the vaults' ratio sat
   // 10-15% off every trade on some pools (the "k" below was the workaround); with it the ratio is the price.
-  const r = await rpc("getAccountInfo", [pool, { encoding: "base64", dataSlice: { offset: 139, length: 122 } }]);
+  const r = await rpc("getAccountInfo", [pool, { encoding: "base64" }]);
   const d = r?.value?.data?.[0];
   if (!d || watches.get(mint) !== w) return;
-  const b = Buffer.from(d, "base64");
+  const full = Buffer.from(d, 'base64');
+  // Unsupported layouts/quote tokens fall back to validated trade and provider prices.
+  if (r.value.owner !== AMM || full.length < 245 || b58(full.subarray(43, 75)) !== mint || b58(full.subarray(75, 107)) !== WSOL) { w.kind = null; return; }
+  const b = full.subarray(139);
   const baseV = b58(b.subarray(0, 32)), quoteV = b58(b.subarray(32, 64));
   const virt = b.length >= 122 ? Number(BigInt.asIntN(128, b.readBigUInt64LE(106) | (b.readBigUInt64LE(114) << 64n))) / 1e9 : 0;
   if (lane) return laneWatch(mint, "pool", [baseV, quoteV], w, virt);
@@ -157,7 +155,7 @@ async function watchPool(mint, pool, w) {
     timer = null;
     const dB = delta.base, dQ = delta.quote;
     delta.base = 0; delta.quote = 0;
-    if (!(last.base > 0) || !(last.quote + virt > 0)) return;
+    if (!(last.base > 0) || !(last.quote + virt > 0) || slot.base !== slot.quote) return;
     const ratio = ((last.quote + virt) / last.base) * 1e9;
     // Tokens out and SOL in: buys; the other way: sells.
     const buy = dB < 0 && dQ > 0, sell = dB > 0 && dQ < 0;
@@ -193,9 +191,15 @@ async function watchPool(mint, pool, w) {
 
 // Keep `mint`'s price feed for another 15 s (the chart asks for candles every second or so while open).
 // Returns true while a fast feed is (being) set up for it, so the caller can let it lead the chart.
-export function watchFast(mint) {
+export function watchFast(mint, active = true) {
   let w = watches.get(mint);
-  if (w) { w.t = now(); return w.kind != null; }
+  if (w) { w.t = now(); if (active) w.activeAt = now(); return w.kind != null; }
+  if (watches.size >= 64) {
+    const victim = active && [...watches].filter(([, x]) => now() - (x.activeAt || 0) > 15_000).sort((a, b) => a[1].t - b[1].t)[0];
+    if (!victim) return false;
+    for (const stop of victim[1].stops) try { stop?.(); } catch {}
+    watches.delete(victim[0]);
+  }
   if (now() < (offUntil.get(mint) || 0)) return false;
   const t = db.prepare("SELECT graduated, dex, pair FROM tokens WHERE mint = ?").get(mint);
   // On the curve while the tokens table and the curve's own progress both say so; else its PumpSwap pool, from the
@@ -203,7 +207,7 @@ export function watchFast(mint) {
   const bonded = Boolean(t?.graduated) || (liveStats(mint)?.progress ?? 0) >= 0.995;
   const pool = (t?.dex === "pumpswap" && t.pair ? t.pair : poolOf(mint)) || (bonded && mint.endsWith("pump") ? canonicalPool(mint) : null);
   const kind = !mint.endsWith("pump") ? null : !bonded ? "curve" : pool ? "pool" : null;
-  w = { t: now(), stops: [], kind };
+  w = { t: now(), activeAt: active ? now() : 0, stops: [], kind };
   watches.set(mint, w);
   if (kind === "curve") watchCurve(mint, w);
   else if (kind === "pool") watchPool(mint, pool, w).catch(() => {});

@@ -8,6 +8,7 @@
 import { live, feed } from "./livetrades.js";
 import { jupiterGet } from "./jupiter.js";
 import { db } from "./db.js";
+import { supplyOf } from "./jup.js";
 
 const WSOL = "So11111111111111111111111111111111111111112";
 const now = () => Date.now();
@@ -124,8 +125,10 @@ export async function quote(mint, side, amount, { slippageBps = 300, estimate = 
     });
   const usd = feed.solUsd;
   if (!feed.solKnown) throw err(503, "Waiting for the SOL price, so dollar figures would be wrong. Try again in a few seconds.");
+  // Market cap at the average fill price: every pump.fun coin has 1B tokens; any other coin its own supply when known
+  // (cbBTC's 2.8K tokens on 1B read as an $83 trillion market cap).
+  const sup = /pump$/.test(mint) || onCurve ? 1e9 : supplyOf(mint) ?? 1e9;
   return { ...q, mint, slippageBps, solUsd: usd, t: now(),
-    // Market cap at the average fill price (every pump.fun coin has 1B tokens; Jupiter coins use their own supply via spot).
-    avgMcapUsd: q.avgSol * 1e9 * usd, spotMcapUsd: q.spotSol ? q.spotSol * 1e9 * usd : null,
+    avgMcapUsd: q.avgSol * sup * usd, spotMcapUsd: q.spotSol ? q.spotSol * sup * usd : null,
     usdIn: side === "buy" ? amount * usd : null, usdOut: side === "sell" ? q.outSol * usd : null };
 }

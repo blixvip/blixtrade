@@ -1,3 +1,4 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Solana RPC access and swap parsing. Works on the free public RPC (slow, ~1 tx lookup/s);
 // a custom RPC URL in Settings (e.g. a free Helius key) makes wallet tracking much faster.
 import { settings } from "./settings.js";
@@ -63,6 +64,7 @@ export async function rpc(method, params, tries = 3) {
       count(method, text.length);
       body = JSON.parse(text);
     } catch (e) {
+      if (e.code === "HELIUS_BUDGET") throw e;
       rpcStats.errors++;
       rpcStats.lastError = e.name === "TimeoutError" ? "timed out" : e.message; rpcStats.lastErrorAt = Date.now();
       health.fail("rpc", rpcStats.lastError);

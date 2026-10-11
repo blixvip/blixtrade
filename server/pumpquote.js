@@ -68,6 +68,17 @@ async function lookup() {
 setInterval(() => { if (!timer && prices.size > DOLLARS.size) timer = setTimeout(lookup, 0); }, 30_000).unref?.();
 for (const [m, dec] of DOLLARS) prices.set(m, { usd: 1, dec, t: Infinity });
 
+// A quote token's dollar price and decimals, for a pool quoted in it (pumpswap.js decode): Jupiter's figure, a
+// dollar coin's, or the radar's own live price of a young coin; null (and asked for) until one is known.
+export function quoteUsd(mint) {
+  const p = prices.get(mint);
+  if (p) return p;
+  const l = localUsd(mint);
+  if (l > 0) return { usd: l, dec: 6, t: Date.now() };
+  want(mint);
+  return null;
+}
+
 // A TradeEvent (pump.fun's, discriminator checked by the caller) of a curve quoted in another token, as a trade in
 // SOL-equivalents at `solUsd`: { mint, tokens, buy, user, sol, mcSol, vSol, vTok, rTok, quote, usd, mcUsd }.
 // null when it is a SOL curve or unreadable; { pending: true } when its quote token has no price yet (asked for:

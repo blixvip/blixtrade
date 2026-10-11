@@ -1,9 +1,10 @@
+import { heliusFetch as fetch } from "./heliuskeys.js";
 // Runs the trade journal (journal.js) against the radar's live feeds: every pump.fun curve trade and PumpSwap
 // trade is recorded as it is heard, written once a second, confirmed a few seconds later, and kept a day. The
 // feeds' outages (and the radar's own downtime) are recorded as gaps and repaired from the chain when the
 // feed is back. The live candles are rebuilt from the journal at start, so a restart loses no trades.
 import { onLiveTrade, feed, twin, pumpHeard } from "./livetrades.js";
-import { onPoolTrade, onPoolLearned, swapFeed, decodeKnown } from "./pumpswap.js";
+import { onPoolTrade, onPoolLearned, swapFeed, decodeKnown, knownMint, poolInfoOf } from "./pumpswap.js";
 import { settings } from "./settings.js";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
@@ -11,12 +12,12 @@ import { setBook } from "./candles.js";
 import { supplyOf, knownSupply } from "./jup.js";
 import { rpc } from "./solana.js";
 import { coinRpcUrl } from "./txtrade.js";
-import { noteCall } from "./heliuskeys.js";
 import { slotTime } from "./feedlag.js";
 import { db, DATA } from "./db.js";
 import * as J from "./journal.js";
 import { quoteStats } from "./pumpquote.js";
-import { addFee, feeStats } from "./coinfees.js";
+import { addFee, feeStats, updateFeeCoverage } from "./coinfees.js";
+import { createSolPoolResolver } from './pool-identity.js';
 
 const now = () => Date.now();
 const DOWN_MS = 15_000;   // a whole program's log stream (tens of trades a second) silent this long is down
@@ -34,24 +35,11 @@ function rebuildSoon(mint) {
 }
 
 // PumpSwap pool -> coin, for trades read back from the chain: the radar's known pairs, else the pool account.
-const pools = new Map();
-export async function poolMint(pool) {
-  if (pools.has(pool)) return pools.get(pool);
-  let mint = db.prepare("SELECT mint FROM tokens WHERE pair = ? AND mint LIKE '%pump'").get(pool)?.mint ?? null;
-  if (!mint) {
-    try {
-      const a = (await rpc("getMultipleAccounts", [[pool], { encoding: "base64", dataSlice: { offset: 43, length: 64 } }]))?.value?.[0];
-      if (a?.owner === "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") {
-        const d = Buffer.from(a.data[0], "base64"), B = await import("./livetrades.js");
-        const base = B.b58(d.subarray(0, 32)), quote = B.b58(d.subarray(32, 64));
-        if (quote === "So11111111111111111111111111111111111111112" && base.endsWith("pump")) mint = base;
-      }
-    } catch {}
-  }
-  pools.set(pool, mint);
-  if (pools.size > 20_000) pools.clear();
-  return mint;
-}
+const solPoolMint = createSolPoolResolver(rpc);
+// What the live feed learned of a pool comes first (pumpswap.js: its sides too, so a pool quoted in another token
+// is priced at that token's dollar price, not as SOL); a pool it never heard is read as a SOL pool, else unpriced.
+export const poolMint = async (pool) => { const k = knownMint(pool); return k !== undefined ? k : solPoolMint(pool); };
+export const poolInfo = (pool) => poolInfoOf(pool);
 
 // Read-backs go to the fast per-coin RPC (the chart's free Helius key when set: a credit per call, spent
 // only after an outage), paced to ~6 calls a second, with a retry after a rate limit.
@@ -63,7 +51,7 @@ export async function repairCall(method, params) {
     const wait = nextCall - now(); nextCall = Math.max(now(), nextCall) + 330;
     if (wait > 0) await new Promise((go) => setTimeout(go, wait));
     try {
-      const url = coinRpcUrl(); noteCall(url, method);
+      const url = coinRpcUrl();
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
       if (r.status === 429) { nextCall = now() + 60_000; continue; }
       const j = await r.json();
@@ -86,7 +74,7 @@ async function runRepairs() {
   while (repairs.length) {
     const job = repairs.shift();
     const id = typeof job === "object" ? job.id : job, only = typeof job === "object" ? job.only : null;
-    try { await J.repairGap(id, { watched: watchedFn(), only, poolMint, supply: supplyOf, call: repairCall }); } catch {}
+    try { await J.repairGap(id, { watched: watchedFn(), only, poolMint, poolInfo, supply: supplyOf, call: repairCall }); } catch {}
   }
   repairing = false;
 }
@@ -122,8 +110,7 @@ async function pnCall(method, params) {
   for (const url of urls) {
     if ((resting.get(url) || 0) > now()) continue;
     try {
-      if (!FREE.includes(url)) noteCall(url, method);
-      const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(10_000) });
+            const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(10_000) });
       const j = await r.json().catch(() => null);
       if (r.status === 429 || j?.error?.code === -32005 || j?.error?.code === 429) { resting.set(url, now() + 20_000); reconcileStats.limited++; continue; }
       if (j && !j.error && j.result !== undefined) return j.result;
@@ -173,7 +160,7 @@ async function reconcile(mint) {
   }
   c.todo = keep;
   if (!batch.length) return;
-  const r = await J.readBack(mint, batch, { getTx: pnTx, poolMint, supply: supplyOf, conc: 4 });
+  const r = await J.readBack(mint, batch, { getTx: pnTx, poolMint, poolInfo, supply: supplyOf, conc: 4 });
   // Unreadable (rate limited, or not on that node yet): back in the queue while the chart is open, 20 tries
   // (about a minute) before it is let go: three were used up in seconds when the endpoints were busy.
   const failed = new Set(r.failed);
@@ -221,7 +208,7 @@ function onBlock({ slot, time, txs }) {
       per.get(x.mint).push(x);
     }
     // What it paid (blocks only: the sweep's transactions are also in blocks, and would count twice).
-    if (fee > 0 && per.size) for (const mint of per.keys()) addFee(mint, fee / 1e9 / per.size / feeStats.cover, t0);
+    if (fee > 0 && per.size) for (const mint of per.keys()) addFee(mint, fee / 1e9 / per.size, t0, sig);
     for (const [mint, list] of per) {
       if (J.heardTx(sig, mint)) continue;
       list.forEach((x, n) => J.record({ ...x, sig, n, slot, t: t0 + n, usd: x.sol * sol, block: true }));
@@ -311,7 +298,12 @@ function coverage(w) {
   const t = now(), last = coverSnaps.at(-1);
   if (!last || t - last[0] >= 60_000) { coverSnaps.push([t, w.blocks || 0, w.lost || 0]); if (coverSnaps.length > 11) coverSnaps.shift(); }
   const [, b0, l0] = coverSnaps[0], read = (w.blocks || 0) - b0, lost = (w.lost || 0) - l0;
-  if (read + lost >= 50 && read > 0) feeStats.cover = Math.max(0.3, Math.min(1, read / (read + lost)));
+  if (read + lost >= 50 && read > 0) {
+    feeStats.cover = Math.max(0.3, Math.min(1, read / (read + lost)));
+    // Recent buckets can be recalculated as follower coverage becomes known. Older intervals keep their basis.
+    updateFeeCoverage(t, feeStats.cover);
+    updateFeeCoverage(t - 60_000, feeStats.cover);
+  }
 }
 // The follower is on and within ~20 s of the chain tip.
 const followerOk = () => blockStats.on && blockStats.worker && blockStats.worker.behind < 100 && blockStats.worker.backlog < 300 && now() - blockStats.worker.lastBlockAt < 15_000;
