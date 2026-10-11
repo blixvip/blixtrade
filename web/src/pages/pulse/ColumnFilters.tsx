@@ -24,16 +24,21 @@ const KNOWN = new Set(PADS.map(([k]) => k));
 
 // What a column starts with in a browser that has never saved filters (a new sign-up): Final Stretch shows coins
 // at most 400 minutes old and worth at least $4K, and every column has a floor on the fees traders have paid to
-// trade the coin (New Pairs 0.01 SOL, Final Stretch 0.1, Migrated 1), so a rug nobody traded never shows. Reset
+// trade the coin (New Pairs 0.005 SOL, Final Stretch 0.05, Migrated 1), so a rug nobody traded never shows. Reset
 // goes back to these.
-export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.01" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.1" }, migrated: { feesMin: "1" } };
+export const DEFAULTS: Record<Col, Filters> = { new: { feesMin: "0.005" }, running: {}, stretch: { ageMax: "400", mcapMin: "4000", feesMin: "0.05" }, migrated: { feesMin: "1" } };
+// Floors a browser may have been given before (2026-10-10 first set them higher): replaced by the current one.
+const OLD_FLOORS: Record<string, string[]> = { new: ["0.01"], stretch: ["0.1"] };
 export const countFilters = (f: Filters) => Object.values(f).filter(isSet).length;
 const load = (c: Col) => {
   const f = store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
-  // The fee floors arrived on 2026-10-10: a browser with filters saved before then gets its column's floor once, on
-  // top of what it had (clearing the box afterwards sticks).
+  // The fee floors arrived on 2026-10-10 (lowered the same day): a browser with filters saved before gets its
+  // column's floor once, on top of what it had (clearing the box afterwards sticks); an earlier floor moves to the new one.
   const floor = DEFAULTS[c].feesMin;
-  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees`, false)) { store.set(`pulse:colf2:${c}:fees`, true); if (!isSet(f.feesMin)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); } }
+  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees2`, false)) {
+    store.set(`pulse:colf2:${c}:fees2`, true);
+    if (!isSet(f.feesMin) || (OLD_FLOORS[c] || []).includes(f.feesMin!)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); }
+  }
   return f;
 };
 export function resetColumn(c: Col) { store.set(`pulse:colf2:${c}`, { ...DEFAULTS[c] }); useColFilters.setState((s) => ({ f: { ...s.f, [c]: { ...DEFAULTS[c] } } })); }
