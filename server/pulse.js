@@ -456,7 +456,7 @@ export function pulseData() {
   const since = now() - 6 * 60 * MIN;
   const older = db.prepare(`SELECT * FROM tokens INDEXED BY tokens_bonded_t WHERE status = 'active' AND graduated = 1 AND pair IS NOT NULL AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'
     AND COALESCE(pair_created, first_seen) > ? AND mcap >= 5000 ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 80`).all(since);
-  const seconds = db.prepare("SELECT * FROM tokens WHERE graduated = 1 AND pair IS NULL AND status = 'active' AND quarantine IS NULL AND first_seen > ? ORDER BY first_seen DESC LIMIT 20").all(now() - 10 * MIN);
+  const seconds = db.prepare("SELECT * FROM tokens WHERE graduated = 1 AND (pair IS NULL OR COALESCE(mcap, 0) < 5000) AND status = 'active' AND quarantine IS NULL AND COALESCE(pair_created, first_seen) > ? ORDER BY COALESCE(pair_created, first_seen) DESC LIMIT 20").all(now() - 10 * MIN);
   const all = [...fresh.map((l) => l.mint), ...stretchMints, ...quiet.map((t) => t.mint), ...older.map((t) => t.mint), ...seconds.map((t) => t.mint)];
   const ai = researchMap([...new Set(all)]);
   const newPairs = fresh.filter((l) => { const t = tracked.get(l.mint); return !t || now() - (t.pair_created || t.first_seen) < 24 * 60 * MIN; }).map((l) => {

@@ -101,11 +101,16 @@ const bondedOnChainSeen = new Set();
 export function bondedOnChain(mint, pool) {
   if (bondedOnChainSeen.has(mint)) return;
   const had = q.getToken.get(mint);
-  if (!had) { adopt({ mint, source: "pump-graduated" }); return; }   // adopted now; marked on its next pool trade
+  // A coin the radar never tracked (most fresh launches) is adopted this instant with what the launch feed knows
+  // of it, then marked like any other: it is in Migrated at a second old, not after its next pool trade and scan.
+  if (!had) { const l = launchIndex.get(mint); adopt({ mint, symbol: l?.symbol, name: l?.name, uri: l?.uri, creator: l?.creator, devSol: l?.devSol, source: "pump-graduated" }); }
   bondedOnChainSeen.add(mint); if (bondedOnChainSeen.size > 5000) bondedOnChainSeen.clear();
-  if (had.graduated && had.pair) return;
-  const r = db.prepare("UPDATE tokens SET graduated = 1, pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = COALESCE(pair_created, ?) WHERE mint = ?").run(pool || null, now(), mint);
-  if (!r.changes || had.graduated) return;
+  if (had?.graduated && had?.pair) return;
+  // Its market cap from the live curve (SOL, at the live SOL price) until the scan reads the pool: the Migrated
+  // column's query wants one.
+  const s = liveCurves.get(mint), mc = s?.mc > 0 && liveFeed.solUsd > 0 ? Math.round(s.mc * liveFeed.solUsd) : null;
+  const r = db.prepare("UPDATE tokens SET graduated = 1, pair = COALESCE(pair, ?), dex = COALESCE(dex, 'pumpswap'), pair_created = COALESCE(pair_created, ?), mcap = COALESCE(NULLIF(mcap, 0), ?) WHERE mint = ?").run(pool || null, now(), mc, mint);
+  if (!r.changes || had?.graduated) return;
   stats.graduated++;
   nursery.delete(mint);
   pendingGraduations.add(mint);
