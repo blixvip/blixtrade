@@ -2,6 +2,7 @@ import { Component, lazy, StrictMode, Suspense, useEffect, useRef, useState, typ
 import { createRoot } from "react-dom/client";
 import { Toaster } from "@/components/ui/toast";
 import { NetNotice } from "@/components/NetNotice";
+import { TrackerTape } from "@/components/TrackerTape";
 import { gated } from "@/components/DepositGate";
 import { PicPreview } from "@/components/PicPreview";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -214,6 +215,7 @@ function App() {
         {!focusFeed && <ShellGuard name="rail"><Rail route={route} /></ShellGuard>}
         <div className="flex min-w-0 flex-1 flex-col">
           {!focusFeed && <ShellGuard name="topbar"><TopBar /></ShellGuard>}
+          {!focusFeed && <ShellGuard name="trackertape"><TrackerTape /></ShellGuard>}
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
             <PageGuard route={`${route}/${arg || ""}`}>
             {route === "coin" && arg ? <Suspense fallback={null}><Coin mint={arg} /></Suspense> : route === "trader" && arg ? <Suspense fallback={null}><Trader handle={decodeURIComponent(arg)} /></Suspense> : View ? <Suspense fallback={null}><View /></Suspense> : <NotPorted route={route} />}
