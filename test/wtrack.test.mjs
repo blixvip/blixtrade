@@ -174,9 +174,9 @@ test("confirmation sweep: a feed row whose transaction never landed is deleted a
   assert.equal(r.dropped, 2);
   const left = db.prepare("SELECT id FROM wt_feed WHERE id IN (?, ?, ?, ?, ?)").all(landed, failed, unknownOld, unknownNew, chainRead).map((x) => x.id).sort();
   assert.deepEqual(left, [landed, unknownNew, chainRead].sort());
-  // Every member tracking the wallet hears it (dave tracks it too, from the import test above).
+  // Only the members tracking the wallet hear it.
   assert.deepEqual(heard.filter(([who, e]) => e === "wtdrop" && who === "hank@example.com").map(([, , id]) => id).sort(), [failed, unknownOld].sort());
-  assert.ok(heard.some(([who, e, id]) => who === "dave@example.com" && e === "wtdrop" && id === failed));
+  assert.ok(!heard.some(([who, e]) => who !== "hank@example.com" && e === "wtdrop"));
   // Asked again: the landed row is remembered, the young unknown one is still waited for.
   const again = await wt.confirmSweep(async (sigs) => sigs.map(() => null));
   assert.equal(again.checked, 1);
