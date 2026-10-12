@@ -401,16 +401,20 @@ export function Launch() {
   };
   // The address ending: in stock (instant), grindable in time, too long for this server, or impossible without the vault.
   const vanity = status?.vanity ?? null;
-  const suffixStock = d.suffix && vanity ? vanity.stock[d.suffix] || 0 : 0;
-  const suffixSeconds = d.suffix && vanity ? vanity.seconds[String(d.suffix.length)] ?? null : null;
+  // A server whose vault has no address endings (the status came back without them): the coin gets a random
+  // address and the page says so, instead of promising "…pump" and sending a suffix nobody will honour.
+  const noVanity = Boolean(status && !vanity);
+  const suffix = noVanity ? "" : d.suffix;
+  const suffixStock = suffix && vanity ? vanity.stock[suffix] || 0 : 0;
+  const suffixSeconds = suffix && vanity ? vanity.seconds[String(suffix.length)] ?? null : null;
   // A live grind is allowed when it is expected to finish well inside the vault's limit (an ending that takes the
   // whole limit on average fails about a third of the time; at half the limit, about one in eight).
-  const suffixTooLong = Boolean(d.suffix && vanity && !suffixStock && (suffixSeconds == null || vanity.liveMs <= 0 || suffixSeconds * 2000 > vanity.liveMs));
-  const suffixOk = !d.suffix || (SUFFIX_RE.test(d.suffix) && !suffixTooLong);
+  const suffixTooLong = Boolean(suffix && vanity && !suffixStock && (suffixSeconds == null || vanity.liveMs <= 0 || suffixSeconds * 2000 > vanity.liveMs));
+  const suffixOk = !suffix || (SUFFIX_RE.test(suffix) && !suffixTooLong);
   const problems = [
     !image && "Add a picture",
-    d.suffix && !SUFFIX_RE.test(d.suffix) ? "Address ending: 1-4 base58 letters" : null,
-    suffixTooLong ? (vanity?.targets[d.suffix] ? `No …${d.suffix} address in stock yet: wait a few minutes, or launch with a random address` : `Address ending "${d.suffix}" takes too long here: use 3 letters or fewer, or a random address`) : null,
+    suffix && !SUFFIX_RE.test(suffix) ? "Address ending: 1-4 base58 letters" : null,
+    suffixTooLong ? (vanity?.targets[suffix] ? `No …${suffix} address in stock yet: wait a few minutes, or launch with a random address` : `Address ending "${suffix}" takes too long here: use 3 letters or fewer, or a random address`) : null,
     !d.name.trim() && "Name your coin",
     !/^[A-Za-z0-9]{1,10}$/.test(d.symbol) && "Ticker: 1-10 letters or numbers",
     d.description.length > 500 && "Description over 500 characters",
@@ -428,14 +432,14 @@ export function Launch() {
   };
   const launch = async () => {
     setAsking(false);
-    const grinding = Boolean(d.suffix) && !suffixStock;
-    const t = txToast(`Launching $${sym}`, grinding ? `Finding an address ending in ${d.suffix}` : "Uploading the picture to IPFS");
+    const grinding = Boolean(suffix) && !suffixStock;
+    const t = txToast(`Launching $${sym}`, grinding ? `Finding an address ending in ${suffix}` : "Uploading the picture to IPFS");
     setBusy("Uploading picture");
-    const step = setTimeout(() => setBusy(grinding ? `Grinding …${d.suffix}` : "Signing and sending"), 2500);
+    const step = setTimeout(() => setBusy(grinding ? `Grinding …${suffix}` : "Signing and sending"), 2500);
     try {
       // Long enough for a live address grind (the vault's limit, 2 min by default) and the send after it.
       const r = await fetch("api/account/launch", { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(300_000),
-        body: JSON.stringify({ name: d.name, symbol: sym, description: d.description, twitter: d.twitter, telegram: d.telegram, website: d.website, sol: d.sol, image, priorityFeeSol: feeSol, ...(d.sol > 0 ? { slippageBps: Math.round(d.slip * 100) } : {}), ...(d.suffix ? { suffix: d.suffix } : {}) }) });
+        body: JSON.stringify({ name: d.name, symbol: sym, description: d.description, twitter: d.twitter, telegram: d.telegram, website: d.website, sol: d.sol, image, priorityFeeSol: feeSol, ...(d.sol > 0 ? { slippageBps: Math.round(d.slip * 100) } : {}), ...(suffix ? { suffix } : {}) }) });
       const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
       if (!r.ok) throw new Error(r.status === 404 ? "Accounts are not switched on." : j.error || String(r.status));
       t.ok(`$${sym} is live`, shortAddr(j.mint), j.signature ? `https://solscan.io/tx/${j.signature}` : undefined);
@@ -477,7 +481,7 @@ export function Launch() {
     ["A social link", hasSocial, hasSocial ? "good" : "coins without one get skipped"],
     ["Dev under 5%", c.ownPct <= DEV_WARN_PCT, c.ownPct <= DEV_WARN_PCT ? (d.sol > 0 ? `${c.ownPct.toFixed(2)}%` : "no first buy") : `${c.ownPct.toFixed(1)}% is flagged`],
     ["Ticker not taken", tickerOk && !tickerTaken && !tickerUnchecked, !tickerOk ? "pick one" : tickerTaken ? `${tickerKnown!.n} other coin${tickerKnown!.n > 1 ? "s" : ""}` : tickerUnchecked ? "could not check" : d.symbol.length >= 2 ? "free" : "pick one"],
-    ["Address ending", suffixOk, !d.suffix ? "random" : suffixStock ? `…${d.suffix} ready` : suffixTooLong ? "too long" : `…${d.suffix} ~${suffixSeconds ?? "?"}s`],
+    ["Address ending", suffixOk, !suffix ? (noVanity ? "random (endings off here)" : "random") : suffixStock ? `…${suffix} ready` : suffixTooLong ? "too long" : `…${suffix} ~${suffixSeconds ?? "?"}s`],
   ];
   const checksOk = checks.filter(([, ok]) => ok).length;
 
@@ -610,8 +614,8 @@ export function Launch() {
           </Section>
 
           <Section n={3} title="Contract address" sub="The letters the coin's address ends with. pump.fun's own launches end in pump; terminals and bots look for it." done={suffixOk}>
-            <div className="flex flex-wrap items-center gap-3">
-              <Choice label="Address ending" value={customOn ? "custom" : d.suffix === "" ? "random" : "pump"}
+            <div className={cn("flex flex-wrap items-center gap-3", noVanity && "pointer-events-none opacity-60")} aria-disabled={noVanity}>
+              <Choice label="Address ending" value={noVanity ? "random" : customOn ? "custom" : d.suffix === "" ? "random" : "pump"}
                 onChange={(v) => { setCustomOn(v === "custom"); if (v === "pump") set("suffix", "pump"); else if (v === "random") set("suffix", ""); else set("suffix", SUFFIX_RE.test(customSuffix) ? customSuffix : ""); }}
                 options={[["pump", <span key="p" className="num">…pump</span>], ["custom", "Custom"], ["random", "Random"]]} />
               {customOn && (
@@ -621,8 +625,9 @@ export function Launch() {
                     className="num w-16 bg-transparent font-semibold outline-none placeholder:font-normal placeholder:text-muted/60" /></span>
               )}
               <span className={cn("text-sm", suffixTooLong ? "text-down" : suffixStock ? "text-up" : "text-muted")}>
-                {!d.suffix ? (customOn ? "Type 1 to 4 letters." : "A random address: instant.")
-                  : !vanity ? (status ? "Blix Vault is not reachable: the ending is found at launch if it is running." : "Checking the vault…")
+                {noVanity ? "Address endings are off on this server: the coin gets a random address, nothing else changes."
+                  : !d.suffix ? (customOn ? "Type 1 to 4 letters." : "A random address: instant.")
+                  : !vanity ? "Checking the vault…"
                   : suffixStock ? `${suffixStock} ready now, pre-made by your vault.`
                   : suffixTooLong ? (vanity.targets[d.suffix] ? `None in stock yet: your vault is making one in the background (a few minutes). Launch with a random address or 3 letters now, or wait.`
                     : `Too long to find here in time (about ${suffixSeconds != null ? fmt(suffixSeconds, 0) : "?"} s on average, ${Math.round(vanity.liveMs / 1000)} s allowed). Use 3 letters or fewer.`)
@@ -675,7 +680,7 @@ export function Launch() {
               <Cost k="Priority fee" v={`${fmt(feeSol, 4)} SOL`} note="your choice above" />
               <Cost k="First buy" v={d.sol ? `${fmt(d.sol)} SOL` : "none"} note="your choice, step 4: becomes your tokens" />
               <Cost k="First-buy extras" v={d.sol ? `${fmt(buyExtra, 4)} SOL` : "none"} note={d.sol ? `token account ${fmt(BUY_ATA_SOL, 4)} (refundable) + creator vault ${fmt(BUY_VAULT_SOL, 4)} + ${TRADE_FEE_PCT}% trade fee` : "only with a first buy"} />
-              <Cost k="Address ending" v="free" note={d.suffix ? "your PC's time, not SOL" : "random"} />
+              <Cost k="Address ending" v="free" note={suffix ? "your PC's time, not SOL" : "random"} />
               <Cost k="pump.fun create fee" v="none" note={`pump.fun takes ~${TRADE_FEE_PCT}% of each trade instead`} />
               <Cost k="Picture and details (IPFS)" v="free" note="pinned by pump.fun" />
               <Cost k="Blix fee" v="0" note="no cut on launches" />
@@ -771,7 +776,7 @@ export function Launch() {
           <Row k="Priority fee" v={<><SolanaLogo className="size-3.5" />{fmt(feeSol, 4)} <span className="text-muted">· {FEES.find(([k]) => k === d.fee)![1].toLowerCase()}</span></>} />
           {d.sol > 0 && <Row k="First buy" v={<><SolanaLogo className="size-3.5" />{fmt(d.sol)} <span className="text-muted">· {d.slip}% slippage</span></>} />}
           {d.sol > 0 && <Row k="First-buy extras" v={<><SolanaLogo className="size-3.5" />{fmt(buyExtra, 4)} <span className="text-muted">· account, vault, {TRADE_FEE_PCT}% fee</span></>} />}
-          <Row k="Address" v={<span className="num">{d.suffix ? `…${d.suffix}` : "random"}</span>} sub={d.suffix ? (suffixStock ? "ready" : `~${fmt(suffixSeconds ?? 0, 0)} s to find`) : ""} />
+          <Row k="Address" v={<span className="num">{suffix ? `…${suffix}` : "random"}</span>} sub={suffix ? (suffixStock ? "ready" : `~${fmt(suffixSeconds ?? 0, 0)} s to find`) : ""} />
           <Row k={<b className="font-semibold text-ink">Total</b>} v={<b className="flex items-center gap-1.5 font-semibold text-ink"><SolanaLogo className="size-3.5" />{fmt(total, 4)}{solUsd ? <span className="font-normal text-muted">{usd(total * solUsd)}</span> : null}</b>} />
         </div>
         <p className="text-sm leading-relaxed text-ink-2">This spends <b className="text-ink">REAL SOL</b> from your Blix wallet: {fmt(createSol, 4)} SOL to create{d.sol ? ` + ${fmt(d.sol)} SOL first buy + ${fmt(buyExtra, 4)} SOL with it` : ""}. The coin's rent is never refunded. The name, ticker and picture are permanent: a launched coin can't be edited or deleted.</p>
