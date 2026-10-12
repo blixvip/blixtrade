@@ -251,7 +251,7 @@ export function Pulse() {
           <HiddenButton />
           <RugButton />
           <i aria-hidden className="mx-1 h-5 w-px shrink-0 bg-rule-2 max-md:hidden" />
-          <div className="min-w-0 overflow-x-auto [scrollbar-width:none] max-[419px]:[&_button]:px-2"><Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" /></div>
+          <div className="min-w-0 overflow-x-auto [scrollbar-width:none] max-[419px]:[&_button]:px-2 max-md:[mask-image:linear-gradient(to_right,black_82%,transparent)] max-md:pr-4"><Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" /></div>
           <PulseSettings />
         </div>
       </header>

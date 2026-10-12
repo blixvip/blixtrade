@@ -1441,7 +1441,7 @@ async function handleRequest(req, res) {
     // A coin's bubble map: made once by whoever asks first, then the same map for everyone (bubblemap.js).
     // A coin's DexScreener banner, for Discover's coin card when its row has none (banner.js).
     if (p === "/api/banner") { const r = await banner(String(params.m || "")); return send(res, r.error ? 400 : 200, r); }
-    if (p === "/api/bubblemap") { const m = String(params.mint || ""); const r = POST ? makeBubbleMap(m) : bubbleMap(m); return send(res, r.error && !r.map && !r.building ? 400 : 200, r); }
+    if (p === "/api/bubblemap") { const m = String(params.mint || ""); const r = POST ? makeBubbleMap(m) : bubbleMap(m); return send(res, r.error && !r.map && !r.building && !r.deferred ? 400 : 200, r); }   // deferred: too few trades yet, a normal state (the page polls it)
     // Views and likes on the Feed page's posts, counted by Blix (feedviews.js).
     if (p === "/api/feed/views" && POST) return send(res, 200, feedViews(viewerOf(req, res), await readBody(req)));
     if (p === "/api/feed/like" && POST) { const r = feedLike(viewerOf(req, res), await readBody(req)); return send(res, r.error ? 400 : 200, r); }

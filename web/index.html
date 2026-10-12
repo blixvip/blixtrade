@@ -6,6 +6,20 @@
 <meta name="theme-color" content="#000000">
 <title>Blix</title>
 <script>
+// The interface size (lib/prefs.ts: Auto fits a 1920 px layout to the window, never below 75%; phones stay at 100%),
+// set before the first paint. Without it the page drew full size and shrank ~3 s later when that code loaded: the
+// whole page jumped on every visit.
+(function () {
+  try {
+    var p = JSON.parse(localStorage.getItem("blix:pulse:prefs") || "{}") || {};
+    var auto = p.autoScale != null ? p.autoScale : !(typeof p.scale === "number" && p.scale !== 1);
+    var w = window.innerWidth;
+    var s = auto ? (w < 900 ? 1 : Math.min(1, Math.max(0.75, w / 1920))) : (+p.scale || 1);
+    if (s !== 1) document.documentElement.style.fontSize = 16 * s + "px";
+  } catch (e) {}
+})();
+</script>
+<script>
 // Every file and read this page asks for is relative ("assets/…", "api/…"). Opened at a deeper address (/app/, with
 // a slash, or /app/anything) those resolved under it and came back as this page instead: a blank screen. The
 // address is put back to its first part before anything is loaded; the page's routes live after the #.
