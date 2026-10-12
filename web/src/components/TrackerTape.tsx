@@ -57,13 +57,17 @@ function Chip({ r, fresh }: { r: TTrade; fresh: boolean }) {
 export function TrackerTape() {
   const role = useRole(), known = useRoleKnown();
   const path = known && role !== "visitor" ? `wtrack?limit=${KEEP}` : null;
-  const { data } = usePoll<Overview>(path, 30_000, true);
+  const { data, refresh } = usePoll<Overview>(path, 30_000, true);
   const [live, setLive] = useState<TTrade[]>([]);
+  const [gone, setGone] = useState<Set<number>>(new Set());
   const [freshId, setFreshId] = useState<number | null>(null);
   const alerts = useRef<Map<string, boolean>>(new Map());
   const lastToast = useRef(0);
   useEffect(() => { alerts.current = new Map((data?.wallets || []).map((w) => [w.address, Boolean(w.alerts)])); }, [data]);
+  // Back from another tab: the stream was muted meanwhile, so the feed is asked for at once.
+  useEffect(() => { const f = () => { if (!document.hidden) refresh(); }; document.addEventListener("visibilitychange", f); return () => document.removeEventListener("visibilitychange", f); }, [refresh]);
   useEffect(() => onTracker((kind, row) => {
+    if (kind === "drop") { const id = (row as { id: number }).id; setLive((l) => l.filter((x) => x.id !== id)); setGone((g) => new Set(g).add(id)); return; }
     if (kind !== "trade") return;
     const r = row as TTrade;
     setLive((l) => (l.some((x) => x.id === r.id) ? l : [r, ...l].slice(0, KEEP)));
@@ -75,9 +79,9 @@ export function TrackerTape() {
   }), []);
   const rows = useMemo(() => {
     const by = new Map<number, TTrade>();
-    for (const r of [...live, ...(data?.feed || [])]) if (!by.has(r.id)) by.set(r.id, r);
+    for (const r of [...live, ...(data?.feed || [])]) if (!by.has(r.id) && !gone.has(r.id)) by.set(r.id, r);
     return [...by.values()].sort((a, b) => b.id - a.id).slice(0, KEEP);
-  }, [live, data]);
+  }, [live, data, gone]);
   if (!path || !data?.wallets?.length || !rows.length) return null;
   return (
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-rule bg-paper-2/70 px-3 max-md:px-2">

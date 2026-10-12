@@ -59,7 +59,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS wtt_sig ON wt_transfers(wallet, sig, COALESCE(
 CREATE INDEX IF NOT EXISTS wtt_t ON wt_transfers(t);
 `);
 
-export const wtStats = { live: 0, chain: 0, transfers: 0, pushed: 0, lastLive: 0, lastChain: 0 };
+export const wtStats = { live: 0, chain: 0, transfers: 0, pushed: 0, lastLive: 0, lastChain: 0, dropped: 0, checked: 0 };
 let emit = () => {};
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -101,7 +101,7 @@ export function add(who, { address, name, emoji, color, grp } = {}) {
     db.prepare("INSERT INTO wt_wallets (who, address, name, emoji, color, grp, added) VALUES (?, ?, ?, ?, ?, ?, ?)").run(who, address, cleanName(name), cleanEmoji(emoji), cleanColor(color), cleanGrp(grp), now());
     reload();
     // The shared chain reader follows it from now on (its stream and poll); what it already read shows at once.
-    try { wallets.addWallet(address, "", "tracker"); } catch {}
+    try { wallets.addWallet(address, "", "tracker"); wallets.resyncFast(); } catch {}
     seedHistory(address);
     if (!cleanName(name)) autoName(who, address);
   }
@@ -311,7 +311,8 @@ export function overview(who, { grp = null, limit = FEED_LIMIT } = {}) {
     wallets: list(who),
     feed: named(who, feedRows({ who, grp: grp ? cleanGrp(grp) : null, limit })),
     transfers: named(who, transferRows({ who })),
-    status: { stream: tr.stream.connected, streamWallets: tr.stream.wallets, backlog: tr.backlog, live: liveFeed.connected, lastLive: wtStats.lastLive, lastChain: wtStats.lastChain },
+    status: { stream: tr.stream.connected, streamWallets: tr.stream.wallets, backlog: tr.backlog, live: liveFeed.connected, lastLive: wtStats.lastLive, lastChain: wtStats.lastChain,
+      fast: Boolean(tr.fast?.connected), fastWallets: tr.fast?.wallets || 0, fastReads: tr.fast?.reads || 0, dropped: wtStats.dropped },
     solUsd: liveFeed.solUsd || 150,
     groups: GROUPS, colors: COLORS, max: MAX_WALLETS,
   };
@@ -360,11 +361,45 @@ export async function kols(who, range = "24h") {
   return { range: b?.range || range, error: b?.error || null, rows: (b?.rows || []).slice(0, 60).map((r) => ({ rank: r.rank, wallet: r.wallet, name: r.name, pic: r.pic, x: r.x, pnl: r.pnl, pnlSol: r.pnlSol, pnlPct: r.pnlPct, positions: r.positions, tracked: mine.has(r.wallet) })) };
 }
 
+// ---------- the confirmation sweep ----------
+// The live feeds hear a trade at "processed", a slot or two before it is confirmed; now and then one never lands
+// (its block was abandoned). Rows from those feeds are checked at "confirmed" 6 s to 2 min after they were recorded
+// (getSignatureStatuses, one call for up to 256); a row whose transaction failed or is unknown by then is deleted and
+// every member tracking the wallet hears wtdrop { id } so the chip leaves their screen.
+const verified = new Set();
+export async function confirmSweep(statusFn = (sigs) => sol.rpc("getSignatureStatuses", [sigs, { searchTransactionHistory: false }]).then((r) => r?.value || [])) {
+  const t = now();
+  const rows = db.prepare("SELECT id, wallet, sig FROM wt_feed WHERE src IN ('curve', 'pool') AND sig NOT LIKE 'slot:%' AND t BETWEEN ? AND ? ORDER BY id DESC LIMIT 256").all(t - 120_000, t - 6_000)
+    .filter((r) => !verified.has(r.id));
+  if (!rows.length) return { checked: 0, dropped: 0 };
+  let st;
+  try { st = await statusFn(rows.map((r) => r.sig)); } catch { return { checked: 0, dropped: 0 }; }
+  let dropped = 0;
+  rows.forEach((r, i) => {
+    const x = st[i];
+    // Known and fine: done. Unknown this early can still mean "the node's cache is behind": it is asked again next pass
+    // until the row is 2 minutes old; failed, or still unknown at the end, is gone.
+    if (x && !x.err) { verified.add(r.id); return; }
+    if (!x && t - 60_000 < (db.prepare("SELECT t FROM wt_feed WHERE id = ?").get(r.id)?.t ?? 0)) return;
+    db.prepare("DELETE FROM wt_feed WHERE id = ?").run(r.id);
+    db.prepare("DELETE FROM wallet_trades WHERE sig = ? AND wallet = ?").run(r.sig, r.wallet);
+    verified.add(r.id); dropped++; wtStats.dropped++;
+    const whos = tracked.get(r.wallet) || [];
+    for (const who of whos) emit(who, "wtdrop", { id: r.id, wallet: r.wallet, sig: r.sig });
+  });
+  wtStats.checked += rows.length;
+  if (verified.size > 5000) for (const k of [...verified].slice(0, 2500)) verified.delete(k);
+  return { checked: rows.length, dropped };
+}
+
 // ---------- start ----------
 export function status() {
   return { wallets: tracked.size, members: db.prepare("SELECT COUNT(DISTINCT who) n FROM wt_wallets").get().n, ...wtStats };
 }
+const timers = [];
+export function stop() { for (const t of timers.splice(0)) clearTimeout(t); }
 export function start(emitFn) {
+  stop();
   emit = emitFn || emit;
   reload();
   onLiveTrade(fromLive);
@@ -378,6 +413,8 @@ export function start(emitFn) {
       db.prepare("DELETE FROM wt_transfers WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
     } catch (e) { logEvent("error", `wallet tracker prune: ${e.message}`); }
   };
-  setTimeout(prune, 60_000);
-  setInterval(prune, 6 * 3600_000).unref?.();
+  timers.push(setTimeout(prune, 60_000), setInterval(prune, 6 * 3600_000));
+  const sweep = () => { if (tracked.size) confirmSweep().catch(() => {}); };
+  timers.push(setInterval(sweep, 10_000));
+  for (const t of timers) t.unref?.();
 }

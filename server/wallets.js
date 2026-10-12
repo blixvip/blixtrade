@@ -2,7 +2,7 @@
 // (wallets that keep showing up early or as top holders in coins that later ran).
 import { db, q, json, logEvent } from "./db.js";
 import { settings } from "./settings.js";
-import { rpcStreamAllowed, noteRpcBytes } from './heliuskeys.js';
+import { rpcStreamAllowed, noteRpcBytes, keyUrls, keyFree, heliusFetch } from './heliuskeys.js';
 import * as sol from "./solana.js";
 import * as src from "./sources.js";
 import { handleOf } from "./fomo.js";
@@ -151,10 +151,10 @@ async function drain(emit) {
 // Every transaction read, swap or not, goes to these too: the wallet tracker (wtrack.js) reads transfers from them.
 const txHooks = [];
 export const onTx = (fn) => txHooks.push(fn);
-async function readTx(w, job, emit) {
+async function readTx(w, job, emit, fetched = null) {
   const key = `${w.address}:${job.sig}`;
   if (readSigs.has(key) || db.prepare("SELECT 1 FROM wallet_trades WHERE sig = ? AND wallet = ?").get(job.sig, w.address)) return;
-  const tx = await sol.transaction(job.sig);
+  const tx = fetched || await sol.transaction(job.sig);
   if (!tx) throw new Error("transaction not available yet");
   readSigs.add(key);
   if (readSigs.size > 20000) for (const k of [...readSigs].slice(0, 5000)) readSigs.delete(k);
@@ -233,63 +233,128 @@ async function pollOne(w) {
   enqueue(w.address, all.filter((s) => !s.err).map((s) => ({ sig: s.signature, t: (s.blockTime || 0) * 1000 || now(), quiet: first })));
 }
 
-// ---------- live stream ----------
-// logsSubscribe{mentions:[wallet]} on the RPC websocket (the free public one allows it): every
-// transaction touching a followed wallet arrives within a second or two of confirming.
-export const stream = { connected: false, wallets: 0, events: 0, lastEvent: 0, url: null, since: 0, error: null };
-function startStream(emit) {
+// ---------- live streams ----------
+// logsSubscribe{mentions:[wallet]} on an RPC websocket: every transaction touching a followed wallet arrives within a
+// second or two of confirming. Two sockets:
+//   the backstop   the public endpoint (free), "confirmed", the 60 most active followed wallets; each signature goes
+//                  to the paced reader (getTransaction ~1/s on the public endpoint);
+//   the fast lane  a Helius key (the spare one first), "processed", every wallet a member tracks or you follow
+//                  yourself; each signature is read at once on that key (no pacing, four in flight), so a buy on any
+//                  venue shows in the tracker about a second after it lands. Budgeted by heliuskeys.js: when the
+//                  key's allowance is spent the lane rests and those wallets fall back to the backstop.
+function makeStream({ name, url, wanted, commitment, limit, onSig, onBytes, admit }) {
+  const st = { connected: false, wallets: 0, events: 0, lastEvent: 0, url: null, since: 0, error: null };
   let ws, subs = new Map(), pending = new Map(), id = 0, alive = true, opened = 0;
-  const wanted = () => db.prepare("SELECT address FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'tracker' DESC, COALESCE(last_trade, 0) DESC LIMIT 60").all().map((r) => r.address);
   const sync = () => {
     if (ws?.readyState !== 1) return;
-    const want = new Set(wanted()), have = new Set([...subs.values(), ...pending.values()]);
-    for (const a of want) if (!have.has(a)) { pending.set(++id, a); ws.send(JSON.stringify({ jsonrpc: "2.0", id, method: "logsSubscribe", params: [{ mentions: [a] }, { commitment: "confirmed" }] })); }
+    const want = new Set(wanted().slice(0, limit)), have = new Set([...subs.values(), ...pending.values()]);
+    for (const a of want) if (!have.has(a)) { pending.set(++id, a); ws.send(JSON.stringify({ jsonrpc: "2.0", id, method: "logsSubscribe", params: [{ mentions: [a] }, { commitment }] })); }
     for (const [sub, a] of subs) if (!want.has(a)) { subs.delete(sub); ws.send(JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "logsUnsubscribe", params: [sub] })); }
-    stream.wallets = subs.size;
+    st.wallets = subs.size;
   };
   const connect = () => {
     if (!alive) return;
-    const url = settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : "wss://api.mainnet-beta.solana.com");
-    if (!rpcStreamAllowed(url)) { stream.error = 'RPC shared budget resting'; return setTimeout(connect, 15_000); }
-    stream.url = url.replace(/api-key=[^&]+/, "api-key=…");
-    try { ws = new WebSocket(url); } catch (e) { stream.error = e.message; return setTimeout(connect, 10_000); }
+    const u = url();
+    if (!u) { st.error = "no key"; st.url = null; return setTimeout(connect, 30_000); }
+    if (!admit(u)) { st.error = "RPC shared budget resting"; return setTimeout(connect, 15_000); }
+    st.url = u.replace(/api-key=[^&]+/, "api-key=…");
+    try { ws = new WebSocket(u); } catch (e) { st.error = e.message; return setTimeout(connect, 10_000); }
     subs = new Map(); pending = new Map();
-    ws.onopen = () => { stream.connected = true; stream.since = opened = now(); stream.error = null; health.ok("wallet-stream"); sync(); };
+    ws.onopen = () => { st.connected = true; st.since = opened = now(); st.error = null; health.ok(name); sync(); };
     ws.onmessage = (m) => {
-      noteRpcBytes(url, Buffer.byteLength(String(m.data)));
-      if (!rpcStreamAllowed(url)) { try { ws.close(); } catch {} return; }
+      onBytes(u, Buffer.byteLength(String(m.data)));
+      if (!admit(u)) { try { ws.close(); } catch {} return; }
       let d; try { d = JSON.parse(m.data); } catch { return; }
       if (d.id && pending.has(d.id)) {
         const a = pending.get(d.id); pending.delete(d.id);
-        if (d.error) { stream.error = d.error.message; health.fail("wallet-stream", d.error.message); } else subs.set(d.result, a);
-        stream.wallets = subs.size;
+        if (d.error) { st.error = d.error.message; health.fail(name, d.error.message); } else subs.set(d.result, a);
+        st.wallets = subs.size;
         return;
       }
       const a = subs.get(d.params?.subscription), v = d.params?.result?.value;
       if (!a || !v?.signature) return;
-      stream.events++; stream.lastEvent = now();
+      st.events++; st.lastEvent = now();
       db.prepare("UPDATE wallets SET last_event = ? WHERE address = ?").run(now(), a);
       if (v.err) return;
-      enqueue(a, [{ sig: v.signature, t: now() }]);
-      drain(emit).catch((e) => logEvent("error", `wallet reader: ${e.message}`));
+      onSig(a, v.signature, u);
     };
-    ws.onclose = () => { if (stream.connected) health.fail("wallet-stream", "disconnected"); stream.connected = false; stream.wallets = 0; if (alive) setTimeout(connect, 5000); };
+    ws.onclose = () => { if (st.connected) health.fail(name, "disconnected"); st.connected = false; st.wallets = 0; if (alive) setTimeout(connect, 5000); };
     ws.onerror = () => { try { ws.close(); } catch {} };
   };
   connect();
   const timer = setInterval(() => {
     sync();
-    // Public endpoints silently drop long-lived sockets: replace one that has been quiet for 15 minutes.
-    if (stream.connected && now() - Math.max(stream.lastEvent, opened) > 15 * MIN) { try { ws.close(); } catch {} }
+    // Endpoints silently drop long-lived sockets: replace one that has been quiet for 15 minutes.
+    if (st.connected && now() - Math.max(st.lastEvent, opened) > 15 * MIN) { try { ws.close(); } catch {} }
   }, 30_000);
-  return () => { alive = false; clearInterval(timer); try { ws?.close(); } catch {} };
+  st.stop = () => { alive = false; clearInterval(timer); try { ws?.close(); } catch {} };
+  st.sync = sync;
+  return st;
+}
+export const stream = { connected: false, wallets: 0, events: 0, lastEvent: 0, url: null, since: 0, error: null };
+export const fast = { connected: false, wallets: 0, events: 0, lastEvent: 0, url: null, since: 0, error: null, reads: 0, fallbacks: 0, inFlight: 0 };
+const publicWsUrl = () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : "wss://api.mainnet-beta.solana.com");
+// The fast lane's key: the spare one first (the charts hold the first), whichever is free today.
+export const fastKey = () => [...keyUrls()].reverse().find(keyFree) || "";
+export const fastWallets = () => db.prepare("SELECT address FROM wallets WHERE watching = 1 AND source IN ('you', 'tracker') ORDER BY COALESCE(last_trade, 0) DESC LIMIT 150").all().map((r) => r.address);
+// Tell the fast lane its list changed (a member tracked a wallet): it subscribes within a moment, not at the next sweep.
+export const resyncFast = () => { try { fastStream?.sync(); } catch {} };
+let fastStream = null;
+const FAST_RETRY = [250, 500, 900, 1500, 2500];   // "processed" runs ahead of "confirmed" by a slot or two
+const FAST_MAX = 4;
+// One signature from the fast lane: getTransaction on the key at once, retried while the node has only seen the
+// transaction at "processed"; anything the key will not do (budget, transport) goes to the paced public reader.
+export async function fastRead(address, sig, { fetchTx, retries = FAST_RETRY, wait = (ms) => new Promise((r) => setTimeout(r, ms)), fallback, read } = {}) {
+  let tx = null;
+  for (let i = 0; i <= retries.length; i++) {
+    try { tx = await fetchTx(sig); }
+    catch (e) { fast.fallbacks++; return fallback(address, sig, e); }
+    if (tx) break;
+    if (i < retries.length) await wait(retries[i]);
+  }
+  if (!tx) { fast.fallbacks++; return fallback(address, sig, new Error("not confirmed in time")); }
+  fast.reads++;
+  return read(address, sig, tx);
+}
+function heliusTx(key) {
+  const http = key.replace(/^ws/i, "http");
+  return async (sig) => {
+    const r = await heliusFetch(http, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [sig, { maxSupportedTransactionVersion: 1, encoding: "jsonParsed", commitment: "confirmed" }] }) });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message);
+    return j.result || null;
+  };
+}
+function startStreams(emit) {
+  const onPublic = (a, sig) => { enqueue(a, [{ sig, t: now() }]); drain(emit).catch((e) => logEvent("error", `wallet reader: ${e.message}`)); };
+  const pub = makeStream({ name: "wallet-stream", url: publicWsUrl, commitment: "confirmed", limit: 60, admit: rpcStreamAllowed, onBytes: noteRpcBytes,
+    wanted: () => db.prepare("SELECT address FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'tracker' DESC, COALESCE(last_trade, 0) DESC LIMIT 60").all().map((r) => r.address),
+    onSig: onPublic });
+  const onFast = (a, sig, key) => {
+    if (fast.inFlight >= FAST_MAX) return onPublic(a, sig);
+    const w = db.prepare("SELECT * FROM wallets WHERE address = ?").get(a);
+    if (!w) return;
+    fast.inFlight++;
+    fastRead(a, sig, { fetchTx: heliusTx(key), fallback: (addr, s) => onPublic(addr, s),
+      read: (addr, s, tx) => readTx(w, { sig: s, t: (tx.blockTime || 0) * 1000 || now() }, emit, tx) })
+      .catch((e) => { if (!e.limited) logEvent("error", `wallet fast read ${short(a)}: ${e.message}`); })
+      .finally(() => { fast.inFlight--; });
+  };
+  const fs = makeStream({ name: "wallet-fast", url: fastKey, commitment: "processed", limit: 150, admit: rpcStreamAllowed, onBytes: noteRpcBytes, wanted: fastWallets, onSig: onFast });
+  fastStream = fs;
+  const mirror = setInterval(() => {
+    Object.assign(stream, { connected: pub.connected, wallets: pub.wallets, events: pub.events, lastEvent: pub.lastEvent, url: pub.url, since: pub.since, error: pub.error });
+    Object.assign(fast, { connected: fs.connected, wallets: fs.wallets, events: fs.events, lastEvent: fs.lastEvent, url: fs.url, since: fs.since, error: fs.error });
+  }, 1000);
+  return () => { clearInterval(mirror); pub.stop(); fs.stop(); fastStream = null; };
 }
 
 // How current the wallet tracking really is, per wallet.
 export function tracking() {
   const rows = db.prepare("SELECT address, label, source, last_poll, last_event, last_trade, missed FROM wallets WHERE watching = 1").all();
   return {
-    stream: { ...stream }, rpc: { ...sol.rpcStats, public: sol.rpcPublic() },
+    stream: { ...stream }, fast: { ...fast }, rpc: { ...sol.rpcStats, public: sol.rpcPublic() },
     backlog: [...backlog.values()].reduce((s, l) => s + l.length, 0),
     wallets: rows.map((w) => ({ ...w, name: nameOf(w), backlog: backlog.get(w.address)?.length || 0, lagMs: lag.get(w.address) ?? null, checked: Math.max(w.last_poll || 0, w.last_event || 0) })),
   };
@@ -611,7 +676,7 @@ const fmtUsd = (n) => n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n
 // ---------- loop ----------
 export function startWallets(onTrade) {
   if (settings.marketFeeds === false) return () => {};   // a quiet dev copy: no wallet sockets or polling
-  const stopStream = startStream(onTrade);
+  const stopStream = startStreams(onTrade);
   const timers = [
     setInterval(() => pollWallets(onTrade), 20_000),
     setInterval(() => { findWinners(); harvestHolders(); autoFollow(); }, 3 * MIN),

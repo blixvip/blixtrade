@@ -388,8 +388,8 @@ export function onFomoBar(mint: string, res: string, fn: (b: FomoBar) => void) {
 export interface LiveHolders { mint: string; holders: number | null; top10: number | null; devPct: number | null; source: string | null; t: number }
 // The wallet tracker's pushes (server/wtrack.js): a tracked wallet's trade or transfer, sent only to the member whose
 // list the wallet is on. components/WalletTracker.tsx listens while it is open.
-const trackerFns = new Set<(kind: "trade" | "transfer", row: any) => void>();
-export const onTracker = (fn: (kind: "trade" | "transfer", row: any) => void) => { trackerFns.add(fn); return () => { trackerFns.delete(fn); }; };
+const trackerFns = new Set<(kind: "trade" | "transfer" | "drop", row: any) => void>();
+export const onTracker = (fn: (kind: "trade" | "transfer" | "drop", row: any) => void) => { trackerFns.add(fn); return () => { trackerFns.delete(fn); }; };
 const holderFns = new Map<string, Set<(h: LiveHolders) => void>>();
 export function useCoinHolders(mint: string) {
   const [h, setH] = useState<LiveHolders | null>(null);
@@ -457,6 +457,8 @@ export function startPulse() {
     on("pic", (d) => picReady(d.mint, d.data));   // the radar just got this coin's logo (usually with the picture itself)
     on("wtrade", (d) => { if (d.row) trackerFns.forEach((fn) => fn("trade", d.row)); });
     on("wtransfer", (d) => { if (d.row) trackerFns.forEach((fn) => fn("transfer", d.row)); });
+    // A trade heard at "processed" that never landed: the row is taken back (server/wtrack.js confirmSweep).
+    on("wtdrop", (d) => { if (d.id != null) trackerFns.forEach((fn) => fn("drop", d)); });
     s.onerror = () => {
       if (stopped || es !== s) return;
       if (es === s && !opened && streamFailed()) return open();

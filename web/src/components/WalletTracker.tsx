@@ -318,13 +318,18 @@ export function WalletTracker({ compact = false, right }: { compact?: boolean; r
   const { data, error, refresh } = usePoll<Overview>("wtrack?limit=300", 20_000, true);
   // Rows pushed on the stream since the page opened, newest first; the polled answer catches up on any gap.
   const [live, setLive] = useState<{ trades: TTrade[]; transfers: TTransfer[] }>({ trades: [], transfers: [] });
-  useEffect(() => onTracker((kind, row) => setLive((s) => kind === "trade" ? { ...s, trades: [row as TTrade, ...s.trades].slice(0, 300) } : { ...s, transfers: [row as TTransfer, ...s.transfers].slice(0, 150) })), []);
+  const [gone, setGone] = useState<Set<number>>(new Set());
+  useEffect(() => onTracker((kind, row) => {
+    if (kind === "drop") { const id = (row as { id: number }).id; setLive((s) => ({ ...s, trades: s.trades.filter((x) => x.id !== id) })); setGone((g) => new Set(g).add(id)); return; }
+    setLive((s) => kind === "trade" ? { ...s, trades: [row as TTrade, ...s.trades].slice(0, 300) } : { ...s, transfers: [row as TTransfer, ...s.transfers].slice(0, 150) });
+  }), []);
+  useEffect(() => { const f = () => { if (!document.hidden) refresh(); }; document.addEventListener("visibilitychange", f); return () => document.removeEventListener("visibilitychange", f); }, [refresh]);
   const trades = useMemo(() => {
     const by = new Map<number, TTrade>();
-    for (const r of [...live.trades, ...(data?.feed || [])]) if (!by.has(r.id)) by.set(r.id, r);
+    for (const r of [...live.trades, ...(data?.feed || [])]) if (!by.has(r.id) && !gone.has(r.id)) by.set(r.id, r);
     const all = [...by.values()].sort((a, b) => b.id - a.id);
     return grp ? all.filter((r) => (r.grp || 1) === grp) : all;
-  }, [live.trades, data, grp]);
+  }, [live.trades, data, grp, gone]);
   const transfers = useMemo(() => {
     const by = new Map<number, TTransfer>();
     for (const r of [...live.transfers, ...(data?.transfers || [])]) if (!by.has(r.id)) by.set(r.id, r);
@@ -355,7 +360,7 @@ export function WalletTracker({ compact = false, right }: { compact?: boolean; r
             <SolanaLogo className="w-2.5" />
           </span>
         )}
-        {s && <Tip tip={ok ? `Live: ${s.live ? "pump.fun and PumpSwap feeds" : "no live feed"} · ${s.stream ? `chain stream on ${s.streamWallets} wallets` : "chain stream off"}${s.backlog ? ` · ${s.backlog} waiting to be read` : ""}` : "Not live: the radar's feeds are off"}>
+        {s && <Tip tip={ok ? `Live: ${s.live ? "pump.fun and PumpSwap feeds" : "no live feed"} · ${s.fast ? `fast lane on ${s.fastWallets} wallets (every venue, about a second)` : "fast lane off"} · ${s.stream ? `chain stream on ${s.streamWallets} wallets` : "chain stream off"}${s.backlog ? ` · ${s.backlog} waiting to be read` : ""}` : "Not live: the radar's feeds are off"}>
           <span className="flex items-center gap-1.5 text-xs text-muted"><i className={cn("size-2 rounded-full", ok ? "bg-up" : "bg-warn")} />{ok ? "Live" : "Paused"}</span>
         </Tip>}
         {right}

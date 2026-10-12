@@ -117,4 +117,62 @@ test("a transfer is read from a transaction that was not a swap", () => {
   assert.equal(wt.parseTransfer(solOut, C), null);
 });
 
-test.after(() => { try { db.close(); } catch {} try { fs.rmSync(process.env.RADAR_DATA, { recursive: true, force: true }); } catch {} });
+test.after(() => { wt.stop(); try { db.close(); } catch {} try { fs.rmSync(process.env.RADAR_DATA, { recursive: true, force: true }); } catch {} });
+
+// ---------- the fast lane and the confirmation sweep ----------
+const wl = await import("../server/wallets.js");
+
+test("fast lane: a transaction read at once, retried while the node has it only at processed, handed to the public reader when the key will not", async () => {
+  const waits = [];
+  const wait = async (ms) => { waits.push(ms); };
+  // Confirmed on the third try.
+  let calls = 0;
+  const got = [];
+  await wl.fastRead(A, "sig-a", { fetchTx: async () => (++calls >= 3 ? { blockTime: 1 } : null), wait, fallback: () => got.push("fallback"), read: (addr, sig, tx) => got.push(["read", addr, sig, tx.blockTime]) });
+  assert.deepEqual(got, [["read", A, "sig-a", 1]]);
+  assert.deepEqual(waits, [250, 500]);
+  // Never confirmed in time: the public reader gets it.
+  got.length = 0; waits.length = 0;
+  await wl.fastRead(A, "sig-b", { fetchTx: async () => null, retries: [10, 20], wait, fallback: (addr, sig, e) => got.push(["fallback", sig, e.message]), read: () => got.push("read") });
+  assert.deepEqual(got, [["fallback", "sig-b", "not confirmed in time"]]);
+  assert.deepEqual(waits, [10, 20]);
+  // The key refuses (budget spent, transport down): straight to the public reader, no retries.
+  got.length = 0; waits.length = 0;
+  await wl.fastRead(A, "sig-c", { fetchTx: async () => { throw Object.assign(new Error("Helius request deferred"), { code: "HELIUS_BUDGET" }); }, wait, fallback: (addr, sig, e) => got.push(["fallback", sig, e.code]), read: () => got.push("read") });
+  assert.deepEqual(got, [["fallback", "sig-c", "HELIUS_BUDGET"]]);
+  assert.deepEqual(waits, []);
+});
+
+test("the fast lane covers the wallets members track and the owner's own, not the auto-followed ones", () => {
+  db.prepare("DELETE FROM wallets").run();
+  db.prepare("INSERT INTO wallets (address, source, watching, added, last_trade) VALUES (?, 'smart', 1, 1, 9)").run(A);
+  db.prepare("INSERT INTO wallets (address, source, watching, added, last_trade) VALUES (?, 'you', 1, 1, 5)").run(B);
+  wt.add("gina@example.com", { address: C });
+  assert.deepEqual(wl.fastWallets(), [B, C]);
+  db.prepare("DELETE FROM wallets").run();
+});
+
+test("confirmation sweep: a feed row whose transaction never landed is deleted and the member hears wtdrop", async () => {
+  const t = Date.now() - 30_000;
+  const ins = db.prepare("INSERT INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, 'buy', 1, 100, 10, NULL, ?, ?)");
+  const landed = Number(ins.run(A, "sig-landed", MINT, t, "pool").lastInsertRowid);
+  const failed = Number(ins.run(A, "sig-failed", MINT, t, "curve").lastInsertRowid);
+  const unknownOld = Number(ins.run(A, "sig-unknown-old", MINT, t - 70_000, "pool").lastInsertRowid);
+  const unknownNew = Number(ins.run(A, "sig-unknown-new", MINT, t, "pool").lastInsertRowid);
+  const chainRead = Number(ins.run(A, "sig-chain", MINT, t, "chain").lastInsertRowid);   // read from a confirmed transaction: never checked
+  const heard = [];
+  wt.start((who, event, data) => heard.push([who, event, data.id]));
+  wt.add("hank@example.com", { address: A });
+  const r = await wt.confirmSweep(async (sigs) => sigs.map((s) => s === "sig-landed" ? { confirmationStatus: "confirmed", err: null } : s === "sig-failed" ? { confirmationStatus: "confirmed", err: { x: 1 } } : null));
+  assert.equal(r.checked, 4);
+  assert.equal(r.dropped, 2);
+  const left = db.prepare("SELECT id FROM wt_feed WHERE id IN (?, ?, ?, ?, ?)").all(landed, failed, unknownOld, unknownNew, chainRead).map((x) => x.id).sort();
+  assert.deepEqual(left, [landed, unknownNew, chainRead].sort());
+  // Every member tracking the wallet hears it (dave tracks it too, from the import test above).
+  assert.deepEqual(heard.filter(([who, e]) => e === "wtdrop" && who === "hank@example.com").map(([, , id]) => id).sort(), [failed, unknownOld].sort());
+  assert.ok(heard.some(([who, e, id]) => who === "dave@example.com" && e === "wtdrop" && id === failed));
+  // Asked again: the landed row is remembered, the young unknown one is still waited for.
+  const again = await wt.confirmSweep(async (sigs) => sigs.map(() => null));
+  assert.equal(again.checked, 1);
+  assert.equal(again.dropped, 0);
+});
