@@ -2,8 +2,9 @@
 // in percent of the position, each one click. There is no quote step: it fills at the live quote, with fake
 // or real SOL by the top bar's Paper switch, through lib/trade.ts like every other buy and sell button.
 // Drag it by its title bar. Whether it is open, where it sits and its presets are kept in this browser.
-// The look (the user, 2026-10-12: "take inspiration from the apple design"): iOS dark grouped surfaces, segmented
-// controls on a dim track, tinted green and red fills for the tiles, round grey corner buttons, blue for the one action.
+// The look (the user, 2026-10-12: "proper, strong, like a real trading terminal"): 6px corners, hairlines, uppercase
+// micro-labels, tabular figures, tiles outlined in their side's colour that fill solid under the pointer. No pills.
+// The floating copy has a grip in its corner that scales the whole panel.
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from "react";
 import { create } from "zustand";
 import { Tip } from "@/components/ui/tooltip";
@@ -30,6 +31,7 @@ type At = { x: number; y: number };
 // slippage. Empty buys: the paper desk's sizes (below). The first set starts from what the panel kept before.
 type Preset = { buys: number[]; buysUsdc?: number[]; sells: number[]; slip: number };   // buysUsdc: the buy sizes while trading in USDC
 const SLIP_DEFAULT = 300;
+const SCALE_MIN = 0.7, SCALE_MAX = 1.8;   // how small and how big the floating panel's grip lets it go
 const loadPresets = (): Preset[] => {
   const kept = store.get<Preset[] | null>("qt:presets", null);
   if (Array.isArray(kept) && kept.length === 3) return kept;
@@ -65,14 +67,17 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const [busy, setBusy] = useState<string | null>(null);
   const pendingBuys = useRef(0);   // buys pressed and not settled yet
   const [at, setAt] = useState<At | null>(() => store.get<At | null>("qt:at", null));
+  // How big the floating panel is: a scale from the grip in its corner, kept in this browser (1 = the docked size).
+  const [scale, setScale] = useState<number>(() => Math.min(SCALE_MAX, Math.max(SCALE_MIN, store.get("qt:scale", 1))));
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ dx: number; dy: number; at: At } | null>(null);
+  const grip = useRef<{ x: number; w: number; scale: number } | null>(null);
   // Until edited: the paper desk's sizes (the same as the header's quick buys), made up to four.
   const buyP = inUsdc ? (buysUsdc?.length === 4 ? buysUsdc : USDC_SIZES) : buys.length === 4 ? buys : [...new Set([...sizes, 0.1, 0.25, 0.5, 1])].slice(0, 4).sort((a, b) => a - b), sellP = sells.length === 4 ? sells : SELLS;
 
   // Kept inside the window: on first open over the chart's top left, and back in view after a resize.
   const clamp = (p: At): At => {
-    const w = box.current?.offsetWidth || 300, h = box.current?.offsetHeight || 230;
+    const w = (box.current?.offsetWidth || 320) * scale, h = (box.current?.offsetHeight || 300) * scale;
     return { x: Math.round(Math.min(Math.max(8, p.x), innerWidth - w - 8)), y: Math.round(Math.min(Math.max(8, p.y), innerHeight - h - 8)) };
   };
   useEffect(() => {
@@ -84,7 +89,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     const fit = () => setAt((p) => (p ? clamp(p) : p));
     addEventListener("resize", fit);
     return () => removeEventListener("resize", fit);
-  }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, scale]);   // eslint-disable-line react-hooks/exhaustive-deps
   // The live PnL card (./PnlShare.tsx): the header's card icon and the PnL figure open it. (A hook: above the
   // early return below, so the panel calls the same hooks whether it is showing or not.)
   const pnlCard = usePositionCard(pos, mint, symbol);
@@ -101,6 +106,20 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     setAt(drag.current.at);
   };
   const up = () => { if (drag.current) { store.set("qt:at", drag.current.at); drag.current = null; } };
+  // The grip in the bottom right corner: pull it out to make the whole panel bigger, in to make it smaller
+  // (everything scales together, so the tiles stay in proportion). Double-click puts it back to its normal size.
+  const gripDown = (e: PE<HTMLElement>) => {
+    grip.current = { x: e.clientX, w: box.current?.offsetWidth || 320, scale };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  };
+  const gripMove = (e: PE<HTMLElement>) => {
+    if (!grip.current) return;
+    const next = Math.min(SCALE_MAX, Math.max(SCALE_MIN, (grip.current.w * grip.current.scale + e.clientX - grip.current.x) / grip.current.w));
+    setScale(Math.round(next * 100) / 100);
+  };
+  const gripUp = () => { if (grip.current) { store.set("qt:scale", scale); grip.current = null; } };
+  const gripReset = () => { setScale(1); store.set("qt:scale", 1); };
 
   // Buys can be pressed again and again (spam buying: lib/trade.ts lines them up, one after another); a sell waits
   // until nothing is going. The pressed button spins until the last of its buys has settled.
@@ -135,40 +154,39 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     : paperOn ? wallet?.cash ?? null : me?.signedIn ? me.wallet?.sol ?? 0 : null;
   const usdcTxt = (v: number) => (v >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(2));
   const pnlPct = pos.pnl != null && pos.bought ? (pos.pnl / pos.bought) * 100 : null;
-  // The money's mark, in front of every size and figure: the Solana logomark or the USDC coin.
+  // The money's mark, in front of a figure: the Solana logomark or the USDC coin.
   const mark = (cls: string) => (inUsdc ? <img src="brand/pay/usdc.png" alt="" className={cn("shrink-0 rounded-full", cls)} /> : <SolanaLogo className={cn("shrink-0", cls)} />);
-  // An iOS segmented control: a dim track, the picked segment lifted on a grey thumb.
-  const seg = (on: boolean, h = "h-7") => cn("num flex items-center justify-center gap-1 rounded-[7px] px-2.5 text-[13px] font-semibold transition-[background-color,color,box-shadow] duration-200 ease-out", h,
-    on ? "bg-[#636366] text-white shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)]" : "text-[#ebebf5]/60 hover:text-[#ebebf5]/85");
-  const track = "flex items-center gap-0.5 rounded-[9px] bg-[rgba(118,118,128,0.24)] p-[2px]";
-  // A preset field while editing: the same rounded fill as a tile, the figure typed in white, the unit beside it.
+  // A terminal's segmented control: a hairline box, the picked segment lifted a shade.
+  const seg = (on: boolean) => cn("num flex h-6 items-center justify-center gap-1 rounded-[3px] px-2.5 text-[12px] font-semibold transition-colors duration-100",
+    on ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2");
+  const track = "flex items-center gap-px rounded-[4px] border border-rule bg-paper p-px";
+  const label = "text-[11px] font-bold tracking-[0.08em] uppercase";
+  // A preset field while editing: the tile's shape, the figure typed in ink, the unit beside it.
   const field = (i: number, suffix: ReactNode) => (
     <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? `More than 0 ${cur}` : i < 8 ? "1 to 100 %" : "0.1 to 50 %"}
-      className={cn("num flex h-12 min-w-0 items-center gap-0.5 rounded-[12px] px-2 transition-shadow duration-150",
-        fieldOk(i, edit![i]) ? "bg-[rgba(120,120,128,0.2)] focus-within:shadow-[0_0_0_2px_#0a84ff]" : "bg-[rgba(255,69,58,0.14)] shadow-[0_0_0_2px_rgba(255,69,58,0.6)]")}>
+      className={cn("num flex h-9 min-w-0 items-center gap-0.5 rounded-[4px] border bg-paper px-1.5 transition-colors duration-100",
+        fieldOk(i, edit![i]) ? "border-rule-2 focus-within:border-ink-2" : "border-down")}>
       <input value={edit![i]} onChange={(e) => setEdit((x) => x && x.map((y, j) => (j === i ? e.target.value : y)))}
         onKeyDown={(e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") { e.stopPropagation(); setEdit(null); } }}
         inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in ${cur}` : i < 8 ? `Sell preset ${i - 3} in percent` : "Slippage in percent"}
-        className="w-full min-w-0 bg-transparent text-center text-[17px] font-semibold text-white outline-none" />
-      {suffix != null && <span className="text-[11px] font-medium text-[#ebebf5]/50">{suffix}</span>}
+        className="w-full min-w-0 bg-transparent text-center text-[14px] font-bold text-ink outline-none" />
+      {suffix != null && <span className="text-[10px] font-semibold text-muted">{suffix}</span>}
     </label>
   );
-  // Tiles: Apple's tinted fills, green for a buy and red for a sell, the figure in the same colour. Hover deepens the
-  // tint, the press shrinks it. One that can't trade right now (not enough SOL, nothing held) is faded; a buy short
-  // of SOL opens Deposit instead (live), a sell with nothing held does nothing.
-  const tile = (side: "buy" | "sell", can: boolean) => cn("num flex h-12 min-w-0 items-center justify-center gap-1 rounded-[12px] text-[17px] leading-none font-semibold tracking-[-0.01em] transition-[background-color,transform,opacity] duration-150 ease-out",
-    side === "buy" ? "bg-[rgba(48,209,88,0.15)] text-[#30d158]" : "bg-[rgba(255,69,58,0.15)] text-[#ff453a]",
-    can ? cn("active:scale-[0.96]", side === "buy" ? "hover:bg-[rgba(48,209,88,0.26)]" : "hover:bg-[rgba(255,69,58,0.26)]") : "cursor-not-allowed opacity-30");
+  // Tiles: a hairline in the side's colour over a faint tint, the figure bold in that colour; under the pointer the
+  // tile fills solid. One that can't trade right now (not enough SOL, nothing held) is dim; a buy short of SOL
+  // opens Deposit instead (live), a sell with nothing held does nothing.
+  const tile = (side: "buy" | "sell", can: boolean) => cn("num flex h-9 min-w-0 items-center justify-center gap-1 rounded-[4px] border text-[14px] leading-none font-bold transition-[background-color,border-color,color,transform] duration-100",
+    side === "buy" ? "border-up/35 bg-up/[0.08] text-up" : "border-down/35 bg-down/[0.08] text-down",
+    can ? cn("active:scale-[0.97]", side === "buy" ? "hover:border-up hover:bg-up hover:text-[#06130b]" : "hover:border-down hover:bg-down hover:text-white") : "cursor-not-allowed opacity-35");
   const broke = !paperOn && cash != null && cash < Math.min(...buyP);
-  const spin = <i className="size-4 animate-spin rounded-full border-2 border-current/25 border-t-current" />;
-  // The round grey buttons of a sheet's corner.
-  const roundBtn = "grid size-7 place-items-center rounded-full bg-[rgba(120,120,128,0.24)] text-[#ebebf5]/70 transition-[background-color,color,transform] duration-150 hover:bg-[rgba(120,120,128,0.4)] hover:text-white active:scale-95";
-  const secondary = "text-[13px] text-[#ebebf5]/60";
+  const spin = <i className="size-3.5 animate-spin rounded-full border-2 border-current/25 border-t-current" />;
+  const iconBtn = "grid size-6 place-items-center rounded-[4px] text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink";
   // A group's top line: its side, then what there is on that side (the balance, or the holding).
   const line = (left: ReactNode, right: ReactNode) => (
-    <div className="flex h-7 items-center justify-between gap-2">
-      <span className="flex min-w-0 items-center gap-2.5">{left}</span>
-      <span className={cn("num flex min-w-0 items-center gap-1 truncate", secondary)}>{right}</span>
+    <div className="flex h-5 items-center justify-between gap-2">
+      <span className="flex min-w-0 items-center gap-2">{left}</span>
+      <span className="num flex min-w-0 items-center gap-1 truncate text-[12px] text-muted">{right}</span>
     </div>
   );
   // The money: buys sized in SOL or in USDC, sells paid in it (one setting with the coin page's panel). A two-way
@@ -177,60 +195,59 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     <div role="radiogroup" aria-label="Trade in SOL or USDC" className={cn(track, "shrink-0")}>
       {(["SOL", "USDC"] as const).map((c) => (
         <Tip key={c} tip={c === "SOL" ? "Buys sized in SOL, sells paid in SOL" : "Buys sized in USDC, sells paid in USDC"}>
-          <button role="radio" aria-checked={cur === c} onClick={() => setCur(c)} className={cn(seg(cur === c, "h-6"), "px-2 text-[12px]")}>
-            {c === "USDC" ? <img src="brand/pay/usdc.png" alt="" className={cn("size-3.5 rounded-full", cur !== c && "opacity-50 grayscale")} /> : <SolanaLogo className={cn("size-3.5", cur !== c && "opacity-50 grayscale")} />}{c}
-          </button>
+          <button role="radio" aria-checked={cur === c} onClick={() => setCur(c)} className={cn(seg(cur === c), "h-[18px] px-1.5 text-[10px] font-bold tracking-[0.04em]")}>{c}</button>
         </Tip>
       ))}
     </div>
   );
   return (
-    <div ref={box} role={docked ? "region" : "dialog"} aria-label="Instant trade" style={docked ? undefined : { left: at?.x ?? -9999, top: at?.y ?? 0 }}
-      className={cn("overflow-hidden rounded-[18px] bg-[#1c1c1e] font-[-apple-system,BlinkMacSystemFont,'SF_Pro_Text','Segoe_UI_Variable_Text','Segoe_UI',system-ui,sans-serif] text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]",
-        !docked && "fixed z-30 w-[min(324px,calc(100vw-16px))] shadow-[0_0_0_1px_rgba(255,255,255,0.1),0_30px_60px_-12px_rgba(0,0,0,0.75)]")}>
-      {/* The title bar: what this is, whose money, and the round controls. Drag it when floating. */}
+    <div ref={box} role={docked ? "region" : "dialog"} aria-label="Instant trade"
+      style={docked ? undefined : { left: at?.x ?? -9999, top: at?.y ?? 0, transform: scale === 1 ? undefined : `scale(${scale})`, transformOrigin: "top left" }}
+      className={cn("relative overflow-hidden rounded-[6px] border border-rule-2 bg-paper-2 text-ink",
+        !docked && "fixed z-30 w-[min(320px,calc(100vw-16px))] shadow-[0_16px_40px_-8px_rgba(0,0,0,0.85)]")}>
+      {/* The title bar: what this is, whose money, and the three small controls. Drag it when floating. */}
       <div onPointerDown={docked ? undefined : down} onPointerMove={docked ? undefined : move} onPointerUp={docked ? undefined : up} onPointerCancel={docked ? undefined : up}
-        className={cn("flex h-13 items-center gap-2.5 px-4 select-none", !docked && "cursor-grab touch-none active:cursor-grabbing")}>
+        className={cn("flex h-9 items-center gap-2.5 border-b border-rule pr-1.5 pl-3 select-none", !docked && "cursor-grab touch-none active:cursor-grabbing")}>
         {away ? (
-          <a href={`#/coin/${mint}`} title={`Open ${symbol}`} className="flex min-w-0 items-center gap-2 text-[15px] font-semibold tracking-[-0.01em] text-white hover:text-[#0a84ff]">
-            <CoinPic mint={mint} symbol={symbol} className="size-6" /><span className="truncate">{symbol}</span>
-            {pos.mcapNow != null && <span className={cn("num font-medium", secondary)}>{usdK(pos.mcapNow)}</span>}
+          <a href={`#/coin/${mint}`} title={`Open ${symbol}`} className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-ink hover:text-accent">
+            <CoinPic mint={mint} symbol={symbol} className="size-4.5" /><span className="truncate">{symbol}</span>
+            {pos.mcapNow != null && <span className="num text-[12px] font-medium text-muted">{usdK(pos.mcapNow)}</span>}
           </a>
-        ) : <b className="text-[15px] font-semibold tracking-[-0.01em]">Quick trade</b>}
-        <span className={cn("flex items-center gap-1.5 rounded-full px-2 py-[3px] text-[11px] font-semibold", paperOn ? "bg-[rgba(10,132,255,0.18)] text-[#64aaff]" : "bg-[rgba(48,209,88,0.18)] text-[#30d158]")}>
-          <i className={cn("size-1.5 rounded-full", paperOn ? "bg-[#0a84ff]" : "bg-[#30d158] motion-safe:animate-pulse")} />{paperOn ? "Paper" : "Live"}</span>
-        <span className="ml-auto flex items-center gap-1.5">
+        ) : <b className="text-[13px] font-semibold text-ink">Quick trade</b>}
+        <span className={cn(label, "flex items-center gap-1.5", paperOn ? "text-info" : "text-up")}>
+          <i className={cn("size-1.5", paperOn ? "bg-info" : "bg-up motion-safe:animate-pulse")} />{paperOn ? "Paper" : "Live"}</span>
+        <span className="ml-auto flex items-center gap-0.5">
           <Tip tip="PnL card: your live result as a picture to save or share">
-            <button onClick={pnlCard.open} aria-label="PnL card" className={roundBtn}><Icon.image className="size-3.5" /></button>
+            <button onClick={pnlCard.open} aria-label="PnL card" className={iconBtn}><Icon.image className="size-3.5" /></button>
           </Tip>
           <Tip tip={edit ? "Save presets" : "Edit presets"}>
             <button onClick={() => (edit ? save() : setEdit([...buyP, ...sellP, slip / 100].map(String)))} aria-label={edit ? "Save presets" : "Edit presets"}
               disabled={edit != null && !edit.every((x, i) => fieldOk(i, x))}
-              className={cn(roundBtn, "disabled:cursor-not-allowed disabled:opacity-40", edit && "bg-[#0a84ff] text-white hover:bg-[#2b95ff] hover:text-white")}>
+              className={cn(iconBtn, "disabled:cursor-not-allowed disabled:opacity-40", edit && "bg-up text-[#06130b] hover:bg-up hover:text-[#06130b]")}>
               {edit ? <CIcon.check className="size-3.5" /> : <CIcon.pencil className="size-3.5" />}
             </button>
           </Tip>
           <Tip tip={docked ? "Pop out: float this panel over the chart (it closes when you leave the coin)" : away ? "Close" : "Dock it back in the side column"}>
-            <button onClick={toggleQuick} aria-label={docked ? "Pop out quick trade" : away ? "Close quick trade" : "Dock quick trade"} className={roundBtn}>
+            <button onClick={toggleQuick} aria-label={docked ? "Pop out quick trade" : away ? "Close quick trade" : "Dock quick trade"} className={iconBtn}>
               {docked ? <CIcon.window className="size-3.5" /> : <Icon.close className="size-3.5" />}</button>
           </Tip>
         </span>
       </div>
 
-      <div className="flex flex-col gap-4 px-4 pb-4">
+      <div className="flex flex-col gap-3 p-3">
         {/* Which set of presets, and its slippage (the slippage opens the editor: it is a preset field too). */}
-        <div className="flex items-center justify-between gap-3">
-          <div role="tablist" aria-label="Preset set" className={cn(track, "flex-1 [&>button]:flex-1")}>
+        <div className="flex items-center justify-between gap-2">
+          <div role="tablist" aria-label="Preset set" className={track}>
             {presets.map((_, i) => (
               <button key={i} role="tab" aria-selected={pi === i} onClick={() => pick(i)} className={seg(pi === i)}>P{i + 1}</button>
             ))}
           </div>
           {edit ? (
-            <span className={cn("flex items-center gap-2", secondary)}>Slippage<span className="w-[4.5rem] [&>label]:h-8 [&>label]:rounded-[9px] [&_input]:text-[15px]">{field(8, "%")}</span></span>
+            <span className="flex items-center gap-1.5 text-[12px] text-muted">Slippage<span className="w-16 [&>label]:h-7">{field(8, "%")}</span></span>
           ) : (
-            <Tip tip="Max slippage for this preset set (tap to change)">
-              <button onClick={() => setEdit([...buyP, ...sellP, slip / 100].map(String))} className={cn("num flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-[rgba(120,120,128,0.2)] px-2.5 transition-colors hover:bg-[rgba(120,120,128,0.32)]", secondary)}>
-                <Icon.sliders className="size-3.5" />Slippage <b className="font-semibold text-white">{slipTxt(slip)}</b>
+            <Tip tip="Max slippage for this preset set (click to change)">
+              <button onClick={() => setEdit([...buyP, ...sellP, slip / 100].map(String))} className="num flex h-6 items-center gap-1.5 rounded-[4px] px-1.5 text-[12px] text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink">
+                <Icon.sliders className="size-3.5" />Slippage <b className="font-bold text-ink">{slipTxt(slip)}</b>
               </button>
             </Tip>
           )}
@@ -238,10 +255,10 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
 
         {migrating ? <MigratingNote since={migrating} /> : null}
 
-        <div className="flex flex-col gap-2">
-          {line(<><span className="text-[15px] font-semibold">Buy</span>{curSwitch}</>,
-            cash == null ? (paperOn ? null : "Not signed in") : <>{mark("size-3.5")}<span className="truncate font-medium text-white/90">{inUsdc ? usdcTxt(cash) : cash.toFixed(3)}</span><span>{cur}</span></>)}
-          <div className="grid grid-cols-4 gap-2">
+        <div className="flex flex-col gap-1.5">
+          {line(<><span className={cn(label, "text-up")}>Buy</span>{curSwitch}</>,
+            cash == null ? (paperOn ? null : "Not signed in") : <>{mark("size-3")}<span className="truncate font-semibold text-ink">{inUsdc ? usdcTxt(cash) : cash.toFixed(3)}</span><span>{cur}</span></>)}
+          <div className="grid grid-cols-4 gap-1.5">
             {edit ? buyP.map((_, i) => field(i, null)) : buyP.map((v, i) => {
               const short = cash != null && v > cash;
               if (migrating) return <button key={i} aria-disabled title={MIGRATING_TIP} className={tile("buy", false)}>{v}</button>;
@@ -257,10 +274,10 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          {line(<span className="text-[15px] font-semibold">Sell</span>,
-            pos.canSell ? <>{pos.tokens != null && <span className="truncate font-medium text-white/90">{tokN(pos.tokens)} {symbol}</span>}{pos.holding != null && <span>{pos.tokens != null && "· "}<SolAmt v={pos.holding} /></span>}</> : "Nothing held")}
-          <div className="grid grid-cols-4 gap-2">
+        <div className="flex flex-col gap-1.5">
+          {line(<span className={cn(label, "text-down")}>Sell</span>,
+            pos.canSell ? <>{pos.tokens != null && <span className="truncate font-semibold text-ink">{tokN(pos.tokens)} {symbol}</span>}{pos.holding != null && <span>{pos.tokens != null && "· "}<SolAmt v={pos.holding} /></span>}</> : "Nothing held")}
+          <div className="grid grid-cols-4 gap-1.5">
             {edit ? sellP.map((_, i) => field(i + 4, "%")) : sellP.map((v, i) => (
               migrating ? <button key={i} aria-disabled title={MIGRATING_TIP} className={tile("sell", false)}>{v}%</button> :
               <button key={i} aria-disabled={!pos.canSell || undefined} title={pos.canSell ? `Sell ${v}% of your ${symbol} · ${slipTxt(slip)} slippage` : "Buy first, then sell from here"}
@@ -274,24 +291,36 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
       </div>
 
       {pnlCard.dialog}
-      {/* The foot: the position's averages and result, or how to get money in, or what a click does. */}
-      <div className={cn("num flex min-h-11 items-center gap-x-3 gap-y-1 border-t border-[rgba(84,84,88,0.5)] px-4 py-2", secondary)}>
-        {pos.has ? (
-          <>
-            <span>Avg buy <b className="font-semibold text-white">{usdK(pos.entry)}</b></span>
-            {pos.exit != null && <span>Avg sell <b className="font-semibold text-white">{usdK(pos.exit)}</b></span>}
-            <button onClick={pnlCard.open} title="Open your PnL card"
-              className={cn("ml-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold transition-colors", (pos.pnl ?? 0) >= 0 ? "bg-[rgba(48,209,88,0.15)] text-[#30d158] hover:bg-[rgba(48,209,88,0.25)]" : "bg-[rgba(255,69,58,0.15)] text-[#ff453a] hover:bg-[rgba(255,69,58,0.25)]")}>
-              {pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}
-              {pnlPct != null && <span className="opacity-80">{pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}
-            </button>
-          </>
-        ) : broke ? (
-          <span className="flex w-full items-center gap-2"><span className="mr-auto">No {cur} yet</span>
-            <button onClick={() => setPaper(true)} className="h-8 rounded-full px-3 text-[13px] font-semibold text-[#0a84ff] transition-colors hover:bg-[rgba(10,132,255,0.12)]">Try paper</button>
-            <button onClick={() => openExchange("deposit")} className="h-8 rounded-full bg-[#0a84ff] px-4 text-[13px] font-semibold text-white transition-[background-color,transform] duration-150 hover:bg-[#2b95ff] active:scale-[0.97]">Deposit</button></span>
-        ) : <span>One tap fills at the live quote{paperOn ? ` with fake ${cur}` : ""}.</span>}
-      </div>
+      {/* The foot, only when there is something to say: the position's averages and result, or how to get money in. */}
+      {(pos.has || broke) && (
+        <div className="num flex min-h-9 items-center gap-x-3 gap-y-1 border-t border-rule px-3 py-1.5 text-[12px] text-muted">
+          {pos.has ? (
+            <>
+              <span>Avg buy <b className="font-semibold text-ink">{usdK(pos.entry)}</b></span>
+              {pos.exit != null && <span>Avg sell <b className="font-semibold text-ink">{usdK(pos.exit)}</b></span>}
+              <button onClick={pnlCard.open} title="Open your PnL card"
+                className={cn("ml-auto flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 font-bold transition-colors duration-100 hover:bg-paper-4", (pos.pnl ?? 0) >= 0 ? "text-up" : "text-down")}>
+                {pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}
+                {pnlPct != null && <span className="opacity-80">{pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}
+              </button>
+            </>
+          ) : (
+            <span className="flex w-full items-center gap-1.5"><span className="mr-auto">No {cur} yet</span>
+              <button onClick={() => setPaper(true)} className="h-7 rounded-[4px] px-2.5 font-semibold text-info transition-colors duration-100 hover:bg-info/10">Try paper</button>
+              <button onClick={() => openExchange("deposit")} className="h-7 rounded-[4px] bg-ink px-3 font-semibold text-paper transition-[background-color,transform] duration-100 hover:bg-white active:scale-[0.97]">Deposit</button></span>
+          )}
+        </div>
+      )}
+      {/* The resize grip (floating only): two short diagonal strokes in the corner, the way a terminal window shows one. */}
+      {!docked && (
+        <span role="separator" aria-label="Resize quick trade" title="Drag to resize · double-click for the normal size"
+          onPointerDown={gripDown} onPointerMove={gripMove} onPointerUp={gripUp} onPointerCancel={gripUp} onDoubleClick={gripReset}
+          className="absolute right-0 bottom-0 grid size-5 cursor-nwse-resize touch-none place-items-end p-1 text-muted/60 transition-colors hover:text-ink">
+          <svg viewBox="0 0 10 10" className="size-2.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden>
+            <path d="M9 1L1 9M9 5L5 9" />
+          </svg>
+        </span>
+      )}
     </div>
   );
 }
