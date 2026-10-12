@@ -16,7 +16,6 @@ import "@/styles/app.css";
 import { original } from "@/lib/thumb";
 import { OWNER_ONLY, useRole, useRoleKnown } from "@/lib/role";
 import { loadExchange, loadLauncher, useExchange, useLauncher, useWelcome } from "@/lib/modals";
-import { closeQuick } from "@/lib/quick";
 import { useMe, useUi } from "@/lib/ui";
 import { loadTracker, useTracker } from "@/lib/wtrack";
 import "@/lib/update";   // the "new version" bar after a deploy
@@ -192,8 +191,6 @@ function App() {
     performance.mark("blix:mounted");
     return startPulse();
   }, []);
-  // Leaving the chart closes its floating panel without loading the panel code.
-  useEffect(() => { if (route !== "coin") closeQuick(); }, [route]);
   // The tab says which page this is ("Blix | Discover"). A coin's tab is set by its header, live market cap first.
   useEffect(() => {
     if (route === "coin" && arg) return;
