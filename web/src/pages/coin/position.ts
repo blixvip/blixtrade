@@ -9,7 +9,8 @@ import { useMe } from "@/lib/ui";
 import { markValue } from '@/lib/position-value';
 import { useFeeBps } from "@/components/ShareLink";
 
-interface RealTx { kind: string; mint: string | null; sol: number | null; tokens: string | null; status: string }
+interface RealTx { kind: string; mint: string | null; sol: number | null; tokens: string | null; status: string; t: number }
+export interface OwnTrade { t: number; side: "buy" | "sell"; sol: number | null }   // a live trade, for the chart's B / S bubbles
 export interface Pos {
   paper: boolean;            // whose position this is: the paper wallet's, or the signed-in wallet's
   has: boolean;              // any trade in this coin
@@ -23,6 +24,7 @@ export interface Pos {
   tokens: number | null;     // tokens held (paper: quoted rows only; real: the wallet's)
   canSell: boolean;
   estimated: boolean;
+  trades: OwnTrade[];        // live: the wallet's buys and sells in this coin (paper rows carry their own)
 }
 
 export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | null): Pos {
@@ -41,7 +43,7 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
 
   const mcapNow = c?.mcUsd ?? r?.live?.mcap ?? r?.token?.mcap ?? null;
   const solUsd = usePulse.getState().live.solUsd || (me?.wallet && me.wallet.sol > 0 && me.wallet.solUsd ? me.wallet.solUsd / me.wallet.sol : 0);
-  const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false, estimated: false };
+  const pos: Pos = { paper, has: false, bought: 0, sold: 0, holding: 0, pnl: null, entry: null, exit: null, mcapNow, open: [], tokens: null, canSell: false, estimated: false, trades: [] };
   if (paper) {
     // A partial sell splits a row: the sold part becomes a closed row with the same entry, so summing every
     // row counts each buy once. Tokens per row are SOL over entry market cap (the same units throughout).
@@ -74,6 +76,7 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
     pos.tokens = held?.ui ?? (Array.isArray(me?.wallet?.tokens) ? 0 : null);
     pos.has = list.length > 0 || Boolean(held);
     pos.canSell = (held?.ui ?? 0) > 0;
+    pos.trades = list.filter((t) => t.t > 0).map((t) => ({ t: t.t, side: t.kind as "buy" | "sell", sol: t.sol }));
     // The averages as market caps: SOL paid (or got) per token, times the SOL price, times the supply. The vault
     // reports tokens in raw units; the wallet's own figure (ui) gives the decimals when both are there and agree
     // on a power of ten, otherwise pump.fun's six. This holds after selling out too (nothing held to divide by).
