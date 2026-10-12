@@ -28,6 +28,7 @@ import { computeNarratives, THEMES, themesFor } from "./narratives.js";
 import { narrativeFeed } from "./narfeed.js";
 import { settings, saveSettings, publicSettings, withOverrides, SECRETS, PRIVATE } from "./settings.js";
 import { writeBrief, explainCoin, briefProblem } from "./ai.js";
+import { cloneCoin, writeCoin, launchStatus, tickerUse } from "./launchtools.js";
 import { notifySignal, notifyBrief, testNotify, decide, rules, destinations, deliveries } from "./notify.js";
 import * as wallets from "./wallets.js";
 import * as fomo from "./fomo.js";
@@ -1616,6 +1617,15 @@ async function handleRequest(req, res) {
       d.rule = db.prepare("SELECT effect FROM alert_rules WHERE scope = 'wallet' AND target = ?").get(wm[1])?.effect || null;
       return send(res, 200, d);
     }
+    // The Create coin page's helpers (launchtools.js): clone a coin's details, write them from an idea, what is on.
+    if (p === "/api/launch/status") return send(res, 200, await launchStatus());
+    if (p === "/api/launch/ticker") return send(res, 200, tickerUse(params.sym));
+    if (p === "/api/launch/clone") {
+      const mint = String(params.mint || "").trim();
+      if (!new RegExp(`^${MINT}$`).test(mint)) return send(res, 400, { error: "That is not a coin's contract address." });
+      return send(res, 200, await cloneCoin(mint));
+    }
+    if (p === "/api/launch/write" && POST) { const b = await readBody(req); return send(res, 200, await writeCoin(b.idea, { hot: Array.isArray(b.hot) ? b.hot.map(String) : [] })); }
     const m = p.match(new RegExp(`^/api/token/(${MINT})(/explain|/classify)?$`));
     if (m) {
       if (m[2] === "/explain") return send(res, 200, await explain(m[1]));

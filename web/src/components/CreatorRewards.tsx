@@ -20,6 +20,9 @@ interface Rewards {
   claims: { t: number; sol: number; sig: string | null; status: string }[];
 }
 interface CoinInfo { symbol?: string; name?: string; mcap?: number | null; graduated?: boolean | number | null }
+// Auto-claim (GET/POST api/account/autoclaim, server/autoclaim.js): claimed on a timer once the rewards reach the floor.
+interface AutoClaim { on: boolean; minSol: number | null; claims: number; checked: number | null; last: { t: number; sol: number; sig: string | null } | null; error: { text: string; t: number } | null }
+const FLOORS = [0.01, 0.05, 0.1, 0.5];
 
 const POLL_MS = 30_000;
 const sol = (n: number, d = 4) => (+n || 0).toLocaleString(undefined, { minimumFractionDigits: n ? Math.min(2, d) : 0, maximumFractionDigits: d });
@@ -102,6 +105,8 @@ export function CreatorRewards() {
           </Button>
         </div>
 
+        <AutoClaimRow />
+
         <div className="grid grid-cols-3 gap-2">
           <Stat label="Earned" value={r ? sol(r.earned) : "…"} sub={r && solUsd ? usd(r.earned * solUsd) : ""} sol />
           <Stat label="Claimed" value={r ? sol(r.claimed) : "…"} sub={r && solUsd ? usd(r.claimed * solUsd) : ""} sol />
@@ -119,6 +124,52 @@ export function CreatorRewards() {
           : <p className="px-4 pb-4 text-sm text-muted">Coins you launch from this wallet show here, with what each one is worth.</p>}
       </div>
     </section>
+  );
+}
+
+// Claim on a timer: off, or a floor in SOL; the last claim it made, or why the last try failed.
+function AutoClaimRow() {
+  const [a, setA] = useState<AutoClaim | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let on = true;
+    fetch("api/account/autoclaim", { signal: AbortSignal.timeout(15_000) }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (on && j) setA(j); }).catch(() => {});
+    return () => { on = false; };
+  }, []);
+  const choose = async (minSol: number | null) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const r = await fetch("api/account/autoclaim", { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(15_000), body: JSON.stringify({ minSol }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setA(j);
+    } catch (e) { txToast("Auto-claim").fail("Could not save", e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(false); }
+  };
+  const cur = a?.on ? a.minSol : null;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-control border border-rule bg-paper px-3 py-2.5" data-testid="auto-claim">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="text-sm font-medium text-ink-2">Auto-claim <span className="font-normal text-muted">every 10 min, once rewards reach</span></span>
+        <span className="text-xs text-muted">(each claim costs ~0.0001 SOL in fees)</span>
+        <div role="radiogroup" aria-label="Auto-claim floor" className="inline-flex flex-wrap items-center gap-0.5 rounded-full border border-rule bg-paper-3 p-0.5">
+          {[null, ...FLOORS].map((v) => (
+            <button key={String(v)} type="button" role="radio" aria-checked={cur === v} disabled={saving || !a} onClick={() => choose(v)}
+              className={cn("num h-6 rounded-full px-2.5 text-xs transition-colors disabled:opacity-60", cur === v ? "bg-paper text-ink shadow-raised" : "text-muted hover:text-ink")}>
+              {v == null ? "Off" : `${v} SOL`}
+            </button>
+          ))}
+        </div>
+      </div>
+      {a?.on && (
+        <span className={cn("text-xs", a.error ? "text-warn" : "text-muted")}>
+          {a.error ? `Last try failed (${day(a.error.t)}): ${a.error.text}`
+            : a.last ? <>Last auto-claim {sol(a.last.sol)} SOL on {day(a.last.t)}{a.last.sig && <> · <a href={`https://solscan.io/tx/${a.last.sig}`} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">transaction</a></>} · {a.claims} so far</>
+            : a.checked ? `Checked ${day(a.checked)}: under ${a.minSol} SOL, nothing claimed yet.` : "On. First check in a few minutes."}
+        </span>
+      )}
+    </div>
   );
 }
 

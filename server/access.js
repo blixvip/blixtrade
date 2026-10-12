@@ -16,6 +16,7 @@ const OPEN = [
   // A picture from elsewhere (a person's avatar, a post's photo), kept by the page server (pagepics.js). On the direct
   // line the page asks for /api/pic.webp (lib/thumb.ts): without it here every member's faces were refused (403).
   /^\/api\/pic(\.webp)?$/,
+  /^\/api\/launch\/(status|ticker)$/,   // the Create coin page: what is on here, and who already uses a ticker (launchtools.js)
 ];
 
 // A member: someone Kai let in from the waitlist, signed in with Google on trade.blixvip.com (the Worker vouches
@@ -31,6 +32,7 @@ const MEMBER = [
   /^\/api\/bubblemap$/,            // a coin's shared bubble map: read it, or make it when no one has yet (bubblemap.js)
   /^\/api\/wtrack(\/.*)?$/,        // the member's own wallet tracker list, feed, monitor and KOL suggestions (wtrack.js)
   /^\/api\/v1\/(keys(\/\d{1,12})?|usage)$/,   // the member's trade-API keys and usage (tradeapi.js); the key routes themselves never carry a member
+  /^\/api\/launch\/write$/,       // the Create coin page's "write it for me" (launchtools.js): a name, ticker and line from an idea
 ];
 // Reads a member gets beyond a visitor's: the shared market views every page uses (Fomo, the pump feed, X posts,
 // the coin page's people, callouts and Fomo tabs). Never the owner's settings, wallets, alerts, log or exports.
@@ -46,10 +48,11 @@ const MEMBER_READS = [
   new RegExp(`^/api/(wallet|wallet-page)/${MINT}$`),
   /^\/api\/banner$/,               // a coin's DexScreener banner for Discover's coin card (banner.js)
   new RegExp(`^/api/coin/${MINT}/(people|callouts|fomo)$`),
+  /^\/api\/launch\/clone$/,       // the Create coin page: a coin's details and picture by contract address, to start from (launchtools.js)
 ];
 export function memberMay(method, pathname) {
-  if (method === "GET" && /^\/api\/account\/(me|google|txs|rewards|referral|handle)$/.test(pathname)) return true;
-  if (method === "POST" && /^\/api\/account\/(setup|logout|buy|sell|withdraw|export|launch|claim|referral\/claim|handle)$/.test(pathname)) return true;
+  if (method === "GET" && /^\/api\/account\/(me|google|txs|rewards|autoclaim|referral|handle)$/.test(pathname)) return true;
+  if (method === "POST" && /^\/api\/account\/(setup|logout|buy|sell|withdraw|export|launch|claim|autoclaim|referral\/claim|handle)$/.test(pathname)) return true;
   // A page that hit an error tells the server (main.tsx guards), so a crash anyone sees is in the log.
   if (method === "POST" && pathname === "/api/client-error") return true;
   if (visitorMay(method, pathname)) return true;

@@ -1,7 +1,8 @@
 // Hosted wallets bind to a verified Google subject. HTTP callers cannot choose a vault user ID.
 // refOf(email): who invited this member (server/handles.js), told to the wallet service with each trade.
 // `busy(mint)`: why the coin cannot be traded this moment (it is migrating to its pool), else null.
-export function createHostedAccounts({ db, vault, launch, rewards, refOf = () => null, busy = () => null, now = Date.now }) {
+// `autoclaim` (autoclaim.js): creator fees claimed on a timer for members who switch it on; optional.
+export function createHostedAccounts({ db, vault, launch, rewards, refOf = () => null, busy = () => null, autoclaim = null, now = Date.now }) {
   db.exec(`CREATE TABLE IF NOT EXISTS hosted_accounts (
     sub TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     vault_id INTEGER UNIQUE, address TEXT UNIQUE, consented INTEGER NOT NULL)`);
@@ -36,7 +37,7 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
   return async function handle(req, res, url) {
     try {
       const p = url.pathname, method = req.method, identity = req.walletIdentity;
-      if (!/^\/api\/account\/(me|google|logout|setup|txs|buy|sell|withdraw|export|launch|rewards|claim|referral|referral\/claim)$/.test(p)) throw fail(404, "Not found.");
+      if (!/^\/api\/account\/(me|google|logout|setup|txs|buy|sell|withdraw|export|launch|rewards|claim|autoclaim|referral|referral\/claim)$/.test(p)) throw fail(404, "Not found.");
       if (p === "/api/account/google" && method === "GET") { res.writeHead(302, { location: "/auth/google?wallet=1", "cache-control": "no-store" }); res.end(); return true; }
       if (p === "/api/account/logout" && method === "POST") { send(res, 200, { signedIn: false }, { "set-cookie": "blix_wallet=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" }); return true; }
       if (!identity) {
@@ -67,6 +68,11 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
       if (p === "/api/account/txs" && method === "GET") { send(res, 200, await vault(`${own}/txs`)); return true; }
       if (p === "/api/account/rewards" && method === "GET" && rewards) { send(res, 200, await rewards(account.vault_id)); return true; }
       if (p === "/api/account/claim" && method === "POST") { send(res, 200, await vault(`${own}/claim`, {})); return true; }
+      if (p === "/api/account/autoclaim") {
+        if (!autoclaim) throw fail(503, "Auto-claim is not available here.");
+        if (method === "GET") { send(res, 200, autoclaim.get(`sub:${identity.sub}`)); return true; }
+        if (method === "POST") { send(res, 200, autoclaim.set(`sub:${identity.sub}`, Number(account.vault_id), body.minSol)); return true; }
+      }
       // Referrals: what this member earned from the trading fees of people they invited, and paying it out.
       if (p === "/api/account/referral" && method === "GET") {
         // Invited but not traded yet: the wallet service learns the inviter with the first trade; the fee shown is theirs already.

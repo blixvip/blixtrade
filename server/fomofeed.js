@@ -6,6 +6,9 @@
 // its own feed (Fomo asks with just the chosen types); reads only run while someone has the page open (asked in
 // the last WANTED_MS), at least REFRESH_MS apart. Items are kept and merged by id, newest first, so the page
 // keeps what it has already shown when a later read is shorter.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { hasAside, runRepl, signedOutText } from "./browser.js";
 import { fomoFetch } from "./fomochart.js";
 import { ETH_TOO, offChain } from "./chains.js";
@@ -27,8 +30,46 @@ const ALL = Object.keys(FEED_GROUPS);
 // 2026-10-10; it was every 2 s here, which with the read itself made 2.3-5.5 s between updates).
 const REFRESH_MS = hasAside() ? 900 : 950, WANTED_MS = 45_000, KEEP = 200;
 const now = () => Date.now();
-const feeds = new Map(); // key -> { groups, items: Map(id -> item), t, error, running, wanted }
+const feeds = new Map(); // key -> { groups, items: Map(id -> item), t, error, running, wanted, fresh }
 let signedOut = false;
+
+// ---------- the feed survives a restart ----------
+// Every filter set's list is written to data/fomofeed.json as it is read, and read back when the radar starts, so the
+// Feed page opens onto the last posts at once after a restart instead of a blank list (or Fomo's first refusal in a
+// red box). A list from disk is shown with its own time until the first good read of this run replaces it.
+const STORE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data", "fomofeed.json");
+export const feedStore = { loaded: 0, saved: 0, lastSave: 0, error: null };
+function loadStore() {
+  let j;
+  try { j = JSON.parse(fs.readFileSync(STORE, "utf8")); } catch { return; }
+  for (const [key, r] of Object.entries(j?.feeds || {})) {
+    const groups = key.split(",").filter((g) => FEED_GROUPS[g]);
+    if (!groups.length || !Array.isArray(r?.items) || !(r.t > 0)) continue;
+    const f = feedOf(groups.join(","));
+    if (f.items.size) continue;
+    for (const it of r.items.slice(0, KEEP)) if (it && typeof it.id === "string") f.items.set(it.id, it);
+    // Counted as last wanted a while ago: no reads for it until a page asks, but kept (the sweep below drops only
+    // lists read this run), so a page opened half an hour after a restart still opens onto posts.
+    f.t = r.t; f.fresh = false; f.wanted = now() - WANTED_MS;
+    feedStore.loaded++;
+  }
+}
+let saveTimer = null;
+function saveStore() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    const out = {};
+    for (const [key, f] of feeds) {
+      const rl = f.relay && f.relay.items && f.relay.t ? f.relay : null;   // the PC's list is the better one when it is the one shown
+      const items = rl ? rl.items : f.t ? [...f.items.values()] : null;
+      if (items && items.length) out[key] = { t: rl ? rl.t : f.t, items: items.slice(0, KEEP) };
+    }
+    try { fs.writeFileSync(STORE + ".tmp", JSON.stringify({ feeds: out })); fs.renameSync(STORE + ".tmp", STORE); feedStore.saved++; feedStore.lastSave = now(); feedStore.error = null; }
+    catch (e) { feedStore.error = e.message; }
+  }, 10_000);
+  saveTimer.unref?.();
+}
 // Told after every read (good or not) with the filter set's key: server/feedstream.js pushes what changed.
 const listeners = new Set();
 export const onFomoFeed = (fn) => (listeners.add(fn), () => listeners.delete(fn));
@@ -170,25 +211,29 @@ async function refresh(f) {
       const keep = [...f.items.values()].sort((a, b) => (b.t || 0) - (a.t || 0)).slice(0, KEEP);
       f.items = new Map(keep.map((s) => [s.id, s]));
     }
-    f.t = now(); f.error = null;
+    f.t = now(); f.error = null; f.fresh = true;
+    saveStore();
   } catch (e) { f.error = e.message; }
   finally { f.running--; for (const fn of listeners) try { fn(f.groups.join(",")); } catch {} }
 }
 
 // A read is due REFRESH_MS after the last good one; after a failed one, 15 s later (a stuck Aside is not hammered).
 const AFTER_ERROR_MS = hasAside() ? 15_000 : 60_000;
+const COLD_RETRY_MS = 5_000;   // nothing shown yet (first reads after a start): a refusal is tried again sooner
 // A read takes 1-2 s from the server (the round trip to Fomo), so reads overlap: a new one starts REFRESH_MS after
 // the last one started, up to OVERLAP at once (items merge by id, so the order they land in does not matter).
 const OVERLAP = hasAside() ? 1 : 2;
-const due = (f) => f.running < OVERLAP && now() - (f.tried || 0) > (f.error ? AFTER_ERROR_MS : REFRESH_MS) && (!f.error || !f.running);
+const due = (f) => f.running < OVERLAP && now() - (f.tried || 0) > (f.error ? (f.fresh ? AFTER_ERROR_MS : COLD_RETRY_MS) : REFRESH_MS) && (!f.error || !f.running);
 
 // The filter set's canonical key (Fomo's menu order; every entry when none are given) and its record.
 const keyOf = (groupsParam) => { const groups = String(groupsParam || "").split(",").filter((g) => FEED_GROUPS[g]); return (groups.length ? ALL.filter((g) => groups.includes(g)) : ALL).join(","); };
 function feedOf(key) {
   let f = feeds.get(key);
-  if (!f) { f = { groups: key.split(","), items: new Map(), t: 0, error: null, running: 0, wanted: 0, relay: null }; feeds.set(key, f); }
+  if (!f) { f = { groups: key.split(","), items: new Map(), t: 0, error: null, running: 0, wanted: 0, relay: null, fresh: false }; feeds.set(key, f); }
   return f;
 }
+try { loadStore(); } catch (e) { feedStore.error = e.message; }
+console.log(`[fomofeed] ${feedStore.loaded} list${feedStore.loaded === 1 ? "" : "s"} back from ${STORE}${feedStore.error ? ` (${feedStore.error})` : ""}`);
 const byTime = (a, b) => Number(b.pinned) - Number(a.pinned) || (b.t || 0) - (a.t || 0);
 // Only the newest pinned post stays pinned: the kept list still holds posts Fomo pinned before (yesterday's
 // recap under today's), and those drop back to their place by time.
@@ -219,6 +264,7 @@ export function relayIn(body) {
     for (const fn of listeners) try { fn(key); } catch {}
   }
   relayedStats.posts++; relayedStats.lastAt = now(); relayedStats.keys = [...feeds.values()].filter(fresh).length;
+  if (n) saveStore();
   return { ok: true, relayed: n, wanted: relayWanted() };
 }
 // The filter sets someone here looked at in the last RELAY_WANT_MS: what the PC should read and send. Longer
@@ -264,7 +310,7 @@ export function peekFeed(key) {
 // Keep reading the feeds someone is looking at; forget filter sets nobody has asked for in a while.
 setInterval(() => {
   for (const [key, f] of feeds) {
-    if (now() - f.wanted > 10 * 60_000) { feeds.delete(key); continue; }
+    if (now() - f.wanted > 10 * 60_000 && f.fresh) { feeds.delete(key); continue; }
     if (now() - f.wanted < WANTED_MS && !fresh(f) && !(now() - relayedStats.lastAt < RELAY_FRESH_MS && !f.t) && due(f)) refresh(f);
   }
 }, 250).unref();

@@ -23,6 +23,7 @@ import { busyOf, solUsdNow, startRadarLink } from "./radar-link.js";   // the ra
 startRadarLink();
 import { createHandles } from "./handles.js";
 import { initCreator, creatorRewards } from "./creator.js";
+import { createAutoClaim } from "./autoclaim.js";
 
 // Same data folder as the radar (db.js), worked out here so this file can also run on its own
 // (server/accounts-server.mjs) without opening the radar's database.
@@ -54,12 +55,15 @@ const cookie = (req, name) => new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.
 // ---------- the vault ----------
 // Its address and service token are read from the vault's own config file (same PC, same Windows user).
 const VAULT_CONFIG = process.env.BLIX_VAULT_CONFIG || path.join(process.env.APPDATA || os.homedir(), "blix-vault", "config.json");
+// A launch may grind a vanity address first (up to the vault's vanityLiveMs, 2 min by default) before it signs:
+// it gets long enough that the answer always arrives, since the vault launches whether or not anyone is still listening.
+const LAUNCH_TIMEOUT_MS = 270_000, VAULT_TIMEOUT_MS = 90_000;
 async function vault(pathname, body) {
   let cfg;
   try { cfg = JSON.parse(fs.readFileSync(VAULT_CONFIG, "utf8")); } catch { throw fail(503, "Blix Vault is not set up on this PC yet."); }
   let r;
   try {
-    r = await fetch(`http://127.0.0.1:${cfg.port || 4470}/v1${pathname}`, { method: body ? "POST" : "GET", signal: AbortSignal.timeout(90_000),
+    r = await fetch(`http://127.0.0.1:${cfg.port || 4470}/v1${pathname}`, { method: body ? "POST" : "GET", signal: AbortSignal.timeout(/\/launch$/.test(pathname) ? LAUNCH_TIMEOUT_MS : VAULT_TIMEOUT_MS),
       headers: { authorization: `Bearer ${cfg.serviceToken}`, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   } catch { throw fail(503, "Blix Vault is not running. Start it, then try again."); }
   const j = await r.json().catch(() => null);
@@ -137,7 +141,12 @@ const onramp = () => { try { return JSON.parse(fs.readFileSync(path.join(DATA, "
 
 const MINT =/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const handles = adb ? createHandles({ db: adb }) : null;
-const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf, busy: busyOf }) : null;
+// Creator fees claimed on a timer for members who switched it on (autoclaim.js); both sign-ins share it.
+let autoclaim = null;
+try { if (adb) { autoclaim = createAutoClaim({ db: adb, vault }); autoclaim.start(); } } catch (e) { console.error("[accounts] auto-claim could not be set up:", e.message); }
+const hosted = adb ? createHostedAccounts({ db: adb, vault, launch: launchCoin, rewards: rewardsFor, refOf: handles?.refOf, busy: busyOf, autoclaim }) : null;
+// The vault's vanity-address stock and grind speed, for the Create coin page (launchtools.js).
+export const vanityStatus = () => vault("/vanity");
 const HOME = "/#/account";
 // A new coin: the picture and details are pinned to IPFS through pump.fun's own uploader, then the vault
 // builds, signs and sends the create (+ the creator's first buy) from this wallet. Used by both sign-ins.
@@ -161,7 +170,13 @@ async function launchCoin(vaultId, body) {
     meta = await r.json().catch(() => null);
     if (!r.ok || !meta?.metadataUri) throw new Error(`HTTP ${r.status}`);
   } catch (e) { throw fail(502, `The picture could not be uploaded to IPFS (${e.message}). Try again.`); }
-  const out = await vault(`/users/${vaultId}/launch`, { name, symbol, uri: meta.metadataUri, sol: +body.sol || 0, slippageBps: body.slippageBps });
+  // `suffix`: letters the contract address must end with ("pump"), from the vault's stock or ground for this launch.
+  const suffix = String(body.suffix || "").trim();
+  if (suffix && !/^[1-9A-HJ-NP-Za-km-z]{1,4}$/.test(suffix)) throw fail(400, "The address ending is 1 to 4 base58 letters (no 0, O, I or l).");
+  // `priorityFeeSol`: the creator's choice of priority fee (the vault clamps it to its floor..max); omitted = the floor.
+  const priorityFeeSol = body.priorityFeeSol == null || body.priorityFeeSol === "" ? undefined : Number(body.priorityFeeSol);
+  if (priorityFeeSol !== undefined && !(priorityFeeSol >= 0 && priorityFeeSol <= 0.01)) throw fail(400, "The priority fee is 0 to 0.01 SOL.");
+  const out = await vault(`/users/${vaultId}/launch`, { name, symbol, uri: meta.metadataUri, sol: +body.sol || 0, slippageBps: body.slippageBps, ...(suffix ? { suffix } : {}), ...(priorityFeeSol !== undefined ? { priorityFeeSol } : {}) });
   return { ...out, uri: meta.metadataUri, image: meta.metadata?.image || null };
 }
 
@@ -237,6 +252,12 @@ async function route(req, res, url) {
   if (p === "/api/account/launch" && m === "POST") return send(res, 200, await launchCoin(me.vault_id, body));
   if (p === "/api/account/rewards" && m === "GET") return send(res, 200, await rewardsFor(me.vault_id));
   if (p === "/api/account/claim" && m === "POST") return send(res, 200, await vault(`/users/${me.vault_id}/claim`, {}));
+  // Auto-claim: GET what is set; POST { minSol } to claim on a timer once the rewards reach it, { minSol: null } to stop.
+  if (p === "/api/account/autoclaim") {
+    if (!autoclaim) throw fail(503, "Auto-claim is not available here.");
+    if (m === "GET") return send(res, 200, autoclaim.get(`acc:${me.id}`));
+    if (m === "POST") return send(res, 200, autoclaim.set(`acc:${me.id}`, Number(me.vault_id), body.minSol));
+  }
   // Paying by card: Stripe's own hosted page takes the payment and sends the SOL to this person's wallet.
   if (p === "/api/account/onramp" && m === "POST") {
     const key = onramp().stripeSecret;

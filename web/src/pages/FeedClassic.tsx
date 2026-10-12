@@ -394,7 +394,9 @@ export function Feed() {
           : d?.signedOut ? <Empty>Nothing here right now. The feed fills in by itself.</Empty>
           : items ? (items.length ? items.map((it) => fresh.has(it.id) ? <div key={it.id} className="grid animate-post-in"><div className="min-h-0 overflow-hidden"><Row it={it} /></div></div> : <Row key={it.id} it={it} />) : <Empty>Nothing on Fomo's feed for this filter right now.</Empty>)
           : error ? <div className="p-3"><Problem text={error} /></div>
-          : d?.error ? <div className="p-3"><Problem text={d.error} /></div>
+          // Blix answered, Fomo did not yet (a refused first read after a restart; it is asked again within seconds):
+          // the skeleton stays, with the reason in small print, instead of a red box for something that fixes itself.
+          : d?.error ? <><p role="status" className="px-3 pt-3 text-sm text-muted">Fomo is still loading. Last try: {d.error} Trying again.</p><FeedSkeleton /></>
           : <FeedSkeleton />}
         </div>
       </section>
