@@ -195,7 +195,9 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     <div role="radiogroup" aria-label="Trade in SOL or USDC" className={cn(track, "shrink-0")}>
       {(["SOL", "USDC"] as const).map((c) => (
         <Tip key={c} tip={c === "SOL" ? "Buys sized in SOL, sells paid in SOL" : "Buys sized in USDC, sells paid in USDC"}>
-          <button role="radio" aria-checked={cur === c} onClick={() => setCur(c)} className={cn(seg(cur === c), "h-[18px] px-1.5 text-[10px] font-bold tracking-[0.04em]")}>{c}</button>
+          <button role="radio" aria-checked={cur === c} onClick={() => setCur(c)} className={cn(seg(cur === c), "h-[22px] gap-1.5 px-1.5 text-[11px] font-bold tracking-[0.03em]")}>
+            {c === "USDC" ? <img src="brand/pay/usdc.png" alt="" className={cn("size-3.5 rounded-full", cur !== c && "opacity-45 grayscale")} /> : <SolanaLogo className={cn("size-3.5", cur !== c && "opacity-45 grayscale")} />}{c}
+          </button>
         </Tip>
       ))}
     </div>
@@ -213,10 +215,10 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
             <CoinPic mint={mint} symbol={symbol} className="size-4.5" /><span className="truncate">{symbol}</span>
             {pos.mcapNow != null && <span className="num text-[12px] font-medium text-muted">{usdK(pos.mcapNow)}</span>}
           </a>
-        ) : <b className="text-[13px] font-semibold text-ink">Quick trade</b>}
-        <span className={cn(label, "flex items-center gap-1.5", paperOn ? "text-info" : "text-up")}>
-          <i className={cn("size-1.5", paperOn ? "bg-info" : "bg-up motion-safe:animate-pulse")} />{paperOn ? "Paper" : "Live"}</span>
-        <span className="ml-auto flex items-center gap-0.5">
+        ) : <b className="min-w-0 truncate text-[13px] font-semibold text-ink">Quick trade</b>}
+        <span className="ml-auto flex items-center gap-1.5">
+          {/* The money the panel trades in, right where the eye goes: the Solana mark and the USDC coin, one lit. */}
+          {curSwitch}
           <Tip tip="PnL card: your live result as a picture to save or share">
             <button onClick={pnlCard.open} aria-label="PnL card" className={iconBtn}><Icon.image className="size-3.5" /></button>
           </Tip>
@@ -256,8 +258,9 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
         {migrating ? <MigratingNote since={migrating} /> : null}
 
         <div className="flex flex-col gap-1.5">
-          {line(<><span className={cn(label, "text-up")}>Buy</span>{curSwitch}</>,
-            cash == null ? (paperOn ? null : "Not signed in") : <>{mark("size-3")}<span className="truncate font-semibold text-ink">{inUsdc ? usdcTxt(cash) : cash.toFixed(3)}</span><span>{cur}</span></>)}
+          {line(<span className={cn(label, "text-up")}>Buy</span>,
+            <><span className={cn(label, "mr-1 flex items-center gap-1.5", paperOn ? "text-info" : "text-up")}><i className={cn("size-1.5", paperOn ? "bg-info" : "bg-up motion-safe:animate-pulse")} />{paperOn ? "Paper" : "Live"}</span>
+              {cash == null ? (paperOn ? null : "Not signed in") : <>{mark("size-3")}<span className="truncate font-semibold text-ink">{inUsdc ? usdcTxt(cash) : cash.toFixed(3)}</span><span>{cur}</span></>}</>)}
           <div className="grid grid-cols-4 gap-1.5">
             {edit ? buyP.map((_, i) => field(i, null)) : buyP.map((v, i) => {
               const short = cash != null && v > cash;
