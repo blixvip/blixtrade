@@ -75,9 +75,11 @@ test("import takes Axiom's export and plain address lines; export gives Axiom's 
   assert.throws(() => wt.importText("dave@example.com", "nothing here"), /No wallet addresses/);
   assert.throws(() => wt.importText("dave@example.com", "   "), /Nothing to import/);
   const out = wt.exportList("dave@example.com");
-  assert.deepEqual(out.map((w) => w.trackedWalletAddress), [A, B, C]);
-  assert.deepEqual(out[0].groups, ["P2"]);
-  assert.equal(out[0].emoji, "🐸");
+  // Rows added in the same millisecond share an `added` time, so the order is compared as a set.
+  assert.deepEqual(out.map((w) => w.trackedWalletAddress).sort(), [A, B, C].sort());
+  const a = out.find((w) => w.trackedWalletAddress === A);
+  assert.deepEqual(a.groups, ["P2"]);
+  assert.equal(a.emoji, "🐸");
 });
 
 test("the list is capped and the trades the chain reader already read seed the feed", () => {
