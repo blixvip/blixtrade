@@ -904,7 +904,11 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
     const up = color("--color-up", "#2ebd85"), down = color("--color-down", "#f6465d");
     const plain = alpha(color("--color-ink", "#e6e6e6"), 0.55);
     // The library's own title is off: the label is ours (below), a tag at the line's left end that follows it.
-    const made: IPriceLine[] = live.map((l) => candles.createPriceLine({ price: l.price, color: l.migrate ? plain : l.buy ? up : down, lineWidth: 1, lineStyle: l.migrate ? LineStyle.LargeDashed : LineStyle.Dashed, lineVisible: true, axisLabelVisible: true, title: l.migrate ? l.title : "", axisLabelColor: "", axisLabelTextColor: "" }));
+    // The average lines are quiet: a fine dotted stroke in a muted shade of the side's colour, and a dark axis tag
+    // with the cap in that colour (not a solid block). The user, 2026-10-12: "the line is still very ugly".
+    const tag = color("--color-paper-3", "#1f1f1f");
+    const made: IPriceLine[] = live.map((l) => candles.createPriceLine({ price: l.price, color: l.migrate ? plain : alpha(l.buy ? up : down, 0.6), lineWidth: 1, lineStyle: l.migrate ? LineStyle.LargeDashed : LineStyle.Dotted, lineVisible: true, axisLabelVisible: true, title: l.migrate ? l.title : "",
+      axisLabelColor: l.migrate ? "" : tag, axisLabelTextColor: l.migrate ? "" : l.buy ? up : down }));
     // Each label sits just above its line, inside the chart; the price scale moves with every candle, so the
     // labels are placed every frame (two reads and a transform each: cheap). Off the drawn area: hidden.
     let raf = 0;
