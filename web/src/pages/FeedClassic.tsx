@@ -224,7 +224,7 @@ function Row({ it }: { it: Item }) {
   const u = it.user;
   const pic = u?.fomo
     ? <img src="brand/apple-touch-icon.png?v=eye" alt="blixvip" className="size-9 shrink-0 rounded-full bg-black object-cover" />
-    : u?.handle ? <a href={traderHref(u.handle)} className="h-fit shrink-0 rounded-full transition-opacity duration-150 hover:opacity-85"><Avatar src={u.pic} size={36} /></a> : <span className="block size-9 shrink-0"><TokenPic mint={it.mint} chain={it.chain} img={it.img} /></span>;
+    : u?.handle ? <a href={traderHref(u.handle)} aria-label={`${u.name || u.handle}'s profile`} className="h-fit shrink-0 rounded-full transition-opacity duration-150 hover:opacity-85"><Avatar src={u.pic} size={36} /></a> : <span className="block size-9 shrink-0"><TokenPic mint={it.mint} chain={it.chain} img={it.img} /></span>;
   const line = "num mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-md";
   let pill: ReactNode = null, body: ReactNode = null;
   switch (it.type) {

@@ -19,6 +19,11 @@ input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .chat-arrival { animation: chat-arrival 600ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .chat-arrival { animation: none; } }
+/* Phones: a text box under 16px makes iOS Safari zoom the whole page every time it is tapped (29 boxes did, 2026-10-12:
+   search, quick-buy sizes, the whole Create coin form, Settings). 16px on touch screens only; desktop keeps its sizes. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]), textarea, select { font-size: max(16px, 1em); }
+}
 
 /* The one place colour, type, radius and motion are defined. Components only use these names. */
 /* Inter Tight (web/public/fonts): the figures in data panels such as Known holders. */

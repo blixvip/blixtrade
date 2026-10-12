@@ -77,7 +77,7 @@ export function Pile({ items, more, size = 22 }: { items: { img?: string | null;
         const img = <TokenPic mint={h.mint} chain={h.chain} img={h.img} />;
         const cls = cn("block shrink-0 rounded-full ring-2 ring-paper-2", i && "-ml-1.5");
         return h.mint && h.chain === SOLANA
-          ? <a key={i} href={`#/coin/${h.mint}`} onClick={(e) => e.stopPropagation()} title={h.title} className={cn(cls, "hover:z-10 hover:ring-ink")} style={{ width: size, height: size }}>{img}</a>
+          ? <a key={i} href={`#/coin/${h.mint}`} onClick={(e) => e.stopPropagation()} title={h.title} aria-label={h.title || "Open coin"} className={cn(cls, "hover:z-10 hover:ring-ink")} style={{ width: size, height: size }}>{img}</a>
           : <span key={i} title={h.title} className={cls} style={{ width: size, height: size }}>{img}</span>;
       })}
       {more && more > 0 ? <span className="num -ml-1 grid h-[22px] min-w-[30px] place-items-center rounded-full bg-paper-4 px-1.5 text-[10px] font-semibold text-ink-2 ring-2 ring-paper-2">{more}+</span> : null}

@@ -517,7 +517,7 @@ export function Launch() {
         <div className="flex flex-col gap-4">
           {/* the plan: one click sets the first buy and fee below; touching either makes it Custom */}
           <div className="rounded-card border border-rule bg-paper-2 p-4 max-sm:p-3">
-            <div className="mb-3 flex items-baseline justify-between gap-3"><h2 className="text-lg leading-tight font-semibold text-ink">Launch plan</h2><span className="text-sm text-muted">Every figure is live from the switches below.</span></div>
+            <div className="mb-3 flex items-baseline justify-between gap-3 max-sm:flex-col max-sm:gap-0.5"><h2 className="text-lg leading-tight font-semibold whitespace-nowrap text-ink">Launch plan</h2><span className="text-sm text-muted">Every figure is live from the switches below.</span></div>
             <div role="radiogroup" aria-label="Launch plan" className="grid gap-2 sm:grid-cols-3">
               {[...PLANS.map(([k, label, why, p]) => ({ k, label, why, cost: planCost(p.sol, p.fee), hold: p.sol > 0 ? curveAfter(p.sol).ownPct : 0 })),
                 { k: "custom" as const, label: "Custom", why: "Whatever you set below: first buy, slippage, address ending, priority fee.", cost: total, hold: c.ownPct }].map((o) => (
