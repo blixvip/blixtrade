@@ -144,11 +144,17 @@ test("fast lane: a transaction read at once, retried while the node has it only 
 });
 
 test("the fast lane covers the wallets members track and the owner's own, not the auto-followed ones", () => {
+  for (const who of ["dave@example.com", "hank@example.com"]) try { wt.remove(who, A); } catch {}   // earlier tests left it on their lists
   db.prepare("DELETE FROM wallets").run();
   db.prepare("INSERT INTO wallets (address, source, watching, added, last_trade) VALUES (?, 'smart', 1, 1, 9)").run(A);
   db.prepare("INSERT INTO wallets (address, source, watching, added, last_trade) VALUES (?, 'you', 1, 1, 5)").run(B);
   wt.add("gina@example.com", { address: C });
   assert.deepEqual(wl.fastWallets(), [B, C]);
+  // A member tracks a wallet the radar already followed as smart money: it keeps that source, and still joins the lane.
+  wt.add("gina@example.com", { address: A });
+  assert.equal(db.prepare("SELECT source FROM wallets WHERE address = ?").get(A).source, "smart");
+  assert.deepEqual(wl.fastWallets(), [A, B, C]);
+  wt.remove("gina@example.com", A); wt.remove("gina@example.com", C);
   db.prepare("DELETE FROM wallets").run();
 });
 

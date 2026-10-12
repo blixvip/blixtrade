@@ -296,7 +296,13 @@ export const fast = { connected: false, wallets: 0, events: 0, lastEvent: 0, url
 const publicWsUrl = () => settings.rpcWsUrl?.trim() || (settings.rpcUrl?.trim() ? settings.rpcUrl.trim().replace(/^http/, "ws") : "wss://api.mainnet-beta.solana.com");
 // The fast lane's key: the spare one first (the charts hold the first), whichever is free today.
 export const fastKey = () => [...keyUrls()].reverse().find(keyFree) || "";
-export const fastWallets = () => db.prepare("SELECT address FROM wallets WHERE watching = 1 AND source IN ('you', 'tracker') ORDER BY COALESCE(last_trade, 0) DESC LIMIT 150").all().map((r) => r.address);
+// Your own, and every wallet on any member's list (wtrack.js wt_wallets): a wallet the radar already followed as
+// smart money keeps that source when a member tracks it, so the list is asked, not the source.
+export const fastWallets = () => {
+  const base = "SELECT address FROM wallets WHERE watching = 1 AND (source IN ('you', 'tracker')%s) ORDER BY COALESCE(last_trade, 0) DESC LIMIT 150";
+  try { return db.prepare(base.replace("%s", " OR address IN (SELECT address FROM wt_wallets)")).all().map((r) => r.address); }
+  catch { return db.prepare(base.replace("%s", "")).all().map((r) => r.address); }   // no tracker table (a copy without wtrack.js)
+};
 // Tell the fast lane its list changed (a member tracked a wallet): it subscribes within a moment, not at the next sweep.
 export const resyncFast = () => { try { fastStream?.sync(); } catch {} };
 let fastStream = null;
