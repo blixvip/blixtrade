@@ -62,6 +62,7 @@ import { coverageStats } from "./coverage.js";
 import { exitState, illiquid, onCurve, summarize, firstPerToken, cleanLinks, classifyAsset, ASSET_LABEL, MAJOR_MINTS } from "./quality.js";
 import * as health from "./health.js";
 import { visitorMay, memberMay, visitorHealth } from "./access.js";
+import { attachFirehose, serveFirehose } from "./firehose.js";
 import { startWebApp, webStats } from "./webapp.js";
 import { startEarly, earlyData } from "./early.js";
 import * as images from "./images.js";
@@ -1239,6 +1240,8 @@ async function handleRequest(req, res) {
     if (p === "/api/remote-link") return LOCAL.has(hostOf(req)) ? send(res, 200, { host: settings.publicHost || null, link: remoteLink() }) : send(res, 403, { error: "local only" });
     // The coins migrating this moment and the SOL price, for the page server's hosted-accounts routes (radar-link.js).
     if (p === "/api/migrating") return LOCAL.has(hostOf(req)) ? send(res, 200, { mints: [...liveCurves.keys()].filter((m) => migrationOf(m)), solUsd: liveFeed.solUsd }) : send(res, 403, { error: "local only" });
+    // Every trade, launch and migration as events for the page server's trade-API WebSocket (firehose.js): this machine only.
+    if (p === "/api/v1/firehose") return LOCAL.has(hostOf(req)) ? serveFirehose(req, res) : send(res, 403, { error: "local only" });
     const pic = p.match(/^\/img\/([1-9A-HJ-NP-Za-km-z]{32,44})$/);
     if (pic) return await images.serve(pic[1], res);
     // Logos in bulk for the page (lib/pics.ts): ?m=<mint>,<mint>,…  →  { mint: data URL | null }
@@ -1654,6 +1657,7 @@ bus.on("signal", (s) => {
   notifySignal(s).catch((e) => logEvent("error", `notify: ${e.message}`));
 });
 bus.on("tick", (s) => broadcast("tick", s));
+attachFirehose(bus);
 bus.on("brief", (b) => broadcast("brief", b));
 // The owner's followed wallets are the owner's business: their trades go to the owner's own clients only.
 bus.on("walletTrade", (ev) => { broadcast("walletTrade", ev, ""); try { wtrack.fromEngine(ev); } catch {} });

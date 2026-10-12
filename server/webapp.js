@@ -9,7 +9,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import { createByteCache } from './byte-cache.js';
-import { proxyRequest } from './http-proxy.js';
+import { proxyRequest, guardRequest } from './http-proxy.js';
 import zlib from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
@@ -17,7 +17,10 @@ import { fileURLToPath } from "node:url";
 import { visitorMay, memberMay, visitorHealth } from "./access.js";
 import { verifyWalletIdentity } from "./wallet-identity.js";
 import { createOriginGuard, isRelay } from './request-guard.js';
+import { createTradeApi } from './tradeapi.js';
 const originGuard = createOriginGuard();
+// The trade API (keys, quote/build/send, the live stream), answered here and by the wallet service: never the radar.
+const tradeApi = createTradeApi({ radarPort: Number(process.env.RADAR_PORT) || 4420 });
 import { answer, kind, wrote, cacheReport } from "./apicache.js";
 import { servePicture, pictureBatch, picStats, serveFar, farStats, warmFar } from "./pagepics.js";
 import { searchTokens, searchable, warmSearch } from "./search.js";
@@ -448,10 +451,25 @@ export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
   setTimeout(feedPics, 3000).unref();
   const handle = (req, res) => {
     liftHints(req);
+    // A bot's call with its API key (Authorization: Bearer blx_live_…): no member, no cookie. From the Worker (it adds
+    // the edge key) or from this machine; paced per key inside. Everything else under /api/v1 (a member's keys page)
+    // goes through the usual gate below and is answered as that member.
+    if (String(req.url).startsWith("/api/v1/") && /^Bearer blx_live_/.test(String(req.headers.authorization || ""))) {
+      const { edgeKey } = remoteSettings();
+      const local = LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase());
+      if (!local && !(edgeKey && safeEq(String(req.headers["x-blix-edge"] || ""), edgeKey))) { res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }); return res.end('{"error":"Use https://blixvip.com"}'); }
+      if (originGuard(req, res, { path: new URL(req.url, "http://x").pathname, account: `key:${String(req.headers.authorization).slice(-12)}`, ip: req.headers['cf-connecting-ip'] || req.socket.remoteAddress })) return;
+      return tradeApi.handle(req, res, new URL(req.url, "http://x"), {}).catch(failed(res));
+    }
     if (remoteGate(req, res)) return;
     let p;
     try { p = decodeURIComponent(String(req.url).split("?")[0]); } catch { res.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store" }); return res.end("Bad request"); }
     if (p.startsWith("/api/account/")) { if (req.method !== "GET" && req.method !== "HEAD") res.on("close", wrote); return toAccountsHere(req, res); }
+    // A member's trade-API keys and usage (tradeapi.js), as the member the Worker vouched for (the owner included).
+    if (p.startsWith("/api/v1/")) {
+      const local = LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase());
+      return tradeApi.handle(req, res, new URL(req.url, "http://x"), { email: req.walletMember || req.member || (local ? "owner@localhost" : null) }).catch(failed(res));
+    }
     if (p.startsWith("/api/edge/") && req.edgeCall) return toAccountsHere(req, res);
     // What this process is keeping and how often it was enough, for checking by hand on this PC.
     if (p === "/__cache" && LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase())) return json(res, 200, JSON.stringify({ answers: cacheReport(), pictures: picStats, far: farStats }));
@@ -498,7 +516,13 @@ export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
   };
   // An idle connection is kept a minute, not Node's five seconds: a page that reads every few seconds reuses its
   // connections instead of opening new ones.
-  const make = () => { const s = http.createServer(handle); s.keepAliveTimeout = 65_000; s.headersTimeout = 70_000; return s; };
+  // The trade API's live stream is a WebSocket (ws-lite.js): the upgrade is answered by tradeapi.js with the same
+  // rule as its other routes (the edge key from the Worker, or this machine) and the caller's key.
+  const onUpgrade = (req, socket) => {
+    const allowed = (r) => { const { edgeKey } = remoteSettings(); return LOCAL_HOSTS.has(String(r.headers.host || "").toLowerCase()) || Boolean(edgeKey && safeEq(String(r.headers["x-blix-edge"] || ""), edgeKey)); };
+    if (!tradeApi.upgrade(req, socket, { allowed })) { socket.write("HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n"); socket.destroy(); }
+  };
+  const make = () => { const s = http.createServer(guardRequest(handle)); s.keepAliveTimeout = 65_000; s.headersTimeout = 70_000; s.on("upgrade", onUpgrade); return s; };
   const server = make();
   const listen = () => server.listen(PORT, "127.0.0.1");
   server.on("listening", () => { webStats.on = true; webStats.error = null; });

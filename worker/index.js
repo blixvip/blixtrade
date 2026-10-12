@@ -1,14 +1,10 @@
-// trade.blixvip.com → the BLIX landing page at /, the live Blix terminal on Kai's PC at /app (and every
-// other path it uses), plus the public docs pages.
-// The docs (/api, /mcp and the comparison pages, with robots.txt, sitemap.xml, llms.txt and /_pub/
-// assets) are served here at the edge, so they stay up and fast when the PC is off; see site/.
-// Blix registers its current quick-tunnel address (POST /__register with the REG_KEY secret); every other
-// request from the owner (it carries the access key) is forwarded to that address as-is, streaming. A
-// visitor's read is answered from the edge when possible and from the last copy when the PC is off
-// (edge.js). Who may do what is still decided by Blix itself (server/access.js); this Worker only keeps
-// copies of what Blix was willing to show a visitor, and turns keyless writes away early.
+// Public pages and assets run at Cloudflare's edge; the terminal and its APIs
+// always use the VM's named tunnel. Local PC registrations cannot change routing.
+// Access controls stay enforced here and on the server. Public reads may use
+// the edge cache; authenticated account data is never shared through that cache.
 import { PAGES, render } from "./site/pages.js";
-import { SCRIPT } from "./site/html.js";
+import { PAGE_ALIASES } from "./site/clusters.js";
+import { SCRIPT, layout, code, esc } from "./site/html.js";
 import { ROBOTS, SITEMAP, SITEMAP_URLS, LLMS, INDEXNOW_KEY, PUBLIC_PATHS } from "./site/seo.js";
 import LANDING from "./site/landing.html";
 import { waitlist, memberOf, memberProfile, session } from "./site/waitlist.js";
@@ -23,11 +19,10 @@ import { guardRequest, secureResponse, securityError } from './security.js';
 // The Durable Object class must be exported from the Worker's main module (wrangler.jsonc durable_objects).
 export { Limiter } from "./limiter.js";
 
-let cached = { origin: null, t: 0 };
-// Fomo and X are read through Kai's own signed-in browser (Aside), which only his PC has: those reads go to the
-// PC's Blix when it is connected, and to the server (which says what is missing) when it is not.
-let cachedPc = { origin: null, t: 0 };
-const PC_PATH = /^\/api\/(fomo(\/.*)?|feed\/stream|pump\/feed|x(\/.*)?|coin\/[1-9A-HJ-NP-Za-km-z]{32,44}\/fomo)$/;
+// Production always uses the VM's named tunnel. Neither a stale KV entry nor a
+// development PC registering itself may move customer traffic off the server.
+const SERVER_ORIGIN = "https://origin.blixvip.com";
+const cached = { origin: SERVER_ORIGIN };
 // HMAC-SHA256 hex of `text`, the same as server/webapp.js checks.
 // The key is imported once per isolate (per secret), not on every request.
 const sigKeys = new Map();
@@ -61,7 +56,7 @@ const HSTS = "max-age=15552000; includeSubDomains";
 // The public docs (API, MCP and the comparison pages) are found at the root of blixvip.com, one address each:
 // these exact paths are routed to this Worker (wrangler.jsonc), and every other address they were at answers 301.
 const DOCS = new Set(PUBLIC_PATHS);
-const docOf = (p) => { const d = p.toLowerCase().replace(/\/+$/, ""); return DOCS.has(d) ? d : null; };
+const docOf = (p) => { const d = p.toLowerCase().replace(/\/+$/, ""); return PAGE_ALIASES[d] || (DOCS.has(d) ? d : null); };
 const atRoot = (p) => Boolean(docOf(p)) || p.startsWith("/_pub/") || p === "/llms.txt" || p === `/${INDEXNOW_KEY}.txt`;
 const moved = (to, search = "") => new Response(null, { status: 301, headers: { location: `https://blixvip.com${to}${search}`, "cache-control": "public, max-age=86400" } });
 export default {
@@ -74,9 +69,11 @@ export default {
       out = guarded.response || await serve(guarded.request, env, ctx);
     }
     catch (e) {
-      console.error('edge request failed', { id: crypto.randomUUID(), type: e instanceof Error ? e.name : 'Error' });
+      console.error('edge request failed', { id: crypto.randomUUID(), type: e instanceof Error ? e.name : 'Error', message: String(e?.message || '').slice(0, 160), at: String(e?.stack || '').split(/\r?\n/)[1]?.trim() });
       out = securityError(500, 'Service temporarily unavailable.');
     }
+    // The trade API's live stream: a WebSocket handshake answer carries the socket itself and must go back as is.
+    if (out.status === 101) return out;
     // Every answer: browsers keep to https for blixvip.com and every subdomain for half a year (HSTS). Some
     // answers come back read-only (a cache hit, a redirect), hence the copy.
     if (!out.headers.has("strict-transport-security")) {
@@ -163,6 +160,12 @@ async function handle(req, env, ctx, prefix) {
     // #/page part never reaches here and the browser keeps it).
     if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith("/app/")) return new Response(null, { status: 301, headers: { location: `${url.origin}/app${url.search}`, "cache-control": "public, max-age=86400" } });
     const defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));
+    // The trade API with a bot's own key (server/tradeapi.js): never a browser session. Paced per key here and on
+    // the server, and passed straight through with the edge key; the live stream is a WebSocket, passed through as is.
+    if (url.pathname.startsWith("/api/v1/")) {
+      const key = (/^Bearer\s+(blx_live_[A-Za-z0-9_-]+)$/.exec(req.headers.get("authorization") || "") || [])[1] || (url.pathname === "/api/v1/stream" ? url.searchParams.get("key") : null);
+      if (key) return apiKeyRequest(req, url, key, env);
+    }
     // The terminal's built files (assets/<name>-<hash>.js|css, the same for everyone and public in the repo) from
     // the edge copy first, before the sign-in check: that read D1 and KV before every one of a page's ~10 files.
     // A miss goes the usual way below (it is fetched with the edge key and kept, handleMember).
@@ -183,11 +186,21 @@ async function handle(req, env, ctx, prefix) {
     // /demo: behind the DEMO_PASSWORD secret (site/demo.js).
     const shown = await demo(req, env, url, { radar: async (path) => {
       // The server's address (KV, edge-kept a minute) and the demo's own member identity, signed like any member's.
-      if (!cached.origin) { try { cached = { origin: await env.REG.get("origin", { cacheTtl: 60 }), t: Date.now() }; } catch {} }
+      if (!cached.origin) { try { cached.origin = await env.REG.get("origin", { cacheTtl: 60 }); } catch {} }
       if (!cached.origin) return null;
       return fetch(new URL(path, cached.origin), { headers: { ...(await vouchFor("demo@blixvip.com", false, env)), ...edge(env), accept: "application/json", "x-forwarded-host": url.host, "x-forwarded-proto": "https" }, signal: AbortSignal.timeout(8000) });
     } });
     if (shown) return shown;
+    // /developers for someone signed in: the same page with their API session and the ready-made commands at the top.
+    if (url.pathname === "/developers" && req.method === "GET" && PAGES["/developers"]) {
+      const email = await session(req, env).catch(() => null);
+      if (email) return developerAccess(req, email);
+    }
+    // /trade-api for someone signed in: the same page with their API keys (create, copy once, revoke) at the top.
+    if (url.pathname === "/trade-api" && req.method === "GET" && PAGES["/trade-api"]) {
+      const email = await session(req, env).catch(() => null);
+      if (email) return tradeApiAccess(req, email);
+    }
     const page = await site(req, env, url);
     if (page) return page;
     // blixvip.com/@<handle>: a member's page and invite link (site/handles.js). Names the site uses are never handles.
@@ -264,10 +277,9 @@ async function handleMember(req, env, ctx, url, member, owner) {
       let body = {};
       try { body = await req.json(); } catch {}
       const origin = String(body.origin || "");
-      if (!/^https:\/\/([a-z0-9-]+\.trycloudflare\.com|origin\.blixvip\.com)$/.test(origin)) return new Response("bad origin", { status: 400 });
-      // role "pc": Kai's PC, the helper for what only it can read (PC_PATH); anything else: the server.
-      if (body.role === "pc") { await env.REG.put("origin:pc", origin); cachedPc = { origin, t: Date.now() }; }
-      else { await env.REG.put("origin", origin); cached = { origin, t: Date.now() }; }
+      // Old PC relays can keep running locally without taking over the website.
+      if (body.role === "pc") return json(200, { ok: true, ignored: "server-only" });
+      if (origin !== SERVER_ORIGIN) return new Response("server origin required", { status: 400 });
       return new Response(JSON.stringify({ ok: true, origin }), { headers: { "content-type": "application/json" } });
     }
     // The server's own read of every member's sign-up record (name, photo, joined, last seen, where from), for the
@@ -279,15 +291,11 @@ async function handleMember(req, env, ctx, url, member, owner) {
         return new Response(JSON.stringify({ now: Date.now(), accounts: results }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
       } catch (e) { return new Response(JSON.stringify({ error: "D1 unavailable" }), { status: 503, headers: { "content-type": "application/json" } }); }
     }
-    // The registered origins, re-read every 20 s; a KV read that fails keeps the last known one (and is not retried
-    // on every request).
-    // Both at once, from KV's edge copy (cacheTtl 60 s): read one after the other they were two waits in a row.
-    const reread = (c, key) => Date.now() - c.t > 20_000 ? env.REG.get(key, { cacheTtl: 60 }).then((origin) => ({ origin, t: Date.now() }), () => ({ ...c, t: Date.now() })) : c;
-    [cached, cachedPc] = await Promise.all([reread(cached, "origin"), reread(cachedPc, "origin:pc")]);
-    // A visitor's read: answered from the edge when it can be, and from the last copy when the PC is off (edge.js).
+    // Routing is independent of the PC and of the registration KV's availability.
+    // Public reads may use a cached response while the server is unavailable (edge.js).
     const ip = req.headers.get("cf-connecting-ip") || "unknown";
     const isApi = url.pathname.startsWith("/api/");
-    const down = () => isApi ? json(503, { error: "Blix is offline: the PC that runs it is not connected right now." }) : offline();
+    const down = () => isApi ? json(503, { error: "Blix's server is temporarily unavailable. Please retry shortly." }) : offline();
     if (!member && isVisitorRead(req.method)) {
       const plan = keepPlan(url);
       if (plan) {
@@ -333,9 +341,8 @@ async function handleMember(req, env, ctx, url, member, owner) {
         if (o && o.status !== 401 && o.status !== 530 && o.status !== 502) return o;
       }
     }
-    const viaPc = Boolean(cachedPc.origin) && PC_PATH.test(url.pathname);
-    if (!cached.origin && !viaPc) return down();
-    const target = new URL(url.pathname + url.search, viaPc ? cachedPc.origin : cached.origin);
+    if (!cached.origin) return down();
+    const target = new URL(url.pathname + url.search, cached.origin);
     const headers = new Headers(req.headers);
     for (const h of ["x-blix-member", "x-blix-member-t", "x-blix-member-sig", "x-blix-owner", "x-blix-as", "x-blix-edge", "x-blix-wallet", "x-blix-ref"]) headers.delete(h);
     if (member && url.pathname.startsWith("/api/account/")) {
@@ -364,7 +371,7 @@ async function handleMember(req, env, ctx, url, member, owner) {
     // once; when it is over 30 s old a fresh one is fetched behind it for the next view, so a rebuild shows on the
     // second view after it (the old build's files stay on the server for a week). The browser revalidates it each
     // time (no-cache, not no-store, so back/forward keeps the page), and the caller adds the member cookie.
-    const pageKey = isPageView(req, url) && req.method === "GET" && !viaPc ? edgeKey(`/page${url.pathname}`, req) : null;
+    const pageKey = isPageView(req, url) && req.method === "GET" ? edgeKey(`/page${url.pathname}`, req) : null;
     const keepPage = (r) => {
       if (!(r && r.status === 200 && /text\/html/.test(r.headers.get("content-type") || ""))) return r;
       const [a, b] = r.body.tee();
@@ -391,24 +398,86 @@ async function handleMember(req, env, ctx, url, member, owner) {
     let r;
     try { r = await fetchPage(); } catch { r = null; }
     if (pageKey) r = keepPage(r);
-    // The PC is off or its tunnel is gone: a read goes to the server instead.
-    if (viaPc && cached.origin && (req.method === "GET" || req.method === "HEAD") && (!r || r.status === 530 || r.status === 502 || r.status === 1033)) {
-      try { r = await fetch(new URL(url.pathname + url.search, cached.origin), { method: req.method, headers, redirect: "manual" }); } catch { r = null; }
-    }
-    if (!r) return offline();
+    if (!r) return down();
     // A dead tunnel answers 530/502 from Cloudflare's side: say so instead of showing an error page.
-    if (r.status === 530 || r.status === 502 || r.status === 1033) return offline();
+    if (r.status === 530 || r.status === 502 || r.status === 503 || r.status === 1033) return down();
     const out = new Headers(r.headers);
     out.delete("content-security-policy-report-only");
     return new Response(r.body, { status: r.status, statusText: r.statusText, headers: out });
   }
 }
 
+// A trade-API call with a bot's key (blx_live_…): 600 a minute per key at this edge (the server paces per key too),
+// forwarded to the server with the edge key and nothing of a member's. A WebSocket upgrade comes back as the 101 the
+// server answered, socket included (fetch() above returns it untouched).
+async function apiKeyRequest(req, url, key, env) {
+  if (!cached.origin) return json(503, { error: "Blix's server is temporarily unavailable. Please retry shortly." });
+  const kid = b64(await sha("SHA-256", key)).slice(0, 16);
+  if (overLimit(`k:${kid}`, Date.now(), 600)) return json(429, { error: "Too many requests on this key. Slow down a little." });
+  const headers = new Headers(req.headers);
+  for (const h of ["x-blix-member", "x-blix-member-t", "x-blix-member-sig", "x-blix-owner", "x-blix-as", "x-blix-edge", "x-blix-wallet", "x-blix-ref", "cookie"]) headers.delete(h);
+  if (env.EDGE_KEY) headers.set("x-blix-edge", env.EDGE_KEY);
+  headers.set("x-forwarded-host", url.host);
+  headers.set("x-forwarded-proto", "https");
+  const target = new URL(url.pathname + url.search, cached.origin);
+  let r;
+  try { r = await fetch(target, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body, redirect: "manual" }); }
+  catch { return json(503, { error: "Blix's server did not answer. Please retry shortly." }); }
+  if ([530, 502, 503, 1033].includes(r.status)) return json(503, { error: "Blix's server is temporarily unavailable. Please retry shortly." });
+  if (r.status === 101) return r;
+  const out = new Headers(r.headers);
+  out.set("cache-control", "no-store");
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: out });
+}
+
+// /trade-api for a signed-in member: their keys, made and revoked right here (the page's own script talks to
+// /api/v1/keys with the member's session), above the public page. Private to them: never cached, never indexed.
+const KEYS_SCRIPT = "(function(){var el=document.getElementById(\"keys\"),out=document.getElementById(\"newkey\"),btn=document.getElementById(\"mk\"),lab=document.getElementById(\"lab\");\nfunction esc(s){return String(s==null?\"\":s).replace(/[&<>\"]/g,function(c){return{\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\"}[c]})}\nfunction ago(t){if(!t)return \"never\";var m=Math.round((Date.now()-t)/60000);return m<1?\"just now\":m<60?m+\" min ago\":m<1440?Math.round(m/60)+\" h ago\":Math.round(m/1440)+\" d ago\"}\nfunction load(){fetch(\"/api/v1/keys\",{credentials:\"same-origin\"}).then(function(r){return r.json()}).then(function(j){if(!j.keys){el.innerHTML=\"<p class=note>\"+esc(j.error||\"Keys unavailable right now.\")+\"</p>\";return}\nif(!j.keys.length){el.innerHTML=\"<p class=note>No keys yet. Make one below; it is shown once.</p>\";return}\nel.innerHTML=\"<div class=table-wrap><table><thead><tr><th>Key</th><th>Label</th><th>Calls</th><th>Last used</th><th></th></tr></thead><tbody>\"+j.keys.map(function(k){return \"<tr><td><code>\"+esc(k.prefix)+\"\\u2026</code></td><td>\"+esc(k.label||\"\")+\"</td><td>\"+k.calls+\"</td><td>\"+ago(k.lastUsed)+\"</td><td><button class=\\\"btn small\\\" data-id=\\\"\"+k.id+\"\\\">Revoke</button></td></tr>\"}).join(\"\")+\"</tbody></table></div>\";\nel.querySelectorAll(\"button[data-id]\").forEach(function(b){b.onclick=function(){if(!confirm(\"Revoke this key? Bots using it stop at once.\"))return;fetch(\"/api/v1/keys/\"+b.getAttribute(\"data-id\"),{method:\"DELETE\",credentials:\"same-origin\"}).then(load)}})}).catch(function(){el.innerHTML=\"<p class=note>Keys unavailable right now.</p>\"})}\nbtn.onclick=function(){btn.disabled=true;fetch(\"/api/v1/keys\",{method:\"POST\",credentials:\"same-origin\",headers:{\"content-type\":\"application/json\"},body:JSON.stringify({label:lab.value})}).then(function(r){return r.json()}).then(function(j){btn.disabled=false;if(!j.key){out.innerHTML=\"<p class=note>\"+esc(j.error||\"Could not make a key.\")+\"</p>\";return}\nout.innerHTML=\"<div class=callout><p><b>Your new key, shown once.</b> Copy it now and keep it private: anyone holding it can build and send trades for wallets they control, on your account's fee rate.</p><div class=code data-lang=bash><pre><code>export BLIX_KEY=\\\"\"+esc(j.key)+\"\\\"</code></pre></div></div>\";lab.value=\"\";load()}).catch(function(){btn.disabled=false})};\nload()})();";
+async function tradeApiAccess(req, email) {
+  const p = PAGES["/trade-api"];
+  const panel = `<div class="callout"><p><b>Signed in as ${esc(email)}.</b> Your trade-API keys are below. A key is your account: it trades at your fee rate (1%, 0.8% with an invite) for any wallet you sign with. Keep it out of repositories and client-side code.</p></div>
+<h2 id="your-keys">Your API keys</h2>
+<div id="keys"><p class="note">Loading your keys…</p></div>
+<p><input id="lab" maxlength="60" placeholder="Label (optional): my sniper bot" style="padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--paper-3);color:var(--ink);min-width:260px"> <button id="mk" class="btn primary" type="button">Create a key</button></p>
+<div id="newkey"></div>
+${code(`export BLIX_KEY="blx_live_…"   # from the list above
+curl -s https://blixvip.com/api/v1/me -H "authorization: Bearer $BLIX_KEY"`, "bash")}
+<script>${KEYS_SCRIPT}</script>`;
+  const body = layout({ ...p, body: panel + p.body });
+  return new Response(req.method === "HEAD" ? null : body, { headers: { ...docHeaders(await docCsp(body)), "cache-control": "private, no-store", "x-robots-tag": "noindex" } });
+}
+
 // ---------- public docs ----------
-const built = new Map(); // path → { body, etag }, rendered once per isolate
-let csp = null, landing = null;
+const built = new Map(); // path → { body, etag, csp }, rendered once per isolate
+let landing = null;
 const sha = async (algo, text) => new Uint8Array(await crypto.subtle.digest(algo, new TextEncoder().encode(text)));
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+// The policy for a docs page: its own inline scripts by hash, nothing else runs.
+async function docCsp(html) {
+  const hashes = await Promise.all([...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+    .map(async ([, script]) => `'sha256-${b64(await sha("SHA-256", script.replace(/\r\n?/g, "\n")))}'`));
+  return `default-src 'none'; script-src ${[...new Set(hashes)].join(" ")} https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+}
+const docHeaders = (csp) => ({
+  "content-type": "text/html; charset=utf-8",
+  link: "</_pub/fonts/inter-tight.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
+  "content-security-policy": csp, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin",
+});
+// /developers for a signed-in member: their session (the blix_wait cookie, which is what authorizes the API) and the
+// commands with it filled in, above the public page. Private to them: never cached, never indexed.
+async function developerAccess(req, email) {
+  const token = (String(req.headers.get("cookie") || "").match(/(?:^|;\s*)blix_wait=([^;]+)/) || [])[1] || "";
+  const p = PAGES["/developers"];
+  const access = `<div class="callout"><p><b>Signed in as ${esc(email)}.</b> Below is your developer access. The session is your account: keep it private, and sign in again for a fresh one when it expires.</p></div>
+<h2 id="your-session">Your API session</h2>
+${code(`export BLIX_SESSION="${token}"\ncurl -s https://blixvip.com/api/pulse -H "cookie: blix_wait=$BLIX_SESSION"`, "bash")}
+<h2 id="your-connector">Your MCP connector</h2>
+${code(`curl -O https://blixvip.com/_pub/blix-mcp.mjs\nclaude mcp add blix -e BLIX_SESSION=${token} -- node /path/to/blix-mcp.mjs`, "bash")}
+${code(JSON.stringify({ mcpServers: { blix: { command: "node", args: ["/path/to/blix-mcp.mjs"], env: { BLIX_SESSION: token } } } }, null, 2), "json")}
+<p class="note">Codex (~/.codex/config.toml): <code>[mcp_servers.blix]</code> with <code>command = "node"</code>, <code>args = ["/path/to/blix-mcp.mjs"]</code> and <code>[mcp_servers.blix.env] BLIX_SESSION = "…"</code>. Gemini CLI and VS Code take the JSON above.</p>`;
+  const body = layout({ ...p, body: access + p.body });
+  return new Response(req.method === "HEAD" ? null : body, { headers: { ...docHeaders(await docCsp(body)), "cache-control": "private, no-store", "x-robots-tag": "noindex" } });
+}
 
 async function site(req, env, url) {
   if (req.method !== "GET" && req.method !== "HEAD") return null;
@@ -440,15 +509,13 @@ async function site(req, env, url) {
   if (PAGES[p]) {
     if (!built.has(p)) {
       const body = render(p);
-      built.set(p, { body, etag: `"${b64(await sha("SHA-1", body)).slice(0, 27)}"` });
+      // Every inline script the page carries (the copy buttons, a page's own tool such as the name generator, the
+      // structured data) is allowed by its exact hash, as a browser computes it: over the text with line endings
+      // normalised to \n.
+      built.set(p, { body, etag: `"${b64(await sha("SHA-1", body)).slice(0, 27)}"`, csp: await docCsp(body) });
     }
-    csp ||= `default-src 'none'; script-src 'sha256-${b64(await sha("SHA-256", SCRIPT.replace(/\r\n?/g, "\n")))}' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
-    const { body, etag } = built.get(p);
-    const headers = {
-      "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=600, stale-while-revalidate=86400", etag,
-      link: "</_pub/fonts/space-grotesk-600.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
-      "content-security-policy": csp, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin",
-    };
+    const { body, etag, csp } = built.get(p);
+    const headers = { ...docHeaders(csp), "cache-control": "public, max-age=600, stale-while-revalidate=86400", etag };
     if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
     return new Response(req.method === "HEAD" ? null : body, { headers });
   }
@@ -484,5 +551,5 @@ a{display:inline-block;padding:13px 24px;border-radius:999px;background:#f2f3f5;
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const offline = () => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="20"><title>Blix</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1117;color:#e6e8ef;font:15px system-ui,sans-serif;text-align:center}h1{font-size:18px;margin:0 0 6px}p{color:#8b90a0;margin:0}a{color:#7aa2ff}</style>
-<div><h1>Blix is offline</h1><p>The terminal runs on Kai's PC and it is not connected right now. This page retries every 20 seconds.</p><p style="margin-top:14px"><a href="/api">Blix API docs</a> · <a href="/mcp">MCP server</a></p></div>`,
+<div><h1>Blix is reconnecting</h1><p>The server is temporarily unavailable. This page retries every 20 seconds.</p><p style="margin-top:14px"><a href="/api">Blix API docs</a> · <a href="/mcp">MCP server</a></p></div>`,
   { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "retry-after": "20", "x-robots-tag": "noindex" } });
