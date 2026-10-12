@@ -143,60 +143,60 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
   const zero = buy ? !(amount > 0) : false;
   const ok = r.verdict?.ok, unknown = r.verdict?.unknown || r.verdict == null, reasons = r.verdict?.reasons || [];
   const flag = unknown ? "Unverified token" : ok ? "Checks pass" : reasons[0] || "Flagged";
-  // Fomo's trade panel, one to one, in Blix's colours: Buy / Sell tiles, one big amount, four round sizes, the worth
-  // line, one big button, and the token's standing under it. Everything else sits behind the gear.
-  const tileBase = "num flex h-12 items-center justify-center rounded-[12px] text-[17px] font-semibold transition-[background-color,color,transform] duration-150 active:scale-[0.98]";
-  const sizeTile = (on: boolean) => cn(tileBase, on ? "bg-paper-5 text-ink" : "bg-paper-4 text-ink hover:bg-paper-5");
-  const curBtn2 = (c: Cur) => cn("num rounded-[8px] px-2 py-1 text-[13px] font-semibold transition-colors duration-150", cur === c ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2");
-  const worth = buy
-    ? (amount > 0 ? (quote ? <>{tokN(quote.outTokens)} <span className="text-muted">{symbol}</span>{quote.usdIn != null && <span className="text-muted"> · {usdK(quote.usdIn)}</span>}</> : error ? <span className="text-down">{error}</span> : <span className="text-muted">Pricing…</span>) : <span className="text-muted">{inUsdc ? "$0" : "0 SOL"}</span>)
-    : realSell ? <>{pct === 100 ? "All" : `${pct}%`} of {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-muted">{symbol}</span></>
-    : quote ? <>{inUsdc && quote.usdOut != null ? <>{quote.usdOut.toFixed(2)} <span className="text-muted">USDC</span></> : <SolAmt v={quote.outSol} />}{quote.usdOut != null && !inUsdc && <span className="text-muted"> · {usdK(quote.usdOut)}</span>}</> : error ? <span className="text-down">{error}</span> : <span className="text-muted">Pricing…</span>;
+  // Fomo's trade panel, measured on fomo.family (2026-10-12) and drawn in Blix's colours: a 16px card with a hairline
+  // and 8px padding, 40px Buy / Sell tabs, a 68px amount box, four 32px size chips, the worth line, a 44px button and
+  // the token's standing under it. The motion is Fomo's too: colours ease over 150 ms, a pressed chip squishes, a
+  // changed figure flips up, the live dot glows.
+  const chipCls = "num flex h-8 items-center justify-center rounded-lg bg-paper-3 text-sm font-bold text-ink transition-colors duration-150 hover:bg-paper-4 active:animate-squish";
+  const curBtn2 = (c: Cur) => cn("num rounded-md px-1.5 py-0.5 text-[11px] font-bold transition-colors duration-150", cur === c ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2");
+  const worthText = buy
+    ? (amount > 0 ? (quote ? `${tokN(quote.outTokens)} ${symbol}${quote.usdIn != null ? ` · ${usdK(quote.usdIn)}` : ""}` : error ? error : "Pricing…") : inUsdc ? "$0" : "0 SOL")
+    : realSell ? `${pct === 100 ? "All" : `${pct}%`} of ${held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol}`
+    : quote ? (inUsdc && quote.usdOut != null ? `${quote.usdOut.toFixed(2)} USDC` : `${(quote.outSol ?? 0).toFixed(4)} SOL${quote.usdOut != null ? ` · ${usdK(quote.usdOut)}` : ""}`) : error ? error : "Pricing…";
+  const worthDim = (buy && !(amount > 0)) || worthText === "Pricing…";
   return (
-    <div className={cn(card, "flex flex-col gap-3 rounded-[18px] p-3.5")}>
-      {/* Buy / Sell, Fomo's two tiles, and the gear */}
+    <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-paper p-2">
+      {/* Buy / Sell tabs and the gear */}
       <div className="flex items-center gap-2">
-        <div className="grid flex-1 grid-cols-2 gap-2">
-          <button onClick={() => setSide("buy")} aria-pressed={buy}
-            className={cn("h-14 rounded-[14px] text-[19px] font-semibold transition-colors duration-150", buy ? "bg-up/[0.16] text-up" : "bg-paper-4 text-ink-2 hover:text-ink")}>Buy</button>
-          <button onClick={() => setSide("sell")} disabled={!canSell} title={canSell ? undefined : "Nothing to sell yet"} aria-pressed={!buy}
-            className={cn("h-14 rounded-[14px] text-[19px] font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40", !buy ? "bg-down/[0.16] text-down" : "bg-paper-4 text-ink-2 hover:text-ink")}>Sell</button>
-        </div>
+        <button onClick={() => setSide("buy")} aria-pressed={buy}
+          className={cn("h-10 flex-1 rounded-lg p-2 text-base font-bold transition-colors duration-150", buy ? "bg-up/20 text-up" : "bg-paper-3 text-muted hover:bg-paper-4")}>Buy</button>
+        <button onClick={() => setSide("sell")} disabled={!canSell} title={canSell ? undefined : "Nothing to sell yet"} aria-pressed={!buy}
+          className={cn("h-10 flex-1 rounded-lg p-2 text-base font-bold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40", !buy ? "bg-down/20 text-down" : "bg-paper-3 text-muted hover:bg-paper-4")}>Sell</button>
         <Tip tip={more ? "Hide slippage and the quote's detail" : "Slippage and the quote's detail"}>
           <button onClick={() => setMore((m) => !m)} aria-expanded={more} aria-label="Trade settings"
-            className={cn("grid size-11 shrink-0 place-items-center rounded-[12px] transition-colors duration-150", more ? "bg-paper-5 text-ink" : "text-muted hover:bg-paper-4 hover:text-ink")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-5" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+            className={cn("grid size-10 shrink-0 place-items-center rounded-lg transition-colors duration-150", more ? "bg-paper-3 text-ink" : "text-muted hover:text-ink")}>
+            <svg viewBox="0 0 24 24" fill="currentColor" className="size-5" aria-hidden><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z" /></svg>
           </button>
         </Tip>
       </div>
 
       {buy ? (
         <>
-          {/* The amount: one big field, the figure huge on the left, the money on the right */}
-          <label className="flex h-[88px] items-center gap-3 rounded-[14px] bg-paper-4 px-5 transition-colors duration-150 focus-within:bg-paper-5">
-            <span className="flex min-w-0 flex-1 items-baseline gap-1">
-              {inUsdc ? <span className={cn("num text-[34px] leading-none font-semibold", amount > 0 ? "text-ink" : "text-muted/70")}>$</span> : <SolanaLogo className={cn("mr-1 size-6 shrink-0 self-center", amount > 0 ? "" : "opacity-50")} />}
+          {/* The amount box: the figure big on the left, "Enter amount" and the money on the right */}
+          <label className="relative flex h-[68px] cursor-text items-stretch gap-px rounded-xl border border-transparent bg-paper-3 transition-colors duration-150 focus-within:border-white/10">
+            <span className="flex min-w-0 flex-1 items-center gap-1 pl-4">
+              {inUsdc ? <span className={cn("num text-3xl font-medium transition-colors duration-150", amount > 0 ? "text-ink" : "text-muted/60")}>$</span> : <SolanaLogo className={cn("mr-1 size-5 shrink-0 transition-opacity duration-150", amount > 0 ? "" : "opacity-50")} />}
               <input type="number" min="0" step={inUsdc ? "1" : "0.01"} value={amount || ""} onChange={(e) => (inUsdc ? setUsdc : setSol)(Math.max(0, +e.target.value || 0))} aria-label={`${cur} to spend`} placeholder="0"
-                className="num w-full min-w-0 bg-transparent text-[34px] leading-none font-semibold tracking-tight text-ink outline-none placeholder:text-muted/70 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+                className="num w-full min-w-0 bg-transparent text-3xl font-medium text-ink outline-none placeholder:text-muted/60 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
             </span>
-            <span className="flex shrink-0 flex-col items-end gap-1">
-              {!(amount > 0) && <span className="text-[15px] text-muted">Enter amount</span>}
-              <span role="radiogroup" aria-label="Trade in SOL or USDC" className="flex gap-0.5 rounded-[9px] bg-paper-3 p-0.5">
+            <span className="flex max-w-1/2 shrink-0 flex-col items-end justify-center gap-1 p-4 pl-6">
+              {!(amount > 0) && <span className="text-sm font-medium text-muted/60">Enter amount</span>}
+              <span role="radiogroup" aria-label="Trade in SOL or USDC" className="flex gap-0.5 rounded-md bg-paper-2 p-0.5">
                 <button role="radio" aria-checked={!inUsdc} onClick={(e) => { e.preventDefault(); setCur("SOL"); }} className={curBtn2("SOL")}>SOL</button>
                 <button role="radio" aria-checked={inUsdc} onClick={(e) => { e.preventDefault(); setCur("USDC"); }} className={curBtn2("USDC")}>USDC</button>
               </span>
             </span>
           </label>
           <div className="grid grid-cols-4 gap-2">
-            {(inUsdc ? FOMO_USDC : sizes).map((v) => <button key={v} onClick={() => (inUsdc ? setUsdc : setSol)(v)} className={sizeTile(amount === v)}>{inUsdc ? `$${v.toLocaleString()}` : <><SolanaLogo className="mr-1.5 size-3.5 opacity-70" />{v}</>}</button>)}
+            {(inUsdc ? FOMO_USDC : sizes).map((v) => <button key={v} onClick={() => (inUsdc ? setUsdc : setSol)(v)} aria-pressed={amount === v} className={cn(chipCls, amount === v && "bg-paper-4")}>{inUsdc ? `$${v.toLocaleString()}` : v}</button>)}
           </div>
         </>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-2">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} className={cn(sizeTile(pct === v), "h-14", pct === v && "bg-down/[0.16] text-down")}>{v === 100 ? "All" : `${v}%`}</button>)}</div>
+          <div className="grid grid-cols-3 gap-2">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} aria-pressed={pct === v} className={cn(chipCls, pct === v && "bg-down/20 text-down")}>{v === 100 ? "All" : `${v}%`}</button>)}</div>
           <div className="flex items-center justify-between gap-2 px-1">
-            <span className="text-[15px] text-muted">Paid in</span>
-            <span role="radiogroup" aria-label="Paid in SOL or USDC" className="flex gap-0.5 rounded-[9px] bg-paper-4 p-0.5">
+            <span className="text-sm font-medium text-muted">Paid in</span>
+            <span role="radiogroup" aria-label="Paid in SOL or USDC" className="flex gap-0.5 rounded-md bg-paper-3 p-0.5">
               <button role="radio" aria-checked={!inUsdc} onClick={() => setCur("SOL")} className={curBtn2("SOL")}>SOL</button>
               <button role="radio" aria-checked={inUsdc} onClick={() => setCur("USDC")} className={curBtn2("USDC")}>USDC</button>
             </span>
@@ -204,59 +204,62 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
         </>
       )}
 
-      {/* The worth line (Fomo's "$0"): what the amount gets, and whose money this is */}
-      <div className="flex items-center justify-between gap-3 px-1">
-        <span className="num min-w-0 truncate text-[17px] font-medium text-ink">{worth}</span>
-        <span className="flex shrink-0 items-center gap-1.5 text-[13px] text-muted" title={paperOn && wallet ? `Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}` : undefined}>
-          {balance != null ? <>{inUsdc ? <img src="brand/pay/usdc.png" alt="" title="USDC" className="size-3 shrink-0 rounded-full" /> : <SolanaLogo className="size-3 shrink-0" />}<b className="num font-semibold text-ink-2">{balance}</b></> : <span>Not signed in</span>}
-          {paperOn ? <PaperTag /> : <RealTag />}
+      {/* The worth line (Fomo's "$0"): what the amount gets, flipping up as it changes; whose money, on the right */}
+      <div className="flex min-h-6 items-center justify-between gap-3 px-1">
+        <span key={worthText} className={cn("num min-w-0 truncate text-base font-medium motion-safe:animate-flip-up", worthDim ? "text-muted" : error ? "text-down" : "text-ink")}>{worthText}</span>
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted" title={paperOn && wallet ? `Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}` : undefined}>
+          {balance != null ? <>{inUsdc ? <img src="brand/pay/usdc.png" alt="" title="USDC" className="size-3 shrink-0 rounded-full" /> : <SolanaLogo className="size-3 shrink-0" />}<b className="num font-bold text-ink-2">{balance}</b></> : <span>Not signed in</span>}
+          {paperOn ? <PaperTag /> : <span className="flex items-center gap-1 rounded-[5px] bg-up/12 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] text-up"><i className="size-1.5 rounded-full bg-up motion-safe:animate-dot-glow" />LIVE</span>}
         </span>
       </div>
 
-      {more && (
-        <div className="flex flex-col gap-2.5 rounded-[14px] bg-paper-4 p-3 text-[13px]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 font-medium text-muted"><Icon.sliders className="size-3.5" />Slippage</span>
-            <div role="radiogroup" aria-label="Slippage" className="flex gap-0.5 rounded-[9px] bg-paper-3 p-0.5">
-              {SLIPS.map(([v, l]) => <button key={v} role="radio" aria-checked={slip === v} onClick={() => setSlip(v)}
-                className={cn("num rounded-[7px] px-2.5 py-1 font-semibold transition-colors duration-150", slip === v ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2")}>{l}</button>)}
+      {/* The gear's drawer, opening like an accordion */}
+      <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", more ? "grid-rows-[1fr]" : "grid-rows-[0fr]")} aria-hidden={!more}>
+        <div className="min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-2.5 rounded-xl bg-paper-3 p-3 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 font-bold text-muted"><Icon.sliders className="size-3.5" />Slippage</span>
+              <div role="radiogroup" aria-label="Slippage" className="flex gap-0.5 rounded-md bg-paper-2 p-0.5">
+                {SLIPS.map(([v, l]) => <button key={v} role="radio" aria-checked={slip === v} onClick={() => setSlip(v)} tabIndex={more ? 0 : -1}
+                  className={cn("num rounded px-2 py-0.5 font-bold transition-colors duration-150", slip === v ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2")}>{l}</button>)}
+              </div>
             </div>
-          </div>
-          {quote && !realSell && (
-            <div className="num grid grid-cols-2 gap-x-4 gap-y-1 border-t border-rule pt-2.5">
-              {stat("Avg fill MC", usdK(quote.avgMcapUsd))}
-              {stat("Now MC", usdK(quote.spotMcapUsd))}
-              {stat("Impact", quote.impactPct != null ? `${quote.impactPct.toFixed(2)}%` : "—", (quote.impactPct ?? 0) > 5 ? "text-down" : (quote.impactPct ?? 0) > 2 ? "text-warn" : "text-ink-2")}
-              {stat("Route", quote.route?.join(" › ") || "—")}
-              {!paperOn && stat("Blix fee", buy ? (inUsdc ? `${+(usdc * FEE).toFixed(2)} USDC, paid in SOL` : `${+(sol * FEE).toFixed(5)} SOL`) : `${+(FEE * 100).toFixed(2)}%`)}
+            {quote && !realSell && (
+              <div className="num grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/[0.06] pt-2.5 motion-safe:animate-fade-in">
+                {stat("Avg fill MC", usdK(quote.avgMcapUsd))}
+                {stat("Now MC", usdK(quote.spotMcapUsd))}
+                {stat("Impact", quote.impactPct != null ? `${quote.impactPct.toFixed(2)}%` : "—", (quote.impactPct ?? 0) > 5 ? "text-down" : (quote.impactPct ?? 0) > 2 ? "text-warn" : "text-ink-2")}
+                {stat("Route", quote.route?.join(" › ") || "—")}
+                {!paperOn && stat("Blix fee", buy ? (inUsdc ? `${+(usdc * FEE).toFixed(2)} USDC, paid in SOL` : `${+(sol * FEE).toFixed(5)} SOL`) : `${+(FEE * 100).toFixed(2)}%`)}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+              {paperOn && wallet ? <button tabIndex={more ? 0 : -1} onClick={() => depositPaper(10).then((w) => toast(`Added 10 fake SOL. ${w.cash.toFixed(3)} SOL to spend.`), (e) => toast((e as Error).message))} className="rounded-md bg-paper-2 px-2 py-1 font-bold text-ink-2 transition-colors duration-150 hover:text-ink">+10 fake SOL</button> : <span />}
+              <button tabIndex={more ? 0 : -1} onClick={pnlCard.open} className="flex items-center gap-1.5 rounded-md px-2 py-1 font-bold text-muted transition-colors duration-150 hover:bg-paper-2 hover:text-ink"><Icon.image className="size-3.5" />PnL card</button>
             </div>
-          )}
-          <div className="flex items-center justify-between gap-2 border-t border-rule pt-2.5">
-            {paperOn && wallet ? <button onClick={() => depositPaper(10).then((w) => toast(`Added 10 fake SOL. ${w.cash.toFixed(3)} SOL to spend.`), (e) => toast((e as Error).message))} className="rounded-[8px] bg-paper-3 px-2.5 py-1 font-semibold text-ink-2 transition-colors hover:text-ink">+10 fake SOL</button> : <span />}
-            <button onClick={pnlCard.open} className="flex items-center gap-1.5 rounded-[8px] px-2 py-1 font-medium text-muted transition-colors hover:bg-paper-3 hover:text-ink"><Icon.image className="size-3.5" />PnL card</button>
           </div>
         </div>
-      )}
+      </div>
       {pnlCard.dialog}
 
       {/* Curve full, pool not live yet: nothing trades until it is (components/Migrating.tsx). */}
       {migrating ? <MigratingNote since={migrating} /> : null}
       {/* Paper fills at once (the server prices it itself), so it never waits for the preview; real money does. */}
       <button onClick={submit} disabled={busy || zero || Boolean(migrating) || (!quote && !realSell && !paperOn)} title={migrating ? MIGRATING_TIP : undefined}
-        className={cn("flex h-16 items-center justify-center gap-2 rounded-[14px] text-[19px] font-semibold transition-[background-color,color,transform,opacity] duration-150 active:scale-[0.99] disabled:cursor-not-allowed",
-          zero || migrating ? "bg-paper-4 text-ink-2" : buy ? "bg-up text-on-fill hover:brightness-110" : "bg-down text-on-fill hover:brightness-110", busy && "opacity-70")}>
+        className={cn("flex h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-center text-base font-bold transition-[background-color,color,border-color,filter] duration-150 active:animate-squish disabled:cursor-not-allowed",
+          zero || migrating ? "border border-white/[0.06] bg-paper-3 text-muted" : buy ? "bg-up text-[#06130b] hover:brightness-110" : "bg-down text-white hover:brightness-110", busy && "opacity-70")}>
         {busy ? <><i className="size-4 animate-spin rounded-full border-2 border-current/30 border-t-current" />Placing…</>
-          : buy ? <>Buy {name}{amount > 0 && <span className="num font-medium opacity-80">· {inUsdc ? `$${amount.toLocaleString()}` : `${amount} SOL`}</span>}</> : <>Sell {pct === 100 ? "all" : `${pct}%`} of {name}</>}
-        {paperOn && !busy && <span className="rounded-[6px] bg-black/15 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] uppercase">Paper</span>}
+          : buy ? <>Buy {name}</> : <>Sell {pct === 100 ? "all" : `${pct}%`} {name}</>}
+        {paperOn && !busy && <span className="rounded-[5px] bg-black/15 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] uppercase">Paper</span>}
       </button>
 
-      {/* The token's standing, Fomo's "Unverified token" line */}
+      {/* The token's standing: Fomo's "Unverified token" line, with the reasons behind the (i) */}
       <Tip tip={unknown ? "Blix has not read this coin's safety yet" : reasons.length ? reasons.join(" · ") : "No safety flags on Blix's checks"}>
-        <div className={cn("flex items-center gap-2 px-1 text-[14px] font-medium", unknown ? "text-muted" : ok ? "text-ink-2" : "text-warn")}>
-          {unknown || !ok ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="size-4" aria-hidden><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
-            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="size-4 text-up" aria-hidden><path d="M20 6 9 17l-5-5" /></svg>}
+        <div className={cn("flex items-center gap-1.5 px-1 py-0.5 text-xs font-bold", unknown ? "text-muted" : ok ? "text-ink-2" : "text-warn")}>
+          {unknown || !ok ? <svg viewBox="0 0 24 24" fill="currentColor" className="size-3.5" aria-hidden><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" /></svg>
+            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="size-3.5 text-up" aria-hidden><path d="M20 6 9 17l-5-5" /></svg>}
           <span className="truncate">{flag}</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="ml-auto size-4 shrink-0 text-muted" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="ml-auto size-3.5 shrink-0 text-muted" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" /></svg>
         </div>
       </Tip>
     </div>
@@ -264,8 +267,9 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
 }
 const FOMO_USDC = [10, 100, 500, 1000];   // Fomo's four sizes
 
-// About the coin, Fomo's card under its trade panel: who gets the fees, the change over 5m / 1h / 6h / 1d (one picked,
-// its buys and sells, volumes and traders as bars), the coin's links, and its own line and themes on View more.
+// About the coin, Fomo's card under its trade panel, measured on fomo.family: who gets the fees, the change over
+// 5M / 1H / 6H / 1D as four small tiles (one picked), that window's buys and sells, volumes and traders with 6px
+// bars, the coin's links as small chips, and "View more" hanging off the card's bottom edge.
 // Figures: Jupiter's per-window stats (GET /api/jup/<mint>, server/jupdisc.js windows), asked again every 25 s.
 interface Win { chg: number | null; buys: number | null; sells: number | null; buyVol: number | null; sellVol: number | null; traders: number | null; netBuyers: number | null }
 interface Jup { t: number | null; mcap?: number | null; holders?: number | null; launchpad?: string | null; dev?: string | null; windows: Record<"5m" | "1h" | "6h" | "24h", Win> | null }
@@ -290,46 +294,45 @@ export function About({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   const site = link("website"), tw = link("twitter"), tg = link("telegram");
   const n = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString());
   const pctTxt = (v: number | null) => (v == null ? "—" : `${Math.abs(v) >= 1000 ? Math.round(Math.abs(v)).toLocaleString() : Math.abs(v).toFixed(2)}%`);
-  // Two bars from one pair: each side's share of the pair's total, the green from the left and the red from the right.
+  // Two 6px bars in one row, each side's share of the pair, widths easing over 150 ms like Fomo's.
   const bars = (left: number | null, right: number | null) => {
-    const a = left ?? 0, b = right ?? 0, tot = a + b;
-    const la = tot > 0 ? Math.max(4, Math.round((a / tot) * 100)) : 50;
+    const a = left ?? 0, b = right ?? 0, tot = a + b, la = tot > 0 ? Math.max(3, Math.min(97, (a / tot) * 100)) : 50;
     return (
-      <div className="grid grid-cols-2 gap-2">
-        <i className="block h-2 rounded-full bg-paper-4"><i className="block h-full rounded-full bg-up transition-[width] duration-500" style={{ width: `${la}%` }} /></i>
-        <i className="block h-2 rounded-full bg-paper-4"><i className="ml-auto block h-full rounded-full bg-down transition-[width] duration-500" style={{ width: `${100 - la}%` }} /></i>
+      <div className="flex h-1.5 w-full gap-2">
+        <i className="block h-full rounded-[1.5px] bg-up transition-[width] duration-150 ease-out" style={{ width: `${la}%` }} />
+        <i className="block h-full flex-1 rounded-[1.5px] bg-down" />
       </div>
     );
   };
   const row = (lv: ReactNode, ll: string, rv: ReactNode, rl: string, l: number | null, rr: number | null) => (
     <div className="flex flex-col gap-1.5">
-      <div className="num flex items-baseline justify-between text-[17px] font-semibold text-ink">
-        <span>{lv} <span className="text-[15px] font-normal text-muted">{ll}</span></span>
-        <span>{rv} <span className="text-[15px] font-normal text-muted">{rl}</span></span>
+      <div className="num flex items-baseline justify-between text-base">
+        <span><b key={String(lv)} className="inline-block font-bold text-ink motion-safe:animate-flip-up">{lv}</b> <span className="text-muted">{ll}</span></span>
+        <span><b key={String(rv)} className="inline-block font-bold text-ink motion-safe:animate-flip-up">{rv}</b> <span className="text-muted">{rl}</span></span>
       </div>
       {bars(l, rr)}
     </div>
   );
-  const chipCls = "flex h-10 items-center gap-2 rounded-[12px] border border-rule-2 bg-paper-4 px-3.5 text-[15px] font-semibold text-ink transition-colors duration-150 hover:bg-paper-5";
+  const chipCls = "flex h-[25px] items-center gap-1 rounded-lg border border-white/10 bg-paper-3 px-2 text-xs font-medium text-ink transition-opacity duration-150 hover:opacity-80";
   return (
-    <div className={cn(card, "flex flex-col gap-3.5 rounded-[18px] p-4")}>
-      <div className="flex flex-col gap-1">
-        <h3 className="text-[19px] leading-tight font-semibold text-ink">About {name}</h3>
-        <span className="truncate text-[14px] text-muted">
-          {dev ? <>Creator fees to <button onClick={() => copy(dev, "Dev address copied")} className="num font-medium text-ink-2 hover:text-ink">{shortAddr(dev)}</button></> : "Creator unknown"}
+    <div className="relative mb-3 flex flex-col gap-3 rounded-2xl border border-white/10 bg-paper p-3 pb-4">
+      <div className="flex flex-col gap-0.5">
+        <h3 className="truncate text-base font-medium text-ink">About {name}</h3>
+        <span className="truncate text-xs text-muted">
+          {dev ? <>Creator fees to <button onClick={() => copy(dev, "Dev address copied")} className="num font-medium text-ink-2 transition-colors duration-150 hover:text-ink">{shortAddr(dev)}</button></> : "Creator unknown"}
           {padName ? ` via ${padName}` : ""}
         </span>
       </div>
 
-      <div role="radiogroup" aria-label="Window" className="grid grid-cols-4 gap-2">
+      <div role="radiogroup" aria-label="Window" className="flex gap-2">
         {WINS.map(([k, label]) => {
           const v = j?.windows?.[k]?.chg ?? null, up = (v ?? 0) >= 0;
           return (
             <button key={k} role="radio" aria-checked={win === k} onClick={() => setWin(k)}
-              className={cn("flex flex-col items-center gap-1 rounded-[12px] py-2.5 transition-colors duration-150", win === k ? "bg-paper-5" : "bg-paper-4 hover:bg-paper-5")}>
-              <span className="text-[13px] font-medium text-muted">{label}</span>
-              <span className={cn("num flex max-w-full items-center gap-0.5 truncate px-1 font-semibold", Math.abs(v ?? 0) >= 1000 ? "text-[12px]" : "text-[13px]", v == null ? "text-muted" : up ? "text-up" : "text-down")}>
-                {v != null && <svg viewBox="0 0 12 12" className={cn("size-2.5", !up && "rotate-180")} fill="currentColor" aria-hidden><path d="M6 2l4 6H2z" /></svg>}{pctTxt(v)}
+              className={cn("flex flex-1 flex-col items-center rounded-md border py-1.5 transition-colors duration-150", win === k ? "border-transparent bg-paper-4" : "border-transparent bg-paper-3 hover:bg-paper-4")}>
+              <span className="text-sm text-muted">{label}</span>
+              <span className={cn("num flex max-w-full items-center gap-0.5 truncate px-1 text-sm font-bold", v == null ? "text-muted" : up ? "text-up" : "text-down")}>
+                {v != null && <svg viewBox="0 0 12 12" className={cn("size-2", !up && "rotate-180")} fill="currentColor" aria-hidden><path d="M6 2l4 6H2z" /></svg>}{pctTxt(v)}
               </span>
             </button>
           );
@@ -337,33 +340,36 @@ export function About({ r, c }: { r: TokenDetail; c: CoinData | null }) {
       </div>
 
       {w ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 motion-safe:animate-fade-in">
           {row(n(w.buys), "buys", n(w.sells), "sells", w.buys, w.sells)}
           {row(usdK(w.buyVol), "vol.", usdK(w.sellVol), "vol.", w.buyVol, w.sellVol)}
-          <div className="num flex items-baseline justify-between text-[17px] font-semibold text-ink">
-            <span>{n(w.traders)} <span className="text-[15px] font-normal text-muted">traders</span></span>
-            <span className={cn((w.netBuyers ?? 0) >= 0 ? "text-up" : "text-down")}>{w.netBuyers == null ? "—" : `${w.netBuyers >= 0 ? "+" : "−"}${Math.abs(w.netBuyers).toLocaleString()}`} <span className="text-[15px] font-normal text-muted">net buyers</span></span>
+          <div className="num flex items-baseline justify-between text-base">
+            <span><b className="font-bold text-ink">{n(w.traders)}</b> <span className="text-muted">traders</span></span>
+            <span><b className={cn("font-bold", (w.netBuyers ?? 0) >= 0 ? "text-up" : "text-down")}>{w.netBuyers == null ? "—" : `${w.netBuyers >= 0 ? "+" : "−"}${Math.abs(w.netBuyers).toLocaleString()}`}</b> <span className="text-muted">net buyers</span></span>
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">{[0, 1].map((i) => <div key={i} className="flex flex-col gap-1.5"><i className="h-5 w-2/3 animate-pulse rounded bg-paper-4" /><i className="h-2 w-full animate-pulse rounded-full bg-paper-4" /></div>)}</div>
+        <div className="flex flex-col gap-3">{[0, 1].map((i) => <div key={i} className="flex flex-col gap-1.5"><i className="h-5 w-2/3 animate-pulse rounded bg-paper-3" /><i className="h-1.5 w-full animate-pulse rounded-[1.5px] bg-paper-3" /></div>)}</div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {site && <a href={site} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.web className="size-4" />Website</a>}
-        {tw && <a href={tw} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.x className="size-3.5" />Twitter</a>}
-        {tg && <a href={tg} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.tg className="size-4" />Telegram</a>}
-        <a href={`https://x.com/search?q=${encodeURIComponent(`$${t.symbol || ""} OR ${t.mint}`)}&f=live`} target="_blank" rel="noopener noreferrer" className={chipCls}>Search on <Icon.x className="size-3.5" /></a>
+      <div className="flex flex-wrap gap-1.5">
+        {site && <a href={site} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.web className="size-3.5" />Website</a>}
+        {tw && <a href={tw} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.x className="size-3" />Twitter</a>}
+        {tg && <a href={tg} target="_blank" rel="noopener noreferrer" className={chipCls}><Icon.tg className="size-3.5" />Telegram</a>}
+        <a href={`https://x.com/search?q=${encodeURIComponent(`$${t.symbol || ""} OR ${t.mint}`)}&f=live`} target="_blank" rel="noopener noreferrer" className={chipCls}>Search on <Icon.x className="size-3" /></a>
       </div>
 
-      {moreOpen && (
-        <div className="flex flex-col gap-2 text-[14px] leading-relaxed text-ink-2">
-          {t.description ? <p className="whitespace-pre-wrap">{t.description}</p> : <p className="text-muted">No description on this coin.</p>}
-          {t.themes?.length ? <div className="flex flex-wrap gap-1.5">{t.themes.map((x) => <span key={x} className="rounded-full bg-paper-4 px-2.5 py-0.5 text-[13px] text-muted">{x}</span>)}</div> : null}
-          {j?.holders != null && <span className="num text-[13px] text-muted">{j.holders.toLocaleString()} holders{j.mcap ? ` · ${usdK(j.mcap)} market cap` : ""}</span>}
+      <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", moreOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")} aria-hidden={!moreOpen}>
+        <div className="min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-2 text-sm leading-relaxed text-ink-2">
+            {t.description ? <p className="whitespace-pre-wrap">{t.description}</p> : <p className="text-muted">No description on this coin.</p>}
+            {t.themes?.length ? <div className="flex flex-wrap gap-1.5">{t.themes.map((x) => <span key={x} className="rounded-md bg-paper-3 px-2 py-0.5 text-xs text-muted">{x}</span>)}</div> : null}
+            {j?.holders != null && <span className="num text-xs text-muted">{j.holders.toLocaleString()} holders{j.mcap ? ` · ${usdK(j.mcap)} market cap` : ""}</span>}
+          </div>
         </div>
-      )}
-      <button onClick={() => setMoreOpen((m) => !m)} className="mx-auto rounded-[10px] bg-paper-4 px-4 py-2 text-[14px] font-semibold text-ink-2 transition-colors duration-150 hover:bg-paper-5 hover:text-ink">{moreOpen ? "View less" : "View more"}</button>
+      </div>
+      {/* Fomo's "View more": half over the card's bottom edge */}
+      <button onClick={() => setMoreOpen((m) => !m)} className="absolute bottom-0 left-1/2 z-10 flex -translate-x-1/2 translate-y-1/2 items-center gap-1 rounded-md bg-paper-4 px-2 py-1 text-xs font-bold text-muted transition-colors duration-150 hover:text-ink">{moreOpen ? "View less" : "View more"}</button>
     </div>
   );
 }

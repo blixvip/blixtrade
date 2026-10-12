@@ -8,6 +8,12 @@
 @keyframes welcome-in { from { opacity: 0; transform: translateY(6px) scale(0.94); } }
 @keyframes tape-in { from { opacity: 0; transform: translateX(-10px); } }
 @keyframes tip-in { from { opacity: 0; transform: translateY(2px) scale(0.97); } }
+/* the trade panel and About card (coin/Side.tsx), Fomo's motion: a figure flips up as it changes, a block fades in,
+   a pressed tile squishes, the live dot glows */
+@keyframes flip-up { from { opacity: 0; transform: translateY(40%); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes squish { 0% { transform: scale(1); } 40% { transform: scale(0.9); } 100% { transform: scale(1); } }
+@keyframes dot-glow { 0%, 100% { opacity: 1; filter: drop-shadow(0 0 3px color-mix(in oklab, var(--color-up) 80%, transparent)); } 50% { opacity: 0.6; filter: drop-shadow(0 0 6px color-mix(in oklab, var(--color-up) 40%, transparent)); } }
 /* No stepper arrows on number boxes anywhere: amounts are typed. */
 input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -101,6 +107,10 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
   --animate-tick-up: tick-up 900ms var(--ease-out);
   --animate-tick-down: tick-down 900ms var(--ease-out);
   --animate-live-dot: live-dot 2s ease-in-out infinite;
+  --animate-flip-up: flip-up 220ms var(--ease-out) both;
+  --animate-fade-in: fade-in 260ms var(--ease-out) both;
+  --animate-squish: squish 260ms var(--ease-out);
+  --animate-dot-glow: dot-glow 2s ease-in-out infinite;
   --animate-brand-sheen: brand-sheen 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
   --animate-brand-glow: brand-glow 2.4s ease-in-out infinite;
   --animate-brand-bar: brand-bar 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
