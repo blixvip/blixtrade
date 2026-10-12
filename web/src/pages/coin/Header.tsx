@@ -16,7 +16,7 @@ import { useTradeMc } from "@/lib/pulse";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, CoinPic, Price } from "./parts";
-import { toggleQuick, useQuick } from "@/lib/quick";
+import { toggleQuick, toggleSideTrades, useQuick, useSideTrades } from "@/lib/quick";
 import { Flash } from "@/components/Live";
 
 const POOL: Record<string, [string, string]> = { pump: ["bg-up", "pump.fun"], bonk: ["bg-caution", "letsbonk.fun"], launchlab: ["bg-accent", "Raydium LaunchLab"], bags: ["bg-warn", "Bags"], moonshot: ["bg-ink-2", "Moonshot"] };
@@ -167,16 +167,25 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
 
 
 // The Instant panel toggle: floats the quick buy / sell panel over the chart. Sits at the end of the tab row (Tabs.tsx).
+// The two pills at the end of the tab bar: Instant Trade (the floating quick trade panel) and Live Trades (the
+// trades column beside the chart, folded away or brought back). Both lit while on.
 export function InstantButton() {
-  const quick = useQuick((st) => st.open);
+  const quick = useQuick((st) => st.open), trades = useSideTrades((st) => st.on);
+  const pill = (on: boolean) => cn("group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full pr-3.5 pl-2.5 text-sm font-semibold whitespace-nowrap transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.97]",
+    on ? "bg-ink text-paper shadow-[0_0_0_1px_oklch(100%_0_0/0.25),0_4px_14px_-4px_oklch(100%_0_0/0.35)]"
+      : "bg-paper-3 text-ink shadow-[inset_0_0_0_1px_var(--color-rule-2),inset_0_1px_0_oklch(100%_0_0/0.06)] hover:bg-paper-4");
   return (
-    <Tip tip="Float the quick buy / sell panel over the chart (drag it anywhere)">
-      <button onClick={toggleQuick} aria-pressed={quick}
-        className={cn("group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full pr-3.5 pl-2.5 text-sm font-semibold whitespace-nowrap transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.97]",
-          quick ? "bg-ink text-paper shadow-[0_0_0_1px_oklch(100%_0_0/0.25),0_4px_14px_-4px_oklch(100%_0_0/0.35)]"
-            : "bg-paper-3 text-ink shadow-[inset_0_0_0_1px_var(--color-rule-2),inset_0_1px_0_oklch(100%_0_0/0.06)] hover:bg-paper-4")}>
-        <Icon.bolt className={cn("size-3.5 transition-colors duration-150", quick ? "fill-current" : "fill-current text-ink-2 group-hover:text-ink")} />Instant Trade
-      </button>
-    </Tip>
+    <span className="flex shrink-0 items-center gap-1.5">
+      <Tip tip="Float the quick buy / sell panel over the chart (drag it anywhere)">
+        <button onClick={toggleQuick} aria-pressed={quick} className={pill(quick)}>
+          <Icon.bolt className={cn("size-3.5 transition-colors duration-150", quick ? "fill-current" : "fill-current text-ink-2 group-hover:text-ink")} />Instant Trade
+        </button>
+      </Tip>
+      <Tip tip={trades ? "Hide the live trades column beside the chart" : "Show the live trades column beside the chart"}>
+        <button onClick={toggleSideTrades} aria-pressed={trades} className={pill(trades)}>
+          <Icon.pulse className={cn("size-3.5 transition-colors duration-150", !trades && "text-ink-2 group-hover:text-ink")} />Live Trades
+        </button>
+      </Tip>
+    </span>
   );
 }

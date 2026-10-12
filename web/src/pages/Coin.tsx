@@ -16,7 +16,7 @@ import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
 import { QuickTrade } from "./coin/QuickTrade";
 import { ResizeHandle, useSize } from "@/components/Resize";
-import { setQuickCoin } from "@/lib/quick";
+import { setQuickCoin, useSideTrades } from "@/lib/quick";
 import { Addresses, Flow, Info, Links, Position, TradePanel, About } from "./coin/Side";
 import { CoinTabs, SideTrades } from "./coin/Tabs";
 import { BubbleMapTab } from "./coin/BubbleMap";
@@ -124,12 +124,14 @@ export function Coin({ mint }: { mint: string }) {
   const sym = token.data?.token?.symbol;
   useEffect(() => { if (sym) setQuickCoin({ mint, symbol: sym }); }, [mint, sym]);
   // The live trades go beside the chart when the main column has room for both (a chart under ~720 px is cramped).
-  const [wide, setWide] = useState(false);
+  // ... and when the trades column is switched on (the button beside Instant Trade, lib/quick.ts).
+  const [roomy, setRoomy] = useState(false);
+  const tradesOn = useSideTrades((s) => s.on), wide = roomy && tradesOn;
   const ro = useRef<ResizeObserver | null>(null);
   const mainRef = useCallback((el: HTMLElement | null) => {
     ro.current?.disconnect(); ro.current = null;
     if (!el) return;
-    ro.current = new ResizeObserver(([e]) => setWide(e.contentRect.width >= WIDE));
+    ro.current = new ResizeObserver(([e]) => setRoomy(e.contentRect.width >= WIDE));
     ro.current.observe(el);
   }, []);
   // The wide trade list runs from the top of the page down to the line under the tab bar (Known holders …
