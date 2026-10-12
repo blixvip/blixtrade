@@ -1147,12 +1147,11 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
             )}
           </>
           : <div ref={box} data-coin-chart className="h-[var(--chart-h,clamp(340px,52vh,760px))] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />}
-        {/* The average buy and sell labels: a square in the line's colour, the name, the cap. Placed by the effect above. */}
+        {/* The average buy and sell labels: a quiet grey tag with a dot in the line's colour, the name and the cap. Placed by the effect above. */}
         {!gecko && live.filter((l) => !l.migrate).map((l) => (
           <span key={l.title} ref={(el) => { if (el) levelEls.current.set(l.title, el); else levelEls.current.delete(l.title); }} style={{ visibility: "hidden" }}
-            className={cn("num pointer-events-none absolute top-0 left-0 z-[1] flex h-[18px] items-center gap-1.5 rounded-[3px] border bg-paper/90 px-1.5 text-[10px] font-bold tracking-[0.06em] uppercase",
-              l.buy ? "border-up/50 text-up" : "border-down/50 text-down")}>
-            <i className={cn("size-1.5", l.buy ? "bg-up" : "bg-down")} />{l.title}<b className="text-ink">{usdP(l.price)}</b>
+            className="num pointer-events-none absolute top-0 left-0 z-[1] flex h-5 items-center gap-1.5 rounded-[4px] bg-paper-3 pr-2 pl-1.5 text-[11px] font-medium text-ink-2 shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            <i className={cn("size-1.5 rounded-full", l.buy ? "bg-up" : "bg-down")} />{l.title}<b className="font-semibold text-ink">{usdP(l.price)}</b>
           </span>
         ))}
         {tip && <TipPanel tip={tip} w={box.current?.clientWidth ?? 0} h={box.current?.clientHeight ?? 0} />}
