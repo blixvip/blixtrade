@@ -22,33 +22,17 @@ export const PADS: [string, string, ReactNode][] = [
 const KNOWN = new Set(PADS.map(([k]) => k));
 // The launchpad a coin is filtered by: its pool, else what its dex or mint says (components/logos.ts padOf).
 
-// What a column starts with in a browser that has never saved filters (a new sign-up): Final Stretch shows coins
-// at most 400 minutes old and worth at least $4K, and every column has a floor on the fees traders have paid to
-// trade the coin (New Pairs 0.001 SOL, Final Stretch 0.05, Migrated 1), so a rug nobody traded never shows. Reset
-// goes back to these.
-// 2026-10-11: no fee floor by default on any column. The floors hid coins from one user and not another (whoever
-// had cleared the box saw more), and the owner wants every coin shown to every user; the Fees paid box is still
-// there for anyone who wants a floor.
+// What a column starts with in a browser that has never saved filters: Final Stretch shows coins at most 400 minutes
+// old and worth at least $4K; New Pairs, Running and Migrated show every coin. No column has a default floor on
+// fees paid: the floors tried on 2026-10-10 showed one user more coins than another (whoever had cleared the box),
+// and the owner wants every coin shown to everyone. The Fees paid box is still there for anyone who wants a floor.
+// Reset returns a column to these.
 export const DEFAULTS: Record<Col, Filters> = { new: {}, running: {}, stretch: { ageMax: "400", mcapMin: "4000" }, migrated: {} };
-// Floors a browser may have been given before (2026-10-10 set them higher twice, then removed 2026-10-11): cleared
-// once, so a saved default floor goes; a floor the user typed themselves after that sticks.
-const OLD_FLOORS: Record<string, string[]> = { new: ["0.01", "0.005", "0.001"], stretch: ["0.1", "0.05"], migrated: ["1"] };
 export const countFilters = (f: Filters) => Object.values(f).filter(isSet).length;
-const load = (c: Col) => {
-  const f = store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
-  // The fee floors arrived on 2026-10-10: a browser with filters saved before gets its column's floor once per
-  // floor value (the flag names it), on top of what it had, and an earlier floor moves to the current one;
-  // clearing the box afterwards, or typing another number, sticks.
-  const floor = DEFAULTS[c].feesMin;
-  if (floor && !store.get<boolean>(`pulse:colf2:${c}:fees:${floor}`, false)) {
-    store.set(`pulse:colf2:${c}:fees:${floor}`, true);
-    if (!isSet(f.feesMin) || (OLD_FLOORS[c] || []).includes(f.feesMin!)) { f.feesMin = floor; store.set(`pulse:colf2:${c}`, f); }
-  }
-  // No default floor any more (2026-10-11). A floor already saved in this browser stays, whether it came from an old
-  // default or was typed: clearing saved defaults once wiped a floor the owner had just typed (1 SOL on Migrated,
-  // the same string as the old default), and a typed value cannot be told from a defaulted one. Reset clears it.
-  return f;
-};
+// A column's saved filters, else its defaults. Saved values are never rewritten here: a fee floor left over from the
+// old defaults cannot be told from one the user typed (clearing "old defaults" once wiped a 1 SOL floor the owner had
+// just entered), so only Reset, or the user, changes a saved column.
+const load = (c: Col) => store.get<Filters>(`pulse:colf2:${c}`, { ...DEFAULTS[c] });
 export function resetColumn(c: Col) { store.set(`pulse:colf2:${c}`, { ...DEFAULTS[c] }); useColFilters.setState((s) => ({ f: { ...s.f, [c]: { ...DEFAULTS[c] } } })); }
 interface State { f: Record<Col, Filters>; open: Col | null }
 export const useColFilters = create<State>(() => ({ f: { new: load("new"), running: load("running"), stretch: load("stretch"), migrated: load("migrated") }, open: null }));
@@ -78,8 +62,8 @@ function feesFit(t: Coin, lo: string | undefined, hi: string | undefined, col?: 
   return v != null && v >= +lo!;
 }
 
-// Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one
-// (New Pairs' fee floor excepted: feesFit).
+// Does a coin pass a column's filters? A figure that is not known yet passes a "Max" limit and fails a "Min" one.
+// Fees paid is the one exception, with its own grace rules (feesFit above).
 export function fitsColumn(t: Coin, f: Filters, col?: Col): boolean {
   if (!countFilters(f)) return true;
   const H = t.hl || {};
