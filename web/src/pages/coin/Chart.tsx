@@ -274,6 +274,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   // early: drawn from what was already here, the server's answer still to come.
   const [meta, setMeta] = useState<{ tf?: number; early?: boolean; source?: string; live?: boolean; note?: string | null; empty: boolean; last: Row | null }>({ empty: false, last: null });
   const lines = useRef<number[]>([]);      // the level prices, for the price axis to keep in view
+  const levelEls = useRef<Map<string, HTMLSpanElement>>(new Map());   // the labels on the average lines, moved with them
   const s = useRef<{ chart?: IChartApi; candles?: ISeriesApi<"Candlestick">; markers?: ISeriesMarkersPluginApi<Time>; icons?: ChartIcons; byTime?: Map<number, Row>; first?: number; tf?: number }>({});
   // The drawn candles' times in order, for placing icons on candles (chartIcons.ts): built again only when a
   // candle is added (the map's size changes) or the chart is reloaded (a new map).
@@ -900,9 +901,28 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     if (!candles) return;
     const up = color("--color-up", "#2ebd85"), down = color("--color-down", "#f6465d");
     const plain = alpha(color("--color-ink", "#e6e6e6"), 0.55);
-    const made: IPriceLine[] = live.map((l) => candles.createPriceLine({ price: l.price, color: l.migrate ? plain : l.buy ? up : down, lineWidth: 1, lineStyle: l.migrate ? LineStyle.LargeDashed : LineStyle.Dashed, lineVisible: true, axisLabelVisible: true, title: l.title, axisLabelColor: "", axisLabelTextColor: "" }));
+    // The library's own title is off: the label is ours (below), a tag at the line's left end that follows it.
+    const made: IPriceLine[] = live.map((l) => candles.createPriceLine({ price: l.price, color: l.migrate ? plain : l.buy ? up : down, lineWidth: 1, lineStyle: l.migrate ? LineStyle.LargeDashed : LineStyle.Dashed, lineVisible: true, axisLabelVisible: true, title: l.migrate ? l.title : "", axisLabelColor: "", axisLabelTextColor: "" }));
+    // Each label sits just above its line, inside the chart; the price scale moves with every candle, so the
+    // labels are placed every frame (two reads and a transform each: cheap). Off the drawn area: hidden.
+    let raf = 0;
+    const place = () => {
+      raf = requestAnimationFrame(place);
+      const b = box.current;
+      if (!b || s.current.candles !== candles) return;
+      const H = b.clientHeight, top = b.offsetTop, left = b.offsetLeft;
+      for (const l of live) {
+        const el = levelEls.current.get(l.title);
+        if (!el) continue;
+        const y = candles.priceToCoordinate(l.price);
+        const show = y != null && y > 22 && y < H - 6;
+        el.style.visibility = show ? "visible" : "hidden";
+        if (show) el.style.transform = `translate(${left + 8}px, ${top + (y as number) - 3}px) translateY(-100%)`;
+      }
+    };
+    place();
     // Lines go with their chart: removing one from a removed chart would schedule a paint on its dead canvas.
-    return () => { if (s.current.candles === candles) for (const x of made) candles.removePriceLine(x); };
+    return () => { cancelAnimationFrame(raf); if (s.current.candles === candles) for (const x of made) candles.removePriceLine(x); };
   }, [levelKey, tf, mint]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Your own buys and sells as green and red arrows (B / S) and alerts as plain muted squares, through the
@@ -1112,6 +1132,14 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
             )}
           </>
           : <div ref={box} data-coin-chart className="h-[clamp(340px,52vh,760px)] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />}
+        {/* The average buy and sell labels: a square in the line's colour, the name, the cap. Placed by the effect above. */}
+        {!gecko && live.filter((l) => !l.migrate).map((l) => (
+          <span key={l.title} ref={(el) => { if (el) levelEls.current.set(l.title, el); else levelEls.current.delete(l.title); }} style={{ visibility: "hidden" }}
+            className={cn("num pointer-events-none absolute top-0 left-0 z-[1] flex h-[18px] items-center gap-1.5 rounded-[3px] border bg-paper/90 px-1.5 text-[10px] font-bold tracking-[0.06em] uppercase",
+              l.buy ? "border-up/50 text-up" : "border-down/50 text-down")}>
+            <i className={cn("size-1.5", l.buy ? "bg-up" : "bg-down")} />{l.title}<b className="text-ink">{usdP(l.price)}</b>
+          </span>
+        ))}
         {tip && <TipPanel tip={tip} w={box.current?.clientWidth ?? 0} h={box.current?.clientHeight ?? 0} />}
         {/* curve full, pool not live yet: trading is paused (components/Migrating.tsx) */}
         {migrating ? <MigratingOverlay since={migrating} /> : null}

@@ -378,7 +378,8 @@ export function Position({ pos, mint, symbol, solUsd }: { pos: Pos; mint: string
   const cell = (label: ReactNode, value: ReactNode, cls = "") => (
     <div className="flex min-w-0 flex-col gap-0.5"><small className="flex items-center gap-1 text-xs whitespace-nowrap text-muted">{label}</small><b className={cn("num text-md font-semibold text-ink", cls)}>{value}</b></div>
   );
-  const dash = (c: string) => <i className={cn("inline-block w-2.5 border-t border-dashed", c)} />;
+  // A square in the colour of the line the figure draws on the chart.
+  const sq = (c: string) => <i className={cn("inline-block size-1.5", c)} />;
   const move = entry && mcapNow ? (mcapNow / entry - 1) * 100 : null;
   return (
     <div className={card}>
@@ -393,8 +394,8 @@ export function Position({ pos, mint, symbol, solUsd }: { pos: Pos; mint: string
       {has && (
         <Tip tip="Market caps. Averages are per token: all the SOL paid (or got) over all the tokens bought (or sold).">
           <div className={cn("mt-2.5 grid gap-1.5 border-t border-rule pt-2.5", exit != null ? "grid-cols-4" : "grid-cols-3")}>
-            {cell(<>{dash("border-up")}Avg buy</>, entry ? usdK(entry) : "—")}
-            {exit != null && cell(<>{dash("border-down")}Avg sell</>, usdK(exit))}
+            {cell(<>{sq("bg-up")}Avg buy</>, entry ? usdK(entry) : "—")}
+            {exit != null && cell(<>{sq("bg-down")}Avg sell</>, usdK(exit))}
             {cell("Now", mcapNow ? usdK(mcapNow) : "—")}
             {cell("Since buy", move == null ? "—" : `${move >= 0 ? "+" : "−"}${Math.abs(move).toFixed(0)}%`, move == null ? "" : move >= 0 ? "text-up" : "text-down")}
           </div>

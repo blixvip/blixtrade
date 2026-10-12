@@ -72,11 +72,20 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
     pos.tokens = held?.ui ?? (Array.isArray(me?.wallet?.tokens) ? 0 : null);
     pos.has = list.length > 0 || Boolean(held);
     pos.canSell = (held?.ui ?? 0) > 0;
-    // What was paid (or got) per token against what a token is worth now, applied to the cap now.
+    // The averages as market caps: SOL paid (or got) per token, times the SOL price, times the supply. The vault
+    // reports tokens in raw units; the wallet's own figure (ui) gives the decimals when both are there and agree
+    // on a power of ten, otherwise pump.fun's six. This holds after selling out too (nothing held to divide by).
+    const supply = c?.supply && c.supply > 0 ? c.supply : null;
+    const derived = held && held.ui > 0 && heldRaw > 0 ? Math.log10(heldRaw / held.ui) : null;
+    const rawPerUi = derived != null && Math.abs(derived - Math.round(derived)) < 0.05 ? 10 ** Math.round(derived) : 1e6;
+    const capOf = (sol: number, raw: number) => (sol > 0 && raw > 0 && solUsd > 0 && supply ? (sol / raw) * rawPerUi * solUsd * supply : null);
+    pos.entry = capOf(pos.bought, boughtRaw);
+    pos.exit = capOf(pos.sold, soldRaw);
+    // Without a supply or a SOL price: what was paid per token against what a token is worth now, on the cap now.
     const nowPer = pos.holding && heldRaw > 0 ? pos.holding / heldRaw : null;
     if (mcapNow && nowPer) {
-      if (pos.bought && boughtRaw) pos.entry = (mcapNow * (pos.bought / boughtRaw)) / nowPer;
-      if (pos.sold && soldRaw) pos.exit = (mcapNow * (pos.sold / soldRaw)) / nowPer;
+      if (pos.entry == null && pos.bought && boughtRaw) pos.entry = (mcapNow * (pos.bought / boughtRaw)) / nowPer;
+      if (pos.exit == null && pos.sold && soldRaw) pos.exit = (mcapNow * (pos.sold / soldRaw)) / nowPer;
     }
   }
   pos.pnl = pos.has && pos.holding != null ? pos.sold + pos.holding - pos.bought : null;

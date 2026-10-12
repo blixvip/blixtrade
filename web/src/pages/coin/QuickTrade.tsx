@@ -182,6 +182,13 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const broke = !paperOn && cash != null && cash < Math.min(...buyP);
   const spin = <i className="size-3.5 animate-spin rounded-full border-2 border-current/25 border-t-current" />;
   const iconBtn = "grid size-6 place-items-center rounded-[4px] text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink";
+  // A figure with its name over it in the small capitals, and a square in a line's colour when it is one.
+  const stat = (name: string, value: ReactNode, square?: string) => (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className={cn(label, "flex items-center gap-1.5 text-[10px] whitespace-nowrap text-muted")}>{square && <i className={cn("size-1.5 shrink-0", square)} />}{name}</span>
+      <b className="text-[13px] font-bold text-ink">{value}</b>
+    </span>
+  );
   // A group's top line: its side, then what there is on that side (the balance, or the holding).
   const line = (left: ReactNode, right: ReactNode) => (
     <div className="flex h-5 items-center justify-between gap-2">
@@ -296,13 +303,15 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
       {pnlCard.dialog}
       {/* The foot, only when there is something to say: the position's averages and result, or how to get money in. */}
       {(pos.has || broke) && (
-        <div className="num flex min-h-9 items-center gap-x-3 gap-y-1 border-t border-rule px-3 py-1.5 text-[12px] text-muted">
+        <div className="num flex min-h-10 items-center gap-x-3.5 border-t border-rule px-3 py-1.5 text-[12px] text-muted">
           {pos.has ? (
             <>
-              <span>Avg buy <b className="font-semibold text-ink">{usdK(pos.entry)}</b></span>
-              {pos.exit != null && <span>Avg sell <b className="font-semibold text-ink">{usdK(pos.exit)}</b></span>}
+              {/* Each average as a stat: a square in the colour of its line on the chart, the name, the cap. */}
+              {stat("Avg buy", usdK(pos.entry), "bg-up")}
+              {pos.exit != null && stat("Avg sell", usdK(pos.exit), "bg-down")}
+              {stat("Now", usdK(pos.mcapNow))}
               <button onClick={pnlCard.open} title="Open your PnL card"
-                className={cn("ml-auto flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 font-bold transition-colors duration-100 hover:bg-paper-4", (pos.pnl ?? 0) >= 0 ? "text-up" : "text-down")}>
+                className={cn("ml-auto flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 text-[13px] font-bold transition-colors duration-100 hover:bg-paper-4", (pos.pnl ?? 0) >= 0 ? "text-up" : "text-down")}>
                 {pos.pnl == null ? "—" : <SolAmt v={pos.pnl} signed />}
                 {pnlPct != null && <span className="opacity-80">{pnlPct >= 0 ? "+" : "−"}{Math.abs(pnlPct).toFixed(0)}%</span>}
               </button>
