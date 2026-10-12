@@ -34,8 +34,9 @@ if (typeof window !== "undefined") { const go = () => { loadChart().catch(() => 
 
 const W = 360, CHART_H = 190, GAP = 14, CLOSE_MS = 150;
 // Inside a row, these keep their own hover (links, buttons, the picture's big preview, the known-holder faces): no
-// chart card from them.
-const OWN = "a, button, [data-coin-pic], [data-known-holders]";
+// chart card from them. Popups too ([role=tooltip]: the tweet card, tooltips): they are drawn over the page but sit
+// inside their row in React's event tree, so moving over a tweet card used to open the chart of the row beneath it.
+const OWN = "a, button, [data-coin-pic], [data-known-holders], [role=tooltip]";
 
 const useCard = create<{ mint: string | null; open: boolean }>(() => ({ mint: null, open: false }));
 let box: HTMLDivElement | null = null;            // the card's outer layer, moved directly
