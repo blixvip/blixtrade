@@ -167,10 +167,13 @@ export class ChartIcons implements ISeriesPrimitive<Time> {
           continue;
         }
         const face = b.kind === "person" || b.kind === "call";
-        // Faces stay big enough to see who it is (8 px radius at least), your own B / S always readable.
-        const r = b.kind === "own" || b.kind === "migrate" ? size(R, 8.5) : face ? Math.max(11, Math.min(RP + 1, spacing0 * 0.9)) : size(R);
+        // Faces stay big enough to see who it is (8 px radius at least); your own B / S as big as a face, never
+        // smaller than the rest (the user, 2026-10-12).
+        const r = b.kind === "own" || face ? Math.max(11, Math.min(RP + 1, spacing0 * 0.9)) : b.kind === "migrate" ? size(R, 8.5) : size(R);
         const x = Math.min(Math.max(x0, r + 1), W - r - 1);   // never half off the pane's edge
-        const twin = placed.find((p) => p.time === time && same(p.b, b));
+        // Your own trades are never folded into one bubble with a count: three buys in a candle are three B's,
+        // stacked (the user, 2026-10-12). Everyone else's repeat in a candle is one bubble with the count.
+        const twin = b.kind === "own" ? undefined : placed.find((p) => p.time === time && same(p.b, b));
         if (twin) {
           twin.n += b.n;
           if (twin.also < 6) twin.tip.push(`Also: ${b.tip[0]}`); else if (twin.also === 6) twin.tip.push("…and more");

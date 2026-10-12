@@ -7,6 +7,7 @@ import { useTrade } from "@/lib/mode";
 import { usePulse } from "@/lib/pulse";
 import { useMe } from "@/lib/ui";
 import { markValue } from '@/lib/position-value';
+import { useFeeBps } from "@/components/ShareLink";
 
 interface RealTx { kind: string; mint: string | null; sol: number | null; tokens: string | null; status: string }
 export interface Pos {
@@ -26,6 +27,7 @@ export interface Pos {
 
 export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | null): Pos {
   const paper = useTrade((st) => st.paper), me = useMe((st) => st.me);
+  const feeRate = useFeeBps() / 10_000;   // Blix's fee, inside every live trade's SOL figure
   const [txs, setTxs] = useState<{ mint: string; list: RealTx[] }>({ mint, list: [] });
   const walletKey = me?.signedIn ? `${me.wallet?.sol}:${me.wallet?.tokens?.length}` : "";
   useEffect(() => {
@@ -78,9 +80,12 @@ export function usePosition(mint: string, r: TokenDetail | null, c: CoinData | n
     const supply = c?.supply && c.supply > 0 ? c.supply : null;
     const derived = held && held.ui > 0 && heldRaw > 0 ? Math.log10(heldRaw / held.ui) : null;
     const rawPerUi = derived != null && Math.abs(derived - Math.round(derived)) < 0.05 ? 10 ** Math.round(derived) : 1e6;
+    // A buy's SOL figure includes Blix's fee and a sell's is net of it: the averages are at the market, so the fee
+    // comes off a buy (and goes back on a sell) before the SOL meets the tokens. Otherwise the buy line sat a fee
+    // above where the coin was bought (the user, 2026-10-12: "presenting the line at the wrong market cap").
     const capOf = (sol: number, raw: number) => (sol > 0 && raw > 0 && solUsd > 0 && supply ? (sol / raw) * rawPerUi * solUsd * supply : null);
-    pos.entry = capOf(pos.bought, boughtRaw);
-    pos.exit = capOf(pos.sold, soldRaw);
+    pos.entry = capOf(pos.bought * (1 - feeRate), boughtRaw);
+    pos.exit = capOf(pos.sold / (1 - feeRate), soldRaw);
     // Without a supply or a SOL price: what was paid per token against what a token is worth now, on the cap now.
     const nowPer = pos.holding && heldRaw > 0 ? pos.holding / heldRaw : null;
     if (mcapNow && nowPer) {
