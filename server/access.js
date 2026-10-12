@@ -8,7 +8,7 @@ const OPEN = [
   /^\/api\/(me|pulse|overview|bot|signals|tokens|discover|running|desk|xcard|sparks|market|narratives|clusters|perf|briefs|research|triage|picks|picks\/all|health)$/,
   // fomo/bars: the coin's Fomo chart (fomochart.js). chartfocus: the TradingView chart (coins past their first day) marks
   // itself open so the radar sends its trades live; refused, a member's chart moved only on Jupiter's trailing candles.
-  new RegExp(`^/api/(holders|candles|token|research|fomo/bars|gecko/price|replay|chartfocus)/${MINT}$`),
+  new RegExp(`^/api/(holders|candles|token|research|fomo/bars|gecko/price|replay|chartfocus|jup)/${MINT}$`),   // jup: the coin page's About card figures
   /^\/api\/candles\/warm$/,   // the Pulse chart card's candles for every row on the page, ahead of the pointer (hoverChart.ts)
   new RegExp(`^/api/coin/${MINT}(/trades|/big)?$`),
   /^\/api\/replay\/peaks$/,   // Practice list: highs of the day (replay.js)

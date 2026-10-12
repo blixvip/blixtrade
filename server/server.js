@@ -1617,6 +1617,9 @@ async function handleRequest(req, res) {
       d.rule = db.prepare("SELECT effect FROM alert_rules WHERE scope = 'wallet' AND target = ?").get(wm[1])?.effect || null;
       return send(res, 200, d);
     }
+    // The coin page's About card: Jupiter's figures for every window at once (jupdisc.js windows).
+    const jw = p.match(new RegExp(`^/api/jup/(${MINT})$`));
+    if (jw) return send(res, 200, jupdisc.windows(jw[1]) || { t: null, windows: null });
     // The Create coin page's helpers (launchtools.js): clone a coin's details, write them from an idea, what is on.
     if (p === "/api/launch/status") return send(res, 200, await launchStatus());
     if (p === "/api/launch/ticker") return send(res, 200, tickerUse(params.sym));

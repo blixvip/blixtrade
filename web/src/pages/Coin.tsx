@@ -16,7 +16,7 @@ import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
 import { QuickTrade } from "./coin/QuickTrade";
 import { setQuickCoin } from "@/lib/quick";
-import { Addresses, Flow, Info, Links, Position, TradePanel } from "./coin/Side";
+import { Addresses, Flow, Info, Links, Position, TradePanel, About } from "./coin/Side";
 import { CoinTabs, SideTrades } from "./coin/Tabs";
 import { BubbleMapTab } from "./coin/BubbleMap";
 import { Empty } from "./coin/parts";
@@ -242,6 +242,7 @@ export function Coin({ mint }: { mint: string }) {
           <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} migrating={migratingNow(c?.migrating?.since)} />
           <Flow c={c} />
           <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} migrating={migratingNow(c?.migrating?.since)} />
+          <About r={r} c={c} />
           <Position pos={pos} mint={mint} symbol={symbol} solUsd={c?.solUsd} />
           <Info r={r} c={c} />
           <Addresses r={r} c={c} />

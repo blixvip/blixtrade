@@ -61,6 +61,22 @@ export function want(mints) {
   if (fresh && !kick) kick = setTimeout(() => { kick = null; refresh().catch(() => {}); }, 300);
 }
 
+// Every window at once (the coin page's About card: 5m, 1h, 6h, 24h change, buys and sells, volumes, traders), from
+// the last answer under 10 minutes old; asks for the coin when it is not on hand. null until Jupiter has answered.
+const WINS = [["5m", "stats5m"], ["1h", "stats1h"], ["6h", "stats6h"], ["24h", "stats24h"]];
+export function windows(mint) {
+  want([mint]);
+  const c = cache.get(mint);
+  if (!c || now() - c.t > 10 * 60_000) return null;
+  const v = c.v, out = {};
+  for (const [k, key] of WINS) {
+    const s = v[key] || {};
+    out[k] = { chg: s.priceChange ?? null, buys: s.numBuys ?? null, sells: s.numSells ?? null, buyVol: s.buyVolume ?? null, sellVol: s.sellVolume ?? null,
+      traders: s.numTraders ?? null, netBuyers: s.numNetBuyers ?? null, organicBuyers: s.numOrganicBuyers ?? null };
+  }
+  return { t: c.t, mcap: v.mcap || v.fdv || null, holders: v.holderCount ?? null, launchpad: v.launchpad || null, dev: v.dev || null, windows: out };
+}
+
 // The figures for one window, or null when Jupiter has not answered for this coin in the last 30 s.
 export function figures(mint, win = "1h") {
   const c = cache.get(mint);
