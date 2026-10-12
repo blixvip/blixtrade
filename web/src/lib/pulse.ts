@@ -1,3 +1,4 @@
+import { observeAttention } from "./attention";
 import { watchStream } from "./streamWatch.js";
 import { validTrade } from "../../../server/chart-data.js";
 import { useEffect, useState } from "react";
@@ -25,7 +26,7 @@ export interface Coin {
   hl?: { h?: number | null; t10?: number | null; dev?: number | null; ds?: string | number | null; sn?: number; snN?: number; bd?: number; bdN?: number } | null;
   ai?: { status?: string; grade?: string | null; score?: number | null; tier?: string | null; verdict?: string | null; model?: string | null; rated?: boolean; action?: string | null; pwin?: number | null; tag?: string | null; t?: number | null } | null;
   tri?: { label: string; score: number; why?: string; src?: string } | null;
-  warn?: { kind: "stale" | "emptied" | "odd-curve"; text: string } | null;
+  warn?: { kind: "stale" | "emptied" | "odd-curve" | "price-quality"; text: string } | null;
   win?: { trades: number; traders: number; netSol: number; chg?: number | null } | null;
   mv?: boolean;   // real trading in the last 5 minutes (server/coverage.js): never hidden as a rug
 }
@@ -276,14 +277,24 @@ export function pushCoinMc(mint: string, mc: number) { if (Number.isFinite(mc) &
 // trade stream, which holds a per-coin chain subscription on the server (Helius credits) for as long as it is open.
 // A coin a day old or more is read from its Gecko chart only (pages/coin/Chart.tsx, Header.tsx).
 const streaming = new Map<string, number>();
-export function onCoinTrade(mint: string, fn: (x: CoinTrade) => void, stream = true) {
+export function onCoinTrade(mint: string, fn: (x: CoinTrade) => void, stream = true, element?: Element | null) {
   let set = tradeFns.get(mint);
   if (!set) tradeFns.set(mint, (set = new Set()));
   set.add(fn);
-  if (stream) { const n = (streaming.get(mint) || 0) + 1; streaming.set(mint, n); if (n === 1) openFast(mint); }
+  let subscribed = false;
+  const demand = (visible: boolean) => {
+    const wanted = stream && visible;
+    if (wanted === subscribed) return;
+    subscribed = wanted;
+    const n = (streaming.get(mint) || 0) + (wanted ? 1 : -1);
+    if (n <= 0) { streaming.delete(mint); closeFast(mint); }
+    else { streaming.set(mint, n); if (wanted && n === 1) openFast(mint); }
+  };
+  const stop = element ? observeAttention(element, demand) : () => {};
+  if (!element) demand(true);
   return () => {
     set!.delete(fn);
-    if (stream) { const n = (streaming.get(mint) || 1) - 1; if (n <= 0) { streaming.delete(mint); closeFast(mint); } else streaming.set(mint, n); }
+    stop(); demand(false);
     if (!set!.size) tradeFns.delete(mint);
   };
 }
@@ -293,7 +304,7 @@ export function onCoinTrade(mint: string, fn: (x: CoinTrade) => void, stream = t
 // chart never steps back to an older price.
 const fast = new Map<string, { es: EventSource; last: number; stop: () => void }>();
 function openFast(mint: string) {
-  if (typeof EventSource === "undefined" || !streaming.has(mint)) return;
+  if (typeof EventSource === "undefined" || document.hidden || !streaming.has(mint)) return;
   closeFast(mint);
   const es = new EventSource(streamUrl(`api/fast/stream?mint=${mint}`), streamInit()), f = { es, last: 0, stop: () => {} };
   let opened = false;
@@ -321,6 +332,12 @@ function openFast(mint: string) {
   };
 }
 function closeFast(mint: string) { fast.get(mint)?.stop(); fast.delete(mint); }
+// Keep listener/cache state, release paid demand immediately in background tabs.
+// The server's 15-second lease absorbs brief tab switches without subscription churn.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) for (const mint of [...fast.keys()]) closeFast(mint);
+  else for (const mint of streaming.keys()) if (!fast.has(mint)) openFast(mint);
+});
 // A coin's market cap from its latest trade (null until one comes in while the page is open), once a frame.
 export function useTradeMc(mint: string, stream = true) {
   const [mc, setMc] = useState<{ mint: string; mc: number } | null>(null);
@@ -369,6 +386,10 @@ export function onFomoBar(mint: string, res: string, fn: (b: FomoBar) => void) {
 }
 // An open coin's holder figures each time the chain changes them (`cholders`), at most 4 times a second.
 export interface LiveHolders { mint: string; holders: number | null; top10: number | null; devPct: number | null; source: string | null; t: number }
+// The wallet tracker's pushes (server/wtrack.js): a tracked wallet's trade or transfer, sent only to the member whose
+// list the wallet is on. components/WalletTracker.tsx listens while it is open.
+const trackerFns = new Set<(kind: "trade" | "transfer", row: any) => void>();
+export const onTracker = (fn: (kind: "trade" | "transfer", row: any) => void) => { trackerFns.add(fn); return () => { trackerFns.delete(fn); }; };
 const holderFns = new Map<string, Set<(h: LiveHolders) => void>>();
 export function useCoinHolders(mint: string) {
   const [h, setH] = useState<LiveHolders | null>(null);
@@ -412,8 +433,17 @@ export function startPulse() {
     on("fees", (d) => { for (const r of d.u) queue.fees.push(r); later(); });
     // A coin just migrated (server.js onMigrated): its chip goes now and the board is re-read within a second or
     // two, so it sits in Migrated at a second old instead of waiting out the 15 s poll in Final Stretch.
+    // The coin leaves Final Stretch (and Running) for the top of Migrated this instant, born again now (so it reads
+    // "1s"), bonded, with its pool, name and curve-end market cap; the board read that follows confirms it.
     on("migrated", (d) => {
-      usePulse.setState((s) => { const c = s.coins[d.mint]; return c && c.migrating ? { coins: { ...s.coins, [d.mint]: { ...c, migrating: null, progress: 1 } } } : s; });
+      usePulse.setState((s) => {
+        const c = s.coins[d.mint];
+        if (!c) return s;
+        const coin: Coin = { ...c, migrating: null, progress: 1, graduated: true, dex: "pumpswap", born: Date.now(), pool: d.pool || c.pool || null,
+          symbol: c.symbol || d.symbol || null, name: c.name || d.name || null, mcap: c.mcap || d.mcap || null, state: "tracked" };
+        const drop = (l: string[]) => l.filter((m) => m !== d.mint);
+        return { coins: { ...s.coins, [d.mint]: coin }, cols: { ...s.cols, running: drop(s.cols.running), stretch: drop(s.cols.stretch), migrated: [d.mint, ...drop(s.cols.migrated)] } };
+      });
       refreshSoon();
     });
     // Every coin that traded in the last 100 ms, curve or pool: the live figure everywhere a market cap shows.
@@ -425,6 +455,8 @@ export function startPulse() {
     on("fbar", (d) => fbarFns.get(`${d.mint}:${d.res}`)?.forEach((fn) => fn(d)));
     on("launch", applyLaunch);
     on("pic", (d) => picReady(d.mint, d.data));   // the radar just got this coin's logo (usually with the picture itself)
+    on("wtrade", (d) => { if (d.row) trackerFns.forEach((fn) => fn("trade", d.row)); });
+    on("wtransfer", (d) => { if (d.row) trackerFns.forEach((fn) => fn("transfer", d.row)); });
     s.onerror = () => {
       if (stopped || es !== s) return;
       if (es === s && !opened && streamFailed()) return open();

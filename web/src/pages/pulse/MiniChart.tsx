@@ -16,7 +16,7 @@ import { api } from "@/lib/api";
 import { usdP } from "@/lib/coin";
 import { onCoinTrade, usePulse } from "@/lib/pulse";
 import { cn } from "@/lib/utils";
-import { LIVE_TF, OVERVIEW_TF, primeCandles, windowSince, type Candles, type Row } from "./hoverChart";
+import { CHART_BG, LIVE_TF, OVERVIEW_TF, primeCandles, windowSince, type Candles, type Row } from "./hoverChart";
 
 export interface MiniState { last: Row | null; first: Row | null; empty: boolean; note?: string | null; liveAt: number; tf: number }
 // What the overlays need: where the last price sits, and the drawn high and low.
@@ -26,6 +26,8 @@ const BAR = 6;              // candle width at rest: 45 or so candles across the
 const MAX_BAR = 40;         // never wider: a coin a few minutes old shows a few readable candles, not three slabs
 const PILL_PX = 84;         // room kept at the right edge for the last-price pill, so it never covers the newest candles
 const INTRO_MS = 500, ZOOM_MS = 620, LAND_MS = 540;   // the overview is held (the user: "half a second"); the zoom into its newest minutes; the settle into the live view
+const FADE_MS = 240;        // the crossfade at the hand-off: the zoom's last frame dissolving into the 5 s candles in the same pixels
+const SLIDE_MS = 260;       // every later change of view (a new candle, a redraw) glides this long; nothing snaps (the user: "not cutty")
 const FILL_MAX = 30_000;    // as the real chart: a silence this long (in candles) is drawn flat, past it the chart starts over
 const MIN_RANGE = 0.03;     // the price axis spans at least 3% of the price, so a 1% move looks like 1%
 const START_SOL = 27.96;    // pump.fun's opening market cap in SOL: a pump coin's chart starts there, flat until its first trade
@@ -47,27 +49,14 @@ const alpha = (rgb: string, a: number) => rgb.replace(/^rgb\((.+)\)$/, `rgba($1,
 // Live trades arrive rounded (8 digits of market cap, cents of volume): within that, the same candle.
 const near = (x: number, y: number) => Math.abs(x - y) <= Math.abs(y) * 1e-6;
 const sameRow = (a: Row | undefined, b: Row) => Boolean(a) && near(a!.open, b.open) && near(a!.high, b.high) && near(a!.low, b.low) && near(a!.close, b.close) && Math.abs((a!.value || 0) - (b.value || 0)) < 0.05;
-// Every interval between the first and last candle gets a slot: a quiet one is an empty slot (`fill`: drawn as
-// nothing, the area flat through it), so bar index is linear in time and the minute candles map exactly onto their
-// 5 s candles at the hand-off. The full chart compresses quiet stretches instead; here time reads true. Capped, so
-// a coin quiet for days never gets a slot per interval.
-const FILL_CAP = 4000;
-function fillGaps(rows: Row[], tf: number): Row[] {
-  const out: Row[] = [];
-  let added = 0;
-  for (const x of rows) {
-    const prev = out[out.length - 1];
-    if (prev) {
-      const gap = Math.round((x.time - prev.time) / tf) - 1;
-      if (gap > 0 && added + gap <= FILL_CAP) { for (let k = 1; k <= gap; k++) out.push({ time: prev.time + k * tf, open: prev.close, high: prev.close, low: prev.close, close: prev.close, value: 0, fill: true }); added += gap; }
-    }
-    out.push(x);
-  }
-  return out;
-}
+// Only traded intervals are drawn, back to back (continuousBars, exactly as the full chart): a coin that trades a
+// few times a minute is a dense chart at 5 s, not a few candles in a field of empty slots. (An earlier version gave
+// every quiet 5 s slot an empty bar so the hand-off could be pixel-exact per minute; the user, 2026-10-11: "some
+// coins are showing inconsistent charts".) The hand-off aligns the span of the zoomed minutes instead (frame).
 
 export function MiniChart({ mint, born, onState }: { mint: string; born?: number | null; onState: (s: MiniState) => void }) {
   const box = useRef<HTMLDivElement>(null);
+  const snap = useRef<HTMLCanvasElement>(null);   // the crossfade's top layer at the hand-off (snapshot, below)
   const tell = useRef(onState);
   tell.current = onState;
   const [marks, setMarks] = useState<Marks | null>(null);
@@ -84,7 +73,8 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       rightPriceScale: { visible: false, scaleMargins: { top: 0.2, bottom: 0.2 } },
       leftPriceScale: { visible: false },
-      timeScale: { visible: false, rightOffset: 2, barSpacing: BAR, minBarSpacing: 0.5, maxBarSpacing: MAX_BAR, shiftVisibleRangeOnNewBar: true },
+      // A new candle never shifts the view by itself (that is a one-frame jump): put() glides there (SLIDE_MS).
+      timeScale: { visible: false, rightOffset: 2, barSpacing: BAR, minBarSpacing: 0.5, maxBarSpacing: MAX_BAR, shiftVisibleRangeOnNewBar: false },
       crosshair: { mode: CrosshairMode.Hidden },
       handleScroll: false, handleScale: false,
       localization: { priceFormatter: usdP },
@@ -138,6 +128,10 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       return { from: to - span, to };
     };
     let zoomRaf = 0;   // the zoom under way (the view is its own until it lands)
+    let hold = 0;      // the hand-off's hold while the crossfade runs (the view stays put until it is done)
+    const busy = () => zoomRaf !== 0 || hold !== 0;
+    let zoomed = false;   // the zoom has begun (the overview is no longer brought up to date in place)
+    let lifeFirst: Row | null = null;   // the overview's first candle: the move's reference for the whole card
     // The high and low of candles a..b of `rows` (the price range they need, never narrower than MIN_RANGE).
     const spanOf = (rows: Row[], a: number, b: number): Span | null => {
       let h = -Infinity, l = Infinity;
@@ -166,31 +160,76 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
     // The hand-off from the overview to the live candles: the zoom ends on `range` of the minute candles (`rows`);
     // the first live draw puts the same window on the 5 s candles, each minute candle's pixels given to the 5 s candles
     // inside that minute, the price range still pinned where it was. Only traded intervals are drawn (continuousBars,
-    // as on the full chart), so bar index is not linear in time: the mapping goes through the rows themselves. Then
-    // the view settles into the live view and the pin is let go.
-    // px60: the minute spacing on screen at the end of the zoom, xB: where the current minute's left edge is (both
-    // read off the library's own layout, which clamps bar spacing to MAX_BAR whatever range was asked for).
-    let handoff: { px60: number; xB: number; rows: Row[] } | null = null;
+    // as on the full chart), so a minute is not twelve 5 s bars: the 5 s bars from the first zoomed minute on are
+    // spread over the same pixels those minutes took, first bar where the first minute was, last where the last was
+    // (the crossfade dissolves one picture into the other). Then the view settles into the live view, pin let go.
+    // tFirst: the first zoomed minute's time; xFirst / xLast: where that minute and the newest one sit on screen at
+    // the end of the zoom (read off the library's own layout, which clamps bar spacing to MAX_BAR whatever was asked).
+    let handoff: { tFirst: number; xFirst: number; xLast: number } | null = null;
     // The first index in `rows` whose time is at or after `t`.
     const lowerBound = (rows: Row[], t: number) => { let lo = 0, hi = rows.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (rows[mid].time < t) lo = mid + 1; else hi = mid; } return lo; };
+    // The zoom's last frame, copied over the chart for the crossfade at the hand-off (the canvas in the JSX below).
+    const snapshot = () => {
+      const s = snap.current;
+      if (!s) return false;
+      // The pane's canvases, in DOM order (the library draws the chart on one and the crosshair layer on another of
+      // the same size, both needed, in order: the one on top is transparent and alone would cover nothing).
+      const all = [...el.querySelectorAll("canvas")].filter((c) => c.width > 10);
+      const big = Math.max(0, ...all.map((c) => c.width * c.height)), cs = all.filter((c) => c.width * c.height === big);
+      const c = cs[0];
+      if (!c) return false;
+      const r = c.getBoundingClientRect(), w = el.getBoundingClientRect(), x = s.getContext("2d");
+      if (!x) return false;
+      s.width = c.width; s.height = c.height;
+      s.style.left = `${r.left - w.left}px`; s.style.top = `${r.top - w.top}px`; s.style.width = `${r.width}px`; s.style.height = `${r.height}px`;
+      // Opaque: the box's own ground first, then the chart. A transparent copy over the identical chart doubled the
+      // translucent parts (the area fill, anti-aliased edges) for a frame, a visible pulse at the hand-off.
+      const g = x.createLinearGradient(0, 0, 0, s.height);
+      g.addColorStop(0, CHART_BG[0]); g.addColorStop(1, CHART_BG[1]);
+      x.fillStyle = g; x.fillRect(0, 0, s.width, s.height);
+      for (const k of cs) x.drawImage(k, 0, 0);
+      s.style.opacity = "1";
+      return true;
+    };
     const frame = (count: number) => {
+      const was = framed;
       framed = true;
-      el.dataset.frame = `${tf}:${count}:${handoff ? "land" : zoomRaf ? "zooming" : "plain"}`;
-      if (zoomRaf) return;
+      el.dataset.frame = `${tf}:${count}:${handoff ? "land" : hold ? "hold" : zoomRaf ? "zooming" : "plain"}`;
+      if (busy()) return;
       if (tf === LIVE_TF && handoff && drawnRows.length) {
-        const { px60, xB, rows: m } = handoff;
+        const { tFirst, xFirst, xLast } = handoff;
         handoff = null;
-        // Slots are linear in time on both sides (fillGaps), so one minute bar is exactly twelve 5 s slots: the 5 s
-        // spacing is a twelfth of the minute spacing on screen, anchored where the current minute begins. Every
-        // whole minute then lands in its own pixels; the current minute's slots run from its left edge.
-        const W = chart.timeScale().width() || width(), px5 = px60 / (OVERVIEW_TF / LIVE_TF);
-        const aLast = lowerBound(drawnRows, m[m.length - 1].time);                 // the current minute's first 5 s slot
-        const same = { from: aLast - 0.5 - xB / px5, to: aLast - 0.5 - xB / px5 + W / px5 };
+        // The 5 s bars from the first zoomed minute on, spread over the pixels those minutes took: the first of them
+        // where the first minute sat, the newest where the newest minute sat; the bars between at the density the
+        // coin really traded at. (Fewer than two such bars, or a width the library will not draw: the resting width.)
+        const W = chart.timeScale().width() || width();
+        const a0 = Math.min(drawnRows.length - 1, lowerBound(drawnRows, tFirst)), k = drawnRows.length - 1 - a0;
+        let px5 = k >= 1 ? (xLast - xFirst) / k : BAR;
+        if (!(px5 >= 0.5 && px5 <= MAX_BAR)) px5 = BAR;
+        const same = { from: a0 - xFirst / px5, to: a0 - xFirst / px5 + W / px5 };
         chart.timeScale().setVisibleLogicalRange(same);
-        animateRange(same, () => liveRange(n), LAND_MS, pin, () => { const r = liveRange(n); return spanOf(drawnRows, r.from, r.to); }, true);
+        // The crossfade: the zoom's last frame (snapshot, taken a frame before the hand-off) dissolves into the 5 s
+        // candles beneath, which hold the same pixels for FADE_MS; then the view settles into the live view. A single
+        // frame of minute candles becoming 5 s candles read as a cut (the user, 2026-10-11: "not cutty").
+        const s = snap.current;
+        if (s && s.style.opacity === "1") { const a = s.animate([{ opacity: 1 }, { opacity: 0 }], { duration: FADE_MS, easing: "ease-in-out", fill: "forwards" }); a.onfinish = () => { s.style.opacity = "0"; a.cancel(); }; }
+        clearTimeout(hold);
+        hold = window.setTimeout(() => {
+          hold = 0;
+          if (!alive) return;
+          el.dataset.frame = `${tf}:${n}:land`;
+          animateRange(chart.timeScale().getVisibleLogicalRange() ?? same, () => liveRange(n), LAND_MS, pin, () => { const r = liveRange(n); return spanOf(drawnRows, r.from, r.to); }, true);
+        }, FADE_MS);
+        el.dataset.frame = `${tf}:${count}:hold`;
         return;
       }
-      chart.timeScale().setVisibleLogicalRange(tf === OVERVIEW_TF ? wholeRange(count - 1) : liveRange(count));
+      // The view for what is drawn: the whole overview, or the live view. Set outright on the first frame; once on
+      // screen it glides there (a new candle's room, a redraw's shift, the minute fallback zooming back out), and when
+      // it is already there nothing moves at all.
+      const target = () => (tf === OVERVIEW_TF ? wholeRange(n - 1) : liveRange(n));
+      const cur = chart.timeScale().getVisibleLogicalRange(), r = target();
+      if (!was || !cur || (Math.abs(cur.from - r.from) < 0.02 && Math.abs(cur.to - r.to) < 0.02)) { chart.timeScale().setVisibleLogicalRange(r); return; }
+      animateRange(cur, target, pin ? LAND_MS : SLIDE_MS, pin, () => { const q = target(); return spanOf(drawnRows, q.from, q.to); }, true);
     };
     // The high and low of the candles on screen (not of the whole history: a launch spike would hide the live range).
     const visibleHiLo = () => {
@@ -207,7 +246,9 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       const added = x.time > top;
       top = x.time;
       candles.update(candle(x)); area.update(point(x)); vol.update(volume(x));
-      if (added) { n++; drawnRows.push(x); if (framed && !zoomRaf) { const r = chart.timeScale().getVisibleLogicalRange(); if (r && r.from < -1) frame(n); } }
+      // A new candle: the view glides to make room for it (at the resting width one bar's worth, on a young coin's
+      // spread-out chart a little tighter), never a one-frame shift.
+      if (added) { n++; drawnRows.push(x); if (framed && !busy() && tf === LIVE_TF) { const r = chart.timeScale().getVisibleLogicalRange(); if (r) animateRange(r, () => liveRange(n), SLIDE_MS, null, () => null, false); } }
       else if (drawnRows.length) drawnRows[drawnRows.length - 1] = x;
     };
     const draw = (rows: Row[]) => {
@@ -217,6 +258,7 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       top = rows.length ? rows[rows.length - 1].time : -Infinity;
       n = rows.length;
       drawnRows = rows;
+      el.dataset.first = String(rows[0]?.time ?? "");   // for probes: where the drawn rows begin
     };
     // The figures over the chart follow at most once a frame: the card's header (React) at most four times a second,
     // the first answer at once; the overlays here (the last price's pill at its height, the high and low, the area's
@@ -236,6 +278,8 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
         if (!priceLine) priceLine = candles.createPriceLine({ price: last.close, color: alpha(ink, 0.35), lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
         else priceLine.applyOptions({ price: last.close });
         const y = candles.priceToCoordinate(last.close), [hi, lo] = visibleHiLo();
+        const vr = chart.timeScale().getVisibleLogicalRange();   // for probes: the view, as asked for
+        if (vr) el.dataset.range = `${vr.from.toFixed(2)},${vr.to.toFixed(2)}`;
         if (y != null && Number.isFinite(hi) && Number.isFinite(lo)) setMarks({ y, close: last.close, hi, lo, up: isUp });
       });
     };
@@ -251,9 +295,15 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
     };
     // Takes an answer as what is drawn: the whole set (a base read) or the newest candles merged in (a refresh).
     const take = (d: Candles, got: Row[], since: number | null, base: boolean) => {
-      if (base || !(d.source === src && d.first === rawFirst)) { raw = got; rawFirst = d.first ?? got[0]?.time ?? null; }
-      else raw = [...raw.filter((x) => x.time < since!), ...got];
-      const rows = fillGaps(continuousBars(anchored(raw, tf), tf, FILL_MAX) as Row[], tf);
+      // A refresh belongs to the history drawn (same source, same first candle), or the answer starts the chart over.
+      // The first refresh after a warm base (hoverChart.ts: the same store's candles, read ahead) always belongs: it is
+      // where the chart learns the history's source and first candle.
+      // A refresh from another source or history (load() asks for the whole window again then, at most once in 10 s)
+      // is otherwise merged like any other: it is never taken as the whole chart (the chart collapsed to the refresh's
+      // one candle when a quiet coin's source changed, 2026-10-11).
+      if (base) { raw = got; rawFirst = d.first ?? got[0]?.time ?? null; }
+      else { raw = [...raw.filter((x) => x.time < since!), ...got]; if (fromWarm || d.first !== rawFirst) { rawFirst = d.first ?? rawFirst; fromWarm = false; } }
+      const rows = continuousBars(anchored(raw, tf), tf, FILL_MAX) as Row[];
       const lastT = last?.time ?? Infinity;
       const late = Boolean(byTime) && !base && rows.some((x) => x.time < lastT && x.time >= (since ?? -Infinity) && !sameRow(byTime!.get(x.time), x));
       const redraw = base || !last || rows.length < 2 || d.source !== src || rows[0].time !== firstTime || late;
@@ -262,25 +312,42 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       const ahead = !redraw && last && rows.length && last.time > rows[rows.length - 1].time ? last : null;
       byTime = new Map(rows.map((x) => [x.time, x]));
       if (ahead) byTime.set(ahead.time, ahead);
-      firstTime = rows[0]?.time ?? null; firstRow = rows[0] ?? null;
+      // The move's reference (the header's %, the area's colour) stays the coin's whole-life open once the overview
+      // has shown it: the 5 s window's first candle is no reference, and switching to it flipped the colour at the
+      // hand-off (a whole-canvas cut).
+      firstTime = rows[0]?.time ?? null; firstRow = lifeFirst ?? rows[0] ?? null;
       last = ahead ?? rows[rows.length - 1] ?? null;
       src = d.source;
       note(last, { src: d.source || "" });
       report(d.note);
     };
     const primed = primeCandles(mint);
-    // ---- the live 5 s chart: the windowed first read (primed), then refreshes from 30 s before the last real candle on.
+    let fromWarm = false;   // the live chart's base is the warm candles: its first refresh adopts the history (take)
+    let rebasedAt = 0;      // when the whole window was last read again over a change of source (load)
+    // ---- the live 5 s chart: the first draw from what was primed (the windowed read if it has answered by the
+    // hand-off, else the warm candles at once, else that read awaited), then refreshes from 30 s before the last real
+    // candle on. Only the 5 s size has primed candles; the minute fallback (below) reads its own window.
     const load = async (whole: boolean): Promise<void> => {
       const base = first || whole || !raw.length;
       const since = base ? windowSince(tf) : raw[raw.length - 1].time - Math.ceil(30 / tf) * tf;
-      const kept = first ? await primed.live : null;
-      const d = kept ? kept.data : await api<Candles>(`candles/${mint}?tf=${tf}&since=${since}`);
-      catchUp = Boolean(kept);
+      let d: Candles, kept = false;
+      if (first && tf === LIVE_TF) {
+        kept = true;
+        if (primed.liveGot) d = primed.liveGot;
+        else if (primed.liveNow) { d = primed.liveNow; fromWarm = true; }
+        else d = (await primed.live).data;
+      } else d = await api<Candles>(`candles/${mint}?tf=${tf}&since=${since}`);
+      catchUp = kept;
       if (!alive) return;
-      const got = d.rows.filter((x) => x.open > 0 && x.close > 0);
+      const got = normalizeBars(d.rows) as Row[];
+      if (!got.length && last) { catchUp = false; return; }
       // No 5 s candles to speak of (a coin the radar only has minute candles for): the minute candles stay, live.
-      if (first && tf === LIVE_TF && got.length < 2) { tf = OVERVIEW_TF; handoff = null; pin = null; cancelAnimationFrame(zoomRaf); zoomRaf = 0; raw = []; first = true; return load(true); }
+      // ...it zooms back out to them (frame glides from the zoomed view to the whole, the pin going with it), no restart.
+      if (first && tf === LIVE_TF && got.length < 2) { tf = OVERVIEW_TF; handoff = null; cancelAnimationFrame(zoomRaf); zoomRaf = 0; if (snap.current) snap.current.style.opacity = "0"; raw = []; first = true; framed = true; return load(true); }
       if (!base && d.rev != null && rev != null && d.rev !== rev) { rev = d.rev; return load(true); }
+      // The refresh comes from another source or history than what is drawn: the whole window is read again from
+      // it (once in 10 s at most; a source that flaps is merged as it comes), so the chart changes over in one go.
+      if (!base && !fromWarm && src != null && !(d.source === src && d.first === rawFirst) && Date.now() - rebasedAt > 10_000) { rebasedAt = Date.now(); return load(true); }
       if (d.rev != null) rev = d.rev;
       take(d, got, since, base);
       first = false;
@@ -302,19 +369,21 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
     // then those minutes become the live 5 s candles. No overview (a coin with no minute candles yet, a failed read):
     // straight to the live chart.
     let introTimer = 0;
+    // The warm overview (read ahead for every row on the page) is drawn right here, in the same frame the card opens;
+    // only a row read ahead by nothing waits for its read.
     (async () => {
       let rows: Row[] = [];
       try {
-        const d = (await primed.overview).data;
+        const d = primed.overviewNow ?? (await primed.overview).data;
         if (!alive) return;
-        rows = fillGaps(continuousBars(anchored(d.rows.filter((x) => x.open > 0 && x.close > 0), OVERVIEW_TF), OVERVIEW_TF, Infinity) as Row[], OVERVIEW_TF);
+        rows = continuousBars(anchored(normalizeBars(d.rows) as Row[], OVERVIEW_TF), OVERVIEW_TF, Infinity) as Row[];
       } catch { /* straight to the live chart */ }
       if (!alive) return;
       if (rows.length < 2) return goLive();
       const pin0 = spanOf(rows, 0, rows.length - 1);
       pin = pin0;
       draw(rows); frame(rows.length);
-      firstRow = rows[0]; last = rows[rows.length - 1];
+      lifeFirst = firstRow = rows[0]; last = rows[rows.length - 1];
       note(last, { src: "overview" });
       report();
       introTimer = window.setTimeout(() => {
@@ -325,21 +394,50 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
         // is settled for the candles that will really be on screen, and the hand-off takes the view as it is.
         const endFrom = Math.max(-1, n - 5.5), end = wholeRange(n - 1, endFrom);
         const pinEnd = spanOf(rows, Math.min(endFrom, end.to - width() / MAX_BAR), n - 1) ?? pin0;
+        zoomed = true;
         animateRange(chart.timeScale().getVisibleLogicalRange() ?? wholeRange(n - 1), () => end, ZOOM_MS, pin0, () => pinEnd, false, () => {
-          const xl = chart.timeScale().logicalToCoordinate((n - 1) as never) ?? 0, xp = chart.timeScale().logicalToCoordinate((n - 2) as never) ?? xl - BAR;
-          const px60 = Math.max(1, xl - xp);
-          handoff = { px60, xB: xl - px60 / 2, rows: drawnRows }; goLive();
+          const vr = chart.timeScale().getVisibleLogicalRange();
+          const i0 = Math.max(0, Math.min(n - 1, Math.ceil(vr?.from ?? Math.max(0, n - 5))));   // the first minute wholly on screen
+          const xl = chart.timeScale().logicalToCoordinate((n - 1) as never) ?? width() - PILL_PX;
+          const x0 = chart.timeScale().logicalToCoordinate(i0 as never) ?? xl - (n - 1 - i0) * MAX_BAR;
+          const tFirst = drawnRows[i0]?.time ?? drawnRows[drawnRows.length - 1].time;
+          // One frame on, so the zoom's last step is on the canvas: that frame is copied over the chart (the top
+          // layer of the crossfade) and the live candles take over beneath it.
+          requestAnimationFrame(() => { if (!alive) return; snapshot(); handoff = { tFirst, xFirst: x0, xLast: xl }; goLive(); });
         });
       }, INTRO_MS);
     })();
+    // The live 5 s candles, once in (asked the moment the row was hovered): the overview's newest minutes are brought
+    // up to them while it is still held (the read-ahead overview can be a minute behind the live store), so the
+    // hand-off has nothing left to correct. Minutes a quiet gap away get their empty slots (fillGaps), so slots stay
+    // linear in time for the hand-off. Once the zoom has begun nothing is touched: the 5 s candles lay the newest
+    // minutes in themselves.
+    primed.live.then((r) => {
+      if (!alive || tf !== OVERVIEW_TF || zoomed || !drawnRows.length || !last) return;
+      const mins = new Map<number, Row>();
+      for (const x of normalizeBars(r.data.rows)) {
+        const t = Math.floor(x.time / OVERVIEW_TF) * OVERVIEW_TF, m = mins.get(t);
+        if (!m) mins.set(t, { time: t, open: x.open, high: x.high, low: x.low, close: x.close, value: x.value || 0 });
+        else { m.high = Math.max(m.high, x.high); m.low = Math.min(m.low, x.low); m.close = x.close; m.value = (m.value || 0) + (x.value || 0); }
+      }
+      const lastT = last.time;
+      let moved = false;
+      for (const m of [...mins.values()].sort((a, b) => a.time - b.time)) {
+        if (m.time < lastT) continue;
+        if (m.time > lastT) { m.open = last!.close; m.high = Math.max(m.high, m.open); m.low = Math.min(m.low, m.open); }   // continuous, as continuousBars draws
+        put(m); last = m; moved = true;
+      }
+      if (!moved) return;
+      note(last, { src: "overview+live" });
+      report();
+    }).catch(() => {});
     // Between polls every trade moves the live chart the moment the stream brings it: the newest candle takes the
     // trade, or a new one opens at the last close. The main stream carries a coin's trades while its candles are
     // being asked for (server chartFocus), so the card opens no stream of its own (`false`): a per-coin stream for
     // every row hovered held a connection each, and on HTTP/1.1 (a dev server, a tunnel) those stalled every other read.
-    const untrade = onCoinTrade(mint, (x) => {
-      const [, ms, mc, v] = x;
-      if (!alive || !validTrade(mc, v, ms)) return;
-      streamT = Date.now();
+    // A price for the live chart now: a trade (its volume, from the stream) or a bare price (v = 0: the row's own
+    // market cap, below). The newest candle takes it, or a new one opens at the last close.
+    const move = (mc: number, v: number, ms: number, pushed: boolean) => {
       if (tf !== LIVE_TF || first || !last) return;
       // A price with no trade behind it far off the candles is a misread, never a move.
       if (!(mc > 0) || (!(v > 0) && Math.abs(mc / last.close - 1) > 0.3)) return;
@@ -348,19 +446,41 @@ export function MiniChart({ mint, born, onState }: { mint: string; born?: number
       if (time > last.time) {
         if (time - last.time > tf * FILL_MAX) return;
         last = { time, open: last.close, high: Math.max(last.close, mc), low: Math.min(last.close, mc), close: mc, value: v };
-      } else last = { ...last, high: Math.max(last.high, mc), low: Math.min(last.low, mc), close: mc, value: (last.value || 0) + v };
+      } else {
+        if (!(v > 0) && near(mc, last.close)) return;
+        last = { ...last, high: Math.max(last.high, mc), low: Math.min(last.low, mc), close: mc, value: (last.value || 0) + v };
+      }
       put(last);
       byTime?.set(last.time, last);
-      liveAt = Date.now();
-      note(last, { pushed: String(liveAt) });
+      if (pushed) { liveAt = Date.now(); note(last, { pushed: String(liveAt) }); } else note(last);
       report();
+    };
+    const untrade = onCoinTrade(mint, (x) => {
+      const [, ms, mc, v] = x;
+      if (!alive || !validTrade(mc, v, ms)) return;
+      streamT = Date.now();
+      move(mc, v, ms, true);
     }, false);
-    return () => { alive = false; untrade(); clearTimeout(timer); clearTimeout(introTimer); clearTimeout(tellTimer); cancelAnimationFrame(raf); cancelAnimationFrame(zoomRaf); chart.remove(); };
+    // The row's own market cap (the Pulse stream's price for every coin on the page, from the chain): the chart's
+    // newest candle follows it as a bare price, so the card's chart never sits behind the row it hangs over (the
+    // radar's own 5 s store misses trades the stream's price has seen; the user, 2026-10-11, saw a card at $7.3K
+    // under a row at $7.6K).
+    let rowMc = usePulse.getState().coins[mint]?.mcap ?? null;
+    const unrow = usePulse.subscribe((s) => {
+      const mc = s.coins[mint]?.mcap ?? null;
+      if (mc === rowMc) return;
+      rowMc = mc;
+      if (alive && mc != null && mc > 0) move(mc, 0, Date.now(), false);
+    });
+    return () => { alive = false; untrade(); unrow(); clearTimeout(timer); clearTimeout(introTimer); clearTimeout(tellTimer); clearTimeout(hold); cancelAnimationFrame(raf); cancelAnimationFrame(zoomRaf); chart.remove(); };
   }, [mint, born]);
 
   return (
     <div className="relative size-full">
       <div ref={box} className="size-full" />
+      {/* the hand-off's crossfade: the zoom's last frame, drawn here and faded out over the live candles (z above the
+          library's canvases at 2, under the pill and tags at 10) */}
+      <canvas ref={snap} aria-hidden className="pointer-events-none absolute top-0 left-0 z-[5] opacity-0" />
       {marks && (
         <>
           {/* The overlays sit above the chart's canvases (the library gives those z-index 2): z-10, or the candles and

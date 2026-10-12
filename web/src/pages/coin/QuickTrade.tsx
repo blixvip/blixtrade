@@ -5,9 +5,10 @@
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from "react";
 import { create } from "zustand";
 import { Tip } from "@/components/ui/tooltip";
+import { SolanaLogo } from "@/components/brand";
 import { post } from "@/lib/api";
 import { tokN, usdK } from "@/lib/coin";
-import { setPaper, useTrade } from "@/lib/mode";
+import { setCur, setPaper, useCur, USDC_MINT, USDC_SIZES, useTrade } from "@/lib/mode";
 import { openExchange } from "@/lib/modals";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
@@ -25,7 +26,7 @@ const SELLS = [25, 50, 75, 100];
 type At = { x: number; y: number };
 // Axiom's P1 / P2 / P3: three sets of presets, one picked at a time, each with its own buy sizes, sell shares and
 // slippage. Empty buys: the paper desk's sizes (below). The first set starts from what the panel kept before.
-type Preset = { buys: number[]; sells: number[]; slip: number };
+type Preset = { buys: number[]; buysUsdc?: number[]; sells: number[]; slip: number };   // buysUsdc: the buy sizes while trading in USDC
 const SLIP_DEFAULT = 300;
 const loadPresets = (): Preset[] => {
   const kept = store.get<Preset[] | null>("qt:presets", null);
@@ -43,7 +44,7 @@ const savePreset = (next: Preset) => { const list = usePresets.getState().list.m
 const fieldOk = (i: number, text: string) => {
   const v = Number(text);
   if (!text.trim() || !isFinite(v)) return false;
-  return i < 4 ? v > 0 && v <= 1000 : i < 8 ? v >= 1 && v <= 100 : v >= 0.1 && v <= 50;
+  return i < 4 ? v > 0 && v <= 100_000 : i < 8 ? v >= 1 && v <= 100 : v >= 0.1 && v <= 50;   // a USDC preset can run to five figures
 };
 
 // `docked`: the same panel sitting in the coin page's right column, always there; its pop-out button floats it
@@ -54,7 +55,10 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const paperOn = useTrade((s) => s.paper), wallet = useTrade((s) => s.wallet), me = useMe((s) => s.me);
   const presets = usePresets((s) => s.list), pi = usePresets((s) => s.pi);
   const pick = (i: number) => { pickPreset(i); setEdit(null); };
-  const { buys, sells, slip } = presets[pi];
+  const { buys, buysUsdc, sells, slip } = presets[pi];
+  // In USDC (Axiom's switch, shared with the coin page's panel): the buys are USDC sizes with presets of their own,
+  // and a sell is paid in USDC.
+  const cur = useCur((s) => s.cur), inUsdc = cur === "USDC";
   const [edit, setEdit] = useState<string[] | null>(null);     // the nine preset fields while editing (4 buys, 4 sells, slippage %)
   const [busy, setBusy] = useState<string | null>(null);
   const pendingBuys = useRef(0);   // buys pressed and not settled yet
@@ -62,7 +66,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ dx: number; dy: number; at: At } | null>(null);
   // Until edited: the paper desk's sizes (the same as the header's quick buys), made up to four.
-  const buyP = buys.length === 4 ? buys : [...new Set([...sizes, 0.1, 0.25, 0.5, 1])].slice(0, 4).sort((a, b) => a - b), sellP = sells.length === 4 ? sells : SELLS;
+  const buyP = inUsdc ? (buysUsdc?.length === 4 ? buysUsdc : USDC_SIZES) : buys.length === 4 ? buys : [...new Set([...sizes, 0.1, 0.25, 0.5, 1])].slice(0, 4).sort((a, b) => a - b), sellP = sells.length === 4 ? sells : SELLS;
 
   // Kept inside the window: on first open over the chart's top left, and back in view after a resize.
   const clamp = (p: At): At => {
@@ -103,10 +107,11 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     if (buy) pendingBuys.current++;
     setBusy(key);
     const slippageBps = slip;
-    const ok = await trade(buy ? { side: "buy", mint, symbol, sol: v, slippageBps } : { side: "sell", mint, symbol, pct: v, slippageBps },
+    const money = inUsdc ? { usdc: v } : { sol: v };
+    const ok = await trade(buy ? { side: "buy", mint, symbol, ...money, slippageBps } : { side: "sell", mint, symbol, pct: v, to: cur, slippageBps },
       // Paper: a buy opens a row at the live quote; a sell takes the same share of every open row.
       async () => {
-        if (buy) return post("paper/quoted", { mint, sol: v, slippageBps });
+        if (buy) return post("paper/quoted", { mint, ...money, slippageBps });
         for (const p of pos.open) await post(`paper/${p.id}/sellq`, { pct: v, why: "instant trade" });
       });
     if (buy && --pendingBuys.current > 0) { if (ok) onDone(); return; }
@@ -116,19 +121,24 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   // Saved only when every field is good; a bad one stays open, outlined red, with what it takes in its tooltip.
   const save = () => {
     if (!edit || !edit.every((x, i) => fieldOk(i, x))) return;
-    const n = edit.map((x) => Number(x));
-    savePreset({ buys: n.slice(0, 4).sort((x, y) => x - y), sells: n.slice(4, 8).map((x) => Math.round(x)), slip: Math.round(n[8] * 100) });
+    const n = edit.map((x) => Number(x)), sized = n.slice(0, 4).sort((x, y) => x - y);
+    // The buy sizes edited are the money shown: SOL ones, or the USDC ones, the other kept.
+    savePreset({ buys: inUsdc ? buys : sized, buysUsdc: inUsdc ? sized : buysUsdc, sells: n.slice(4, 8).map((x) => Math.round(x)), slip: Math.round(n[8] * 100) });
     setEdit(null);
   };
 
-  const cash = paperOn ? wallet?.cash ?? null : me?.signedIn ? me.wallet?.sol ?? 0 : null;
+  // What there is to buy with, in the money picked: SOL, or USDC (the paper desk's SOL as USDC at the live price).
+  const cash = inUsdc
+    ? paperOn ? (wallet && wallet.solUsd > 0 ? wallet.cash * wallet.solUsd : null) : me?.signedIn ? me.wallet?.tokens?.find((t) => t.mint === USDC_MINT)?.ui ?? 0 : null
+    : paperOn ? wallet?.cash ?? null : me?.signedIn ? me.wallet?.sol ?? 0 : null;
+  const cashTxt = cash == null ? null : inUsdc ? `${cash.toFixed(2)} USDC` : <SolAmt v={cash} />;
   const pnlPct = pos.pnl != null && pos.bought ? (pos.pnl / pos.bought) * 100 : null;
   const field = (i: number, suffix: ReactNode) => (
-    <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? "More than 0 SOL" : i < 8 ? "1 to 100 %" : "0.1 to 50 %"}
+    <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? `More than 0 ${cur}` : i < 8 ? "1 to 100 %" : "0.1 to 50 %"}
       className={cn("flex h-10 min-w-0 items-center gap-0.5 rounded-lg border bg-paper px-1.5 transition-colors", fieldOk(i, edit![i]) ? "border-white/15 focus-within:border-white/35" : "border-down/70")}>
       <input value={edit![i]} onChange={(e) => setEdit((x) => x && x.map((y, j) => (j === i ? e.target.value : y)))}
         onKeyDown={(e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") { e.stopPropagation(); setEdit(null); } }}
-        inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in SOL` : i < 8 ? `Sell preset ${i - 3} in percent` : "Slippage in percent"}
+        inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in ${cur}` : i < 8 ? `Sell preset ${i - 3} in percent` : "Slippage in percent"}
         className="num w-full min-w-0 bg-transparent text-center text-sm font-semibold text-ink outline-none" />
       <span className="text-[0.625rem] text-muted">{suffix}</span>
     </label>
@@ -165,6 +175,13 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
         <span className={cn("flex items-center gap-1 rounded-[5px] px-1.5 py-px text-[10px] font-bold tracking-[0.08em]",
           paperOn ? "bg-info/15 text-info shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-info)_25%,transparent)]" : "bg-up/12 text-up shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-up)_25%,transparent)]")}>
           {!paperOn && <i className="size-1.5 rounded-full bg-up motion-safe:animate-pulse" />}{paperOn ? "PAPER" : "LIVE"}</span>
+        {/* The money: buys sized in SOL or USDC, sells paid in it (one setting with the coin page's panel). */}
+        <Tip tip={inUsdc ? "Trading in USDC: switch to SOL" : "Trading in SOL: switch to USDC"}>
+          <button onClick={() => setCur(inUsdc ? "SOL" : "USDC")} aria-label={`Trade in ${inUsdc ? "SOL" : "USDC"} instead`}
+            className="num flex h-5 items-center gap-1 rounded-md bg-paper px-1.5 text-[10px] font-bold text-ink-2 transition-colors hover:bg-paper-4 hover:text-ink">
+            {inUsdc ? <img src="brand/pay/usdc.png" alt="" className="size-3 rounded-full" /> : <SolanaLogo className="size-3" />}{cur}
+          </button>
+        </Tip>
         <span className="ml-auto flex items-center">
           <Tip tip="PnL card: your live result as a picture to save or share">
             <button onClick={pnlCard.open} aria-label="PnL card" className="grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-white/[0.07] hover:text-ink"><Icon.image className="size-3.5" /></button>
@@ -199,13 +216,13 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
 
         {migrating ? <MigratingNote since={migrating} /> : null}
         <div className="flex flex-col gap-1.5">
-          {row("Buy", "text-up", cash == null ? (paperOn ? "" : "Not signed in") : <SolAmt v={cash} />)}
+          {row("Buy", "text-up", cash == null ? (paperOn ? "" : "Not signed in") : cashTxt)}
           <div className="grid grid-cols-4 gap-1.5">
-            {edit ? buyP.map((_, i) => field(i, "SOL")) : buyP.map((v, i) => {
+            {edit ? buyP.map((_, i) => field(i, cur)) : buyP.map((v, i) => {
               const short = cash != null && v > cash;
               if (migrating) return <button key={i} aria-disabled title={MIGRATING_TIP} className={btn("buy", false)}>{v}</button>;
               return (
-                <button key={i} aria-disabled={short || undefined} title={short ? (paperOn ? `Only ${+cash!.toFixed(3)} SOL to spend` : "Not enough SOL: deposit to buy") : `Buy ${v} SOL of ${symbol} · ${slipTxt(slip)} slippage`}
+                <button key={i} aria-disabled={short || undefined} title={short ? (paperOn ? `Only ${inUsdc ? cash!.toFixed(2) : +cash!.toFixed(3)} ${cur} to spend` : `Not enough ${cur}: deposit${inUsdc ? " or convert" : ""} to buy`) : `Buy ${v} ${cur} of ${symbol} · ${slipTxt(slip)} slippage`}
                   onClick={() => { if (short) { if (!paperOn) openExchange("deposit"); return; } void go(`b${i}`, true, v); }}
                   className={btn("buy", !short)}>
                   {busy === `b${i}` ? spin : v}
@@ -243,7 +260,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
             </button>
           </>
         ) : broke ? (
-          <span className="flex w-full items-center gap-1.5"><span className="mr-auto">No SOL yet</span>
+          <span className="flex w-full items-center gap-1.5"><span className="mr-auto">No {cur} yet</span>
             <button onClick={() => setPaper(true)} className="h-7 rounded-full px-2.5 font-semibold text-info transition-colors hover:bg-info/10">Try paper</button>
             <button onClick={() => openExchange("deposit")} className="h-7 rounded-full bg-ink px-3 font-semibold text-paper transition-transform duration-100 hover:bg-white active:scale-[0.97]">Deposit</button></span>
         ) : <span>One click trades at the live quote{paperOn ? " with fake SOL" : ""}.</span>}

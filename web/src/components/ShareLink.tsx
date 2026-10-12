@@ -139,11 +139,10 @@ export function ShareLink({ className }: { className?: string }) {
   const invited = earn?.invited ?? h.invited;
 
   return (
-    <section className={cn("relative flex flex-col gap-4 overflow-hidden rounded-2xl border border-white/[0.07] bg-paper-2 p-5 max-sm:p-4", className)}>
-      <i aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_120%_at_0%_0%,color-mix(in_oklch,var(--color-up)_10%,transparent),transparent_60%)]" />
+    <section className={cn("relative flex flex-col gap-4 overflow-hidden rounded-2xl border border-white/[0.06] bg-paper-2 p-5 max-sm:p-4", className)}>
       <div className="relative flex items-start gap-3.5">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-up/15 text-up">
-          <svg viewBox="0 0 24 24" className="size-5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 1 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 1 0 0-5C13 2 12 7 12 7z" /></svg>
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-up/25 bg-up/10 text-up">
+          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 1 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 1 0 0-5C13 2 12 7 12 7z" /></svg>
         </span>
         <div className="min-w-0">
           <h2 className="text-lg leading-tight font-semibold text-ink">Invite &amp; earn</h2>
@@ -153,7 +152,7 @@ export function ShareLink({ className }: { className?: string }) {
         </div>
       </div>
 
-      <ol className="relative flex flex-col gap-2.5 rounded-xl border border-white/[0.05] bg-paper/40 p-3.5">
+      <ol className="relative flex flex-col gap-2.5 rounded-xl border border-white/[0.06] bg-paper/50 p-3.5">
         <Step n={1} title="Share your link" text="Anyone who signs up through it is yours." />
         <Step n={2} title={<>They save {pct(discount)}</>} text={earn?.on ? `Their fee is ${pct(Math.round((earn.feeBps * (10_000 - discount)) / 10_000))} instead of ${pct(earn.feeBps)}.` : "Lower fees on every trade."} />
         <Step n={3} title={<>You earn {pct(share_)}</>} text="Of every fee they pay, forever. Claim any time." />

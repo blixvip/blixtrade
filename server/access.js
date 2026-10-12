@@ -9,6 +9,7 @@ const OPEN = [
   // fomo/bars: the coin's Fomo chart (fomochart.js). chartfocus: the TradingView chart (coins past their first day) marks
   // itself open so the radar sends its trades live; refused, a member's chart moved only on Jupiter's trailing candles.
   new RegExp(`^/api/(holders|candles|token|research|fomo/bars|gecko/price|replay|chartfocus)/${MINT}$`),
+  /^\/api\/candles\/warm$/,   // the Pulse chart card's candles for every row on the page, ahead of the pointer (hoverChart.ts)
   new RegExp(`^/api/coin/${MINT}(/trades|/big)?$`),
   /^\/api\/replay\/peaks$/,   // Practice list: highs of the day (replay.js)
   /^\/api\/fast\/stream$/,   // the open chart's price stream (fastlane.js): one coin's price, nothing of the owner's
@@ -28,6 +29,8 @@ const MEMBER = [
   /^\/api\/stream$/,
   /^\/api\/feed\/(views|like)$/,   // the Feed page's view counts and likes (feedviews.js)
   /^\/api\/bubblemap$/,            // a coin's shared bubble map: read it, or make it when no one has yet (bubblemap.js)
+  /^\/api\/wtrack(\/.*)?$/,        // the member's own wallet tracker list, feed, monitor and KOL suggestions (wtrack.js)
+  /^\/api\/v1\/(keys(\/\d{1,12})?|usage)$/,   // the member's trade-API keys and usage (tradeapi.js); the key routes themselves never carry a member
 ];
 // Reads a member gets beyond a visitor's: the shared market views every page uses (Fomo, the pump feed, X posts,
 // the coin page's people, callouts and Fomo tabs). Never the owner's settings, wallets, alerts, log or exports.

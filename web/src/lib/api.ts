@@ -130,26 +130,48 @@ export const post = <T = unknown>(path: string, body?: unknown) =>
 // (server/webapp.js). Sign-in, the page and its files still come through the Worker. If the direct line cannot be
 // reached or does not know this browser (401 with x-blix-direct: no), everything goes back through the Worker
 // for the rest of this visit, so nothing is worse than before.
+// ...for a while, not for the rest of the visit (2026-10-11): a Cloudflare 504 from the tunnel (the server stalled
+// for a moment) carries no CORS headers, so the browser reports it as a failed fetch, and a page that then stayed
+// on the Worker for good sent every poll of every open tab through it until the Free plan's 100 k a day were gone
+// (error 1027, the whole site down until midnight UTC). Now a failed line rests DIRECT_REST_MS (a refusal of this
+// browser's cookie longer) and is tried again after that; the Worker only ever carries the gap.
 const PUBLIC = typeof location !== "undefined" && /^(www\.|trade\.)?blixvip\.com$/.test(location.hostname);
-let direct: string | null = PUBLIC ? "https://origin.blixvip.com/" : null;
+const DIRECT_LINE = PUBLIC ? "https://origin.blixvip.com/" : null;
+const DIRECT_REST_MS = 45_000, DIRECT_REFUSED_MS = 5 * 60_000;
+let directUntil = 0;   // the direct line rests until this time (ms); 0 = in use
+let direct: string | null = DIRECT_LINE;
 let directStreams = Boolean(direct);
-export const onDirectLine = () => Boolean(direct);
+// The line as it is now: back in use once its rest is over.
+function directNow(): string | null {
+  if (!DIRECT_LINE) return null;
+  if (direct) return direct;
+  if (directUntil && Date.now() >= directUntil) { direct = DIRECT_LINE; directStreams = true; directUntil = 0; }
+  return direct;
+}
+export const onDirectLine = () => Boolean(directNow());
 // A path like "api/pulse" as the address to ask, and the options a fetch of it needs (the cookie goes along only
 // when asked for across origins).
-export const apiUrl = (path: string) => (direct ? direct + path.replace(/^\//, "") : path);
-export const apiInit = (init?: RequestInit): RequestInit => (direct ? { credentials: "include", ...(init || {}) } : init || {});
+export const apiUrl = (path: string) => (directNow() ? direct + path.replace(/^\//, "") : path);
+export const apiInit = (init?: RequestInit): RequestInit => (directNow() ? { credentials: "include", ...(init || {}) } : init || {});
 const refused = (r: Response) => r.status === 401 && r.headers.get("x-blix-direct") === "no";
-// The direct line is no good for this visit: back through the Worker. True the first time, so the caller asks again.
-export function directFailed() { if (!direct) return false; direct = null; directStreams = false; return true; }
+// The direct line is no good for now: back through the Worker while it rests. True the first time, so the caller
+// asks again. `refusedCookie`: the server turned this browser away (a longer rest; the page's next load re-sets it).
+export function directFailed(refusedCookie = false) {
+  if (!direct) return false;
+  direct = null; directStreams = false;
+  directUntil = Date.now() + (refusedCookie ? DIRECT_REFUSED_MS : DIRECT_REST_MS);
+  return true;
+}
 // fetch for anything under api/: on the direct line when there is one, and once more through the page's own
 // address if that line fails to connect (a network or CORS error) or turns this browser away.
 export async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   // Writes require the edge's fresh membership check and must never retry on an ambiguous network failure.
   if (PUBLIC && !['GET', 'HEAD', 'OPTIONS'].includes((init?.method || 'GET').toUpperCase())) return fetch(path, init);
-  const used = direct;
+  const used = directNow();
   try {
     const r = await fetch(apiUrl(path), apiInit(init));
-    if (used && refused(r) && directFailed()) return fetch(apiUrl(path), apiInit(init));
+    if (used && refused(r) && directFailed(true)) return fetch(apiUrl(path), apiInit(init));
+    if (used && r.status >= 502 && r.status <= 504) directFailed();   // the tunnel's gateway answers for a stalled server: rest, do not hammer it
     return r;
   } catch (e) {
     if (used && e instanceof TypeError && directFailed()) return fetch(apiUrl(path), apiInit(init));

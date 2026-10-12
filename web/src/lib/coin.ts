@@ -72,7 +72,7 @@ export interface TokenDetail {
   paper?: Paper[];
   progress?: number | null;
 }
-export interface Quote { outTokens?: number; outSol?: number; impactPct?: number | null; minOut?: number; route?: string[]; avgMcapUsd?: number | null; spotMcapUsd?: number | null; usdIn?: number | null; usdOut?: number | null; feeSol?: number | null; src?: string }
+export interface Quote { outTokens?: number; outSol?: number; usdcIn?: number | null; usdcOut?: number | null; impactPct?: number | null; minOut?: number; route?: string[]; avgMcapUsd?: number | null; spotMcapUsd?: number | null; usdIn?: number | null; usdOut?: number | null; feeSol?: number | null; src?: string }
 
 // Re-read `path` every `ms` while it is non-null. A new path starts empty; a refresh keeps what is shown.
 // The last good answer for each path, so reopening a view or switching a tab shows it at once while the

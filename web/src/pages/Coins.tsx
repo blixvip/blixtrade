@@ -121,7 +121,7 @@ export const isDeadRow = (r: Row) => {
 export const isRug = (r: Row) => {
   const S = r.safety || {}, F = r.fresh || {};
   return Boolean(r.quarantine) || Boolean(F.dead) || Boolean(F.illiquid) || F.exitable === false
-    || ((r.peak_mcap ?? 0) >= 20_000 && (r.mcap ?? 0) < (r.peak_mcap ?? 0) * 0.1)
+    || ((r.peak_mcap ?? 0) >= 20_000 && r.mcap != null && r.mcap > 0 && r.mcap < (r.peak_mcap ?? 0) * 0.1)
     || (S.devPct ?? 0) >= 50
     || ((S.top10 ?? 0) >= 80 && (S.totalHolders ?? 0) >= 15);
 };
@@ -157,7 +157,9 @@ export function Coins() {
   const paper = useTrade((s) => s.paper);
 
   const hot = tab === "hot";
-  const fomo = tab === "top" || tab === "held" || hot;   // lists that bring their own rows (no shared list, filters or hiding)
+  // Lists that bring their own rows (no shared list or filters; they hide coins through the same list as the others).
+  // The hidden view is the shared list's, whichever tab it was opened from.
+  const fomo = !showHidden && (tab === "top" || tab === "held" || hot);
   // What a tab's list is asked for (the same for the tab on screen and for one the pointer is on).
   const listPath = (tab: Tab, rows = limit) => {
     const params: Record<string, string> = { sort: SORT[tab][tf], dir: "desc", limit: String(rows) };
@@ -226,6 +228,12 @@ export function Coins() {
     toast("Coin hidden. The eye button up top shows hidden coins.");
   };
   // Hide every coin on screen right now (Axiom's "hide all"), keeping the ones already hidden.
+  const hideMints = (mints: string[]) => {
+    const shown = mints.filter((m) => !hiddenSet.has(m));
+    if (!shown.length) return;
+    saveHidden([...shown, ...hidden].slice(0, MAX_HIDDEN));
+    toast(`${shown.length} coin${shown.length === 1 ? "" : "s"} hidden. The eye button up top brings them back.`);
+  };
   const hideAll = () => {
     const shown = (d?.rows || []).map((r) => r.mint).filter((m) => !hiddenSet.has(m));
     if (!shown.length) return;
@@ -242,7 +250,7 @@ export function Coins() {
     return sparkOrKeep(own ? withLive(r, own, tf) : r, `${r.mint}:${tf}`);
   });
   const rugs = !showHidden && !q.trim() && merged ? merged.filter(isRug).length : 0;
-  const rows = merged ? (showHidden ? merged.filter((r) => hiddenSet.has(r.mint)) : q.trim() ? merged : merged.filter((r) => !isRug(r))).filter((r) => !isDeadRow(r)) : null;
+  const rows = merged ? (showHidden ? merged.filter((r) => hiddenSet.has(r.mint)) : q.trim() ? merged : merged.filter((r) => !isRug(r))).filter((r) => q.trim() || !isDeadRow(r)) : null;
   // While the pointer is on a streaming list it holds still (as the Pulse's columns do): the rows keep their places
   // and their figures keep moving, and what came in meanwhile waits behind an "N new" pill until it leaves.
   const [paused, setPaused] = useState(false);
@@ -264,7 +272,7 @@ export function Coins() {
   }
   // (No chart preloading here: four TradingView frames per visit were ~1.4 MB and four live sockets for charts
   // that were mostly never opened. Hovering a row still warms that one coin's chart: lib/coin.ts prefetchCoin.)
-  const sub = fomo ? TABS.find(([t]) => t === tab)![2] : showHidden ? `Hidden coins · ${hidden.length.toLocaleString()} hidden` : TABS.find(([t]) => t === tab)![2] + (d ? ` · ${d.total.toLocaleString()} coins match` : "") + (rugs ? ` · ${rugs} rugs hidden` : "");
+  const sub = fomo ? TABS.find(([t]) => t === tab)![2] : showHidden ? `Hidden coins · ${hidden.length.toLocaleString()} hidden` : TABS.find(([t]) => t === tab)![2] + (d ? ` · ${d.total.toLocaleString()} coins match` : "") + (rugs ? ` · ${rugs} risk-filtered coins hidden` : "");
 
   return (
     <Page title="Discover" sub={sub}>
@@ -281,7 +289,6 @@ export function Coins() {
           <label className="flex h-8 w-60 items-center gap-2 rounded-full border border-rule-2 bg-paper px-3 text-muted focus-within:border-accent-dim">
             <Icon.search className="size-3.5" /><input value={q} onChange={(e) => { setQ(e.target.value); setLimit(STEP); }} placeholder="Ticker, name or contract" aria-label="Search coins" className="min-w-0 flex-1 bg-transparent text-md text-ink outline-none placeholder:text-muted" />
           </label>
-          {!fomo && (<>
           <Tip tip={showHidden ? "Back to the list" : hidden.length ? `Show the ${hidden.length} hidden coin${hidden.length === 1 ? "" : "s"}` : "No hidden coins yet: hover a row and press its eye"}>
             <button onClick={() => setShowHidden(!showHidden)} aria-pressed={showHidden} aria-label="Hidden coins"
               className={cn("relative grid size-8 place-items-center rounded-control border transition-colors", showHidden ? "border-ink/50 bg-paper-4 text-ink" : "border-rule-2 text-ink-2 hover:text-ink")}>
@@ -289,6 +296,7 @@ export function Coins() {
               {hidden.length > 0 && <span className="num absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-paper-5 px-1 text-2xs font-bold text-ink">{hidden.length > 99 ? "99+" : hidden.length}</span>}
             </button>
           </Tip>
+          {!fomo && (
           <Tip tip={nFilters ? `${nFilters} filter${nFilters === 1 ? "" : "s"} on` : "Filters"}>
             <button onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Filters"
               className={cn("relative grid size-8 place-items-center rounded-control border transition-colors", open ? "border-ink/50 bg-paper-4 text-ink" : "border-rule-2 text-ink-2 hover:text-ink")}>
@@ -296,7 +304,7 @@ export function Coins() {
               {nFilters > 0 && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-paper bg-info" />}
             </button>
           </Tip>
-          </>)}
+          )}
           <label className="flex h-8 items-center gap-1.5 rounded-full border border-rule-2 bg-paper pr-3 pl-3 text-muted" title="Select the amount you want to buy">
             <Icon.bolt className="size-3.5" /><span className="text-sm">Quick buy</span>
             <input type="number" min={0.001} step={0.05} value={sol} onChange={(e) => { const v = Math.max(0.001, +e.target.value || 0.1); setSol(v); store.set("discover:sol", v); }}
@@ -306,7 +314,8 @@ export function Coins() {
         </div>
       </div>
 
-      {hot ? <HotTab win={hotWin} q={q} sol={sol} /> : fomo ? <FomoTab kind={tab as FomoKind} q={q} sol={sol} /> : <>
+      {fomo && hot ? <HotTab win={hotWin} q={q} sol={sol} hidden={hiddenSet} onHide={toggleHide} onHideAll={hideMints} />
+        : fomo ? <FomoTab kind={tab as FomoKind} q={q} sol={sol} hidden={hiddenSet} onHide={toggleHide} onHideAll={hideMints} /> : <>
       {open && <FilterPanel tf={tf} value={f} onApply={(v) => { save("filters", setF)(v); setOpen(false); }} onClose={() => setOpen(false)} />}
 
       {showHidden && (

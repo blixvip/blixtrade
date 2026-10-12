@@ -9,6 +9,7 @@ import { warmPics } from "@/lib/pics";
 import { cn } from "@/lib/utils";
 import { compact } from "@/lib/format";
 import { Tip } from "@/components/ui/tooltip";
+import { Icon } from "@/shell/icons";
 import { noteLive, sparkOrKeep } from "@/components/Spark";
 import { Avatar } from "../traders/parts";
 import { freshest, keptRow, takeRows, takeSparks } from "./fresh";
@@ -61,7 +62,9 @@ function Lead({ h, rank, heat }: { h: HotCoin; rank: number; heat: number }) {
   );
 }
 
-export function HotTab({ win, q, sol }: { win: HotWin; q: string; sol: number }) {
+// `hidden`, `onHide`, `onHideAll`: the page's hidden coins (Coins.tsx, the same list as every tab): hidden ones are
+// left out, and each row's eye (on hover) hides it.
+export function HotTab({ win, q, sol, hidden, onHide, onHideAll }: { win: HotWin; q: string; sol: number; hidden?: Set<string>; onHide?: (mint: string) => void; onHideAll?: (mints: string[]) => void }) {
   const { data, error } = usePoll<HotAnswer>(hotPath(win), 5000, true);
   const fresh = data && String(data.w) === win ? data : null;
   const top = fresh?.top.filter((h) => h.chain === SOLANA) ?? null;
@@ -76,7 +79,7 @@ export function HotTab({ win, q, sol }: { win: HotWin; q: string; sol: number })
   const byMint = { get: (m: string) => keptRow<Row>(m) };
   const needle = q.trim().toLowerCase();
   const most = Math.max(1, ...(top || []).map((h) => h.n));
-  const rows = top?.map((h, i) => ({ h, rank: i + 1 })).filter(({ h }) => {
+  const rows = top?.filter((h) => !hidden?.has(h.mint)).map((h, i) => ({ h, rank: i + 1 })).filter(({ h }) => {
     const b = byMint.get(h.mint);
     return !needle || `${h.ticker} ${b?.symbol} ${b?.name} ${h.mint}`.toLowerCase().includes(needle);
   }).map(({ h, rank }) => {
@@ -96,10 +99,14 @@ export function HotTab({ win, q, sol }: { win: HotWin; q: string; sol: number })
           <div className="min-w-[1370px]">
             <div className={cn(HOT_GRID, "metal-bar sticky top-0 z-10 px-4 py-2 text-sm font-medium text-muted")}>
               <span className="pl-7">Posts</span><span>Pair info</span><span>Price {tf}</span><span className="text-right">Market cap</span><span className="text-right">Liquidity</span>
-              <span className="text-right">Volume {tf}</span><span className="text-right">Txns {tf}</span><span>Token info</span><span className="text-right">Action</span>
+              <span className="text-right">Volume {tf}</span><span className="text-right">Txns {tf}</span><span>Token info</span>
+              <span className="flex items-center justify-end gap-2">
+                {onHideAll && rows && rows.length > 0 && <Tip tip="Hide every coin on screen"><button onClick={() => onHideAll(rows.map(({ h }) => h.mint))} className="flex items-center gap-1 rounded-chip px-1.5 py-0.5 text-xs text-muted hover:bg-paper-4 hover:text-ink"><Icon.eyeOff className="size-3.5" />Hide all</button></Tip>}
+                Action
+              </span>
             </div>
             {!rows ? (error && !data ? <Problem text={error} /> : <div className="p-3"><Loading /></div>)
-              : rows.length ? rows.map(({ h, rank, row }) => <DiscoverRow key={h.mint} r={row} tf={tf} sol={sol} grid={HOT_GRID} lead={<Lead h={h} rank={rank} heat={h.n / most} />} />)
+              : rows.length ? rows.map(({ h, rank, row }) => <DiscoverRow key={h.mint} r={row} tf={tf} sol={sol} grid={HOT_GRID} onHide={onHide} lead={<Lead h={h} rank={rank} heat={h.n / most} />} />)
               : <Empty>{needle ? "No hot coin matches." : `Quiet out there: no coin talk in the last ${label}.`}</Empty>}
           </div>
         </div>

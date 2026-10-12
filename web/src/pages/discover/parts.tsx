@@ -2,7 +2,7 @@
 // a price line, market cap, liquidity, volume, transactions, token-info pills and a quick buy.
 import { rowLink, useNow } from "@/lib/route";
 import { XHover, XLinkIcon, xKind, xKindLabel } from "@/components/XCard";
-import { memo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
 import { CoinImg } from "@/components/page";
 import { Tip } from "@/components/ui/tooltip";
@@ -23,6 +23,19 @@ import { useMetrics, useMetricVisibility, metricDescription } from '@/lib/metric
 import { discoverNumbers, metricPrefix } from './numbers';
 import { CoinHover } from "./hovercard";
 import { MigratingChip, migratingNow } from "@/components/Migrating";
+import { ChartHover } from "../pulse/ChartHover";
+import type { Coin } from "@/lib/pulse";
+
+// The row as the Pulse's chart card reads a coin (pulse/ChartHover.tsx): resting the pointer on the row's line or
+// market cap opens the coin's live chart in that card, as on the Pulse.
+function cardCoin(r: Row, born: number, mcap: number | null): Coin {
+  const s = r.safety || {};
+  return {
+    mint: r.mint, symbol: r.symbol ?? undefined, name: r.name ?? undefined, born, mcap, vol: r.vol_h24 ?? r.vol_h1 ?? null, liq: r.liquidity,
+    buys: r.buys_h24 ?? r.buys_h1 ?? undefined, sells: r.sells_h24 ?? r.sells_h1 ?? undefined,
+    holders: s.totalHolders ?? null, top10: s.top10 ?? null, dev: s.devPct ?? null, graduated: r.graduated === 1, dex: r.dex, fees: r.fees ?? null, migrating: r.migrating ?? null,
+  };
+}
 
 export type Tf = "5m" | "1h" | "24h";
 export type Row = {
@@ -119,6 +132,8 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
   const links = (r.links || []).filter((l, i, all) => LINK_ICON[l.type] && safeHref(l.url) && all.findIndex((x) => LINK_ICON[x.type] === LINK_ICON[l.type]) === i).slice(0, 4);
   // DexScreener orders API (server/dexpaid.js): a paid profile. Unknown until it answers, then exact.
   const paid = r.paid === true;
+  const cardMc = liveEnd ?? r.mc_live ?? r.mcap ?? null;
+  const card = useMemo(() => ext ? null : cardCoin(r, born, cardMc), [ext, r, born, cardMc]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={visibleRef} {...rowLink(ext ? ext.url : `#/coin/${r.mint}`)}
       onPointerEnter={ext ? undefined : () => prefetchCoin(r.mint, born)}
@@ -169,9 +184,14 @@ export const DiscoverRow = memo(function DiscoverRow({ r, tf, sol, hidden, onHid
         <KnownHolders mint={r.mint} network={ext?.network} total={s.totalHolders ?? null} />
       </div>
       ); return ext ? cell : <CoinHover r={r} tf={tf}>{cell}</CoinHover>; })()}
+      {/* line + market cap: resting the pointer on either opens the coin's live chart card (the Pulse's) */}
+      {(() => { const cells = (
+      <div className="contents">
       <Spark v={r.spark} chg={chg} k={`${r.mint}:${tf}`} end={liveEnd ?? r.mc_live} />
       {/* market cap */}
       <div className="flex flex-col items-end">{ext ? <b className="num text-md font-semibold text-ink">{compact(r.mc_live ?? r.mcap)}</b> : <LiveMc mint={r.mint} value={r.mc_live ?? r.mcap} className="text-md font-semibold text-ink" />}<span title={detail(`chg${tf}`, `Change ${tf}`)} className={cn("num text-sm", tone(chg))}>{chg != null ? prefix(`chg${tf}`) : ''}{pct(chg)}</span></div>
+      </div>
+      ); return ext || !card ? cells : <ChartHover coin={card}>{cells}</ChartHover>; })()}
       <div title={detail('liq', 'Liquidity')} className="num text-right text-md text-ink-2">{r.liquidity != null ? prefix('liq') : ''}{compact(r.liquidity)}</div>
       {/* volume, and under it what traders paid in fees to trade it (Axiom's "F") */}
       <div className="flex flex-col items-end gap-1"><span title={detail(`vol${tf}`, `Volume ${tf}`)} className="num text-md font-semibold text-ink">{vol != null ? prefix(`vol${tf}`, true) : ''}{compact(vol)}</span>{!ext && <FeesPaid mint={r.mint} sol={r.fees} since={r.feesSince} born={born} />}</div>

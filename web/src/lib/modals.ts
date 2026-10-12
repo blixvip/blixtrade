@@ -6,7 +6,11 @@ import { create } from "zustand";
 export const loadExchange = () => import("@/components/Exchange");
 export const loadLauncher = () => import("@/components/Launcher");
 export const warmExchange = () => { void loadExchange().catch(() => {}); };
-export const warmLauncher = () => { void loadLauncher().catch(() => {}); };
+export const warmLauncher = () => {
+  void loadLauncher().catch(() => {});
+  // The history's logos too (the panel opens on it), fetched in one read while the pointer is still on the button.
+  try { const h = JSON.parse(localStorage.getItem("blix:launcher:history") || "[]"); if (Array.isArray(h)) void import("./pics").then((p) => p.warmPics(h.slice(0, 30))); } catch {}
+};
 
 export type ExchangeTab = "convert" | "deposit" | "buy";
 export const useExchange = create<{ tab: ExchangeTab | null }>(() => ({ tab: null }));

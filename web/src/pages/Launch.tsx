@@ -44,12 +44,28 @@ const loadDraft = (): Draft => {
     twitter: text("twitter", 220), telegram: text("telegram", 220), website: text("website", 220), sol: num("sol", 0), slip: SLIPS.includes(num("slip", 5)) ? num("slip", 5) : 5 };
 };
 const saveDraft = (d: Draft) => { try { localStorage.setItem(DRAFT, JSON.stringify(d)); } catch { /* private window */ } };
+// The picture goes with the draft too, in IndexedDB (a 4 MB data URL does not fit localStorage): a reload or a
+// visit to another page keeps it. Best effort: a private window or a full disk only means it is not kept.
+const PIC_DB = "blix-launch", PIC_KEY = "picture";
+function picStore(mode: IDBTransactionMode): Promise<IDBObjectStore | null> {
+  return new Promise((ok) => {
+    try {
+      const open = indexedDB.open(PIC_DB, 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("kv");
+      open.onsuccess = () => { try { ok(open.result.transaction("kv", mode).objectStore("kv")); } catch { ok(null); } };
+      open.onerror = () => ok(null); open.onblocked = () => ok(null);
+    } catch { ok(null); }
+  });
+}
+const loadPicture = async (): Promise<string | null> => { const st = await picStore("readonly"); if (!st) return null; return new Promise((ok) => { const r = st.get(PIC_KEY); r.onsuccess = () => ok(typeof r.result === "string" ? r.result : null); r.onerror = () => ok(null); }); };
+const savePicture = async (url: string | null) => { const st = await picStore("readwrite"); if (!st) return; try { if (url) st.put(url, PIC_KEY); else st.delete(PIC_KEY); } catch { /* quota */ } };
 
 // The picture as a data URL the server can forward: kept as is when small and a common type, otherwise
 // redrawn to a 1000px WebP so a phone photo still fits.
 async function readPicture(file: File): Promise<string> {
   const asUrl = (b: Blob) => new Promise<string>((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(r.error); r.readAsDataURL(b); });
   if (file.size <= MAX_BYTES * 0.7 && /^image\/(png|jpeg|gif|webp)$/.test(file.type)) return asUrl(file);
+  if (file.type === "image/gif") toast("That GIF is over 2.8 MB, so it is saved as a still picture.");
   const bmp = await createImageBitmap(file);
   const k = Math.min(1, 1000 / Math.max(bmp.width, bmp.height));
   const c = document.createElement("canvas");
@@ -58,6 +74,16 @@ async function readPicture(file: File): Promise<string> {
   const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, "image/webp", 0.9));
   if (!blob) throw new Error("That picture could not be read.");
   return asUrl(blob);
+}
+// The middle square of a picture (the part pump.fun and every terminal shows anyway), as a WebP data URL.
+async function squareOf(url: string): Promise<string> {
+  const img = new Image(); img.src = url; await img.decode();
+  const side = Math.min(img.naturalWidth, img.naturalHeight), out = Math.min(side, 1000);
+  const c = document.createElement("canvas"); c.width = c.height = out;
+  c.getContext("2d")!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, out, out);
+  const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, "image/webp", 0.92));
+  if (!blob) throw new Error("That picture could not be cropped.");
+  return new Promise<string>((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
 }
 // Width and height of a picture, to say when it is not square or too small.
 const sizeOf = (url: string) => new Promise<{ w: number; h: number } | null>((ok) => { const i = new Image(); i.onload = () => ok({ w: i.naturalWidth, h: i.naturalHeight }); i.onerror = () => ok(null); i.src = url; });
@@ -162,12 +188,32 @@ export function Launch() {
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((o) => { const n = { ...o, [k]: v }; saveDraft(n); return n; });
   useEffect(() => { if (!me) loadMe(); }, [me]);
   useEffect(() => { setImgSize(null); if (image) sizeOf(image).then(setImgSize); }, [image]);
+  // The picture kept from last time (IndexedDB), unless one was already chosen meanwhile.
+  const kept = useRef(false);
+  useEffect(() => { let on = true; loadPicture().then((u) => { if (on && u && !kept.current) setImage(u); }); return () => { on = false; }; }, []);
+  const choose = (url: string | null) => { kept.current = true; setImage(url); savePicture(url); };
 
   const pick = async (f?: File | null) => {
     if (!f) return;
     if (!f.type.startsWith("image/")) return toast("That file is not a picture.");
-    try { const url = await readPicture(f); if (url.length * 0.75 > MAX_BYTES * 1.05) return toast("That picture is too big even after shrinking it."); setImage(url); }
+    try { const url = await readPicture(f); if (url.length * 0.75 > MAX_BYTES * 1.05) return toast("That picture is too big even after shrinking it."); choose(url); }
     catch (e) { toast((e as Error).message); }
+  };
+  // A picture pasted anywhere on the page (copied from ChatGPT, a browser tab or a screenshot) is the coin's picture.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const f = [...(e.clipboardData?.items || [])].find((i) => i.kind === "file" && i.type.startsWith("image/"))?.getAsFile();
+      if (!f) return;
+      e.preventDefault(); pick(f);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [cropping, setCropping] = useState(false);
+  const makeSquare = async () => {
+    if (!image || cropping) return;
+    setCropping(true);
+    try { choose(await squareOf(image)); } catch (e) { toast((e as Error).message); } finally { setCropping(false); }
   };
 
   const total = CREATE_SOL + (d.sol || 0);
@@ -210,7 +256,7 @@ export function Launch() {
       if (!r.ok) throw new Error(r.status === 404 ? "Accounts are not switched on." : j.error || String(r.status));
       t.ok(`$${sym} is live`, shortAddr(j.mint), j.signature ? `https://solscan.io/tx/${j.signature}` : undefined);
       setDone({ mint: j.mint, signature: j.signature, status: j.status, name: d.name.trim(), symbol: sym, image: image! });
-      setD(EMPTY); saveDraft(EMPTY); setImage(null); setCustom(false); setCustomText(""); loadMe();
+      setD(EMPTY); saveDraft(EMPTY); choose(null); setCustom(false); setCustomText(""); loadMe();
     } catch (e) { t.fail("Launch failed", (e as Error).message); }
     finally { clearTimeout(step); setBusy(null); }
   };
@@ -271,11 +317,12 @@ export function Launch() {
                 {image ? (
                   <div className="flex w-full flex-col items-center gap-1 text-center text-xs">
                     {imgSize && <span className="num text-muted">{imgSize.w} × {imgSize.h}</span>}
-                    {squareOff && <span className="text-warn">Not square: the edges get cut off</span>}
+                    {squareOff && <span className="flex flex-wrap items-center justify-center gap-1.5 text-warn">Not square: the edges get cut off
+                      <button type="button" onClick={makeSquare} disabled={cropping} className="rounded-full border border-warn/40 px-2 py-0.5 text-xs font-semibold text-ink-2 hover:border-warn hover:text-ink disabled:opacity-60">{cropping ? "Cropping…" : "Make it square"}</button></span>}
                     {smallPic && <span className="text-warn">Small: 500px or more looks sharper</span>}
-                    <button type="button" onClick={() => setImage(null)} className="text-muted underline-offset-2 hover:text-down hover:underline">Remove</button>
+                    <button type="button" onClick={() => choose(null)} className="text-muted underline-offset-2 hover:text-down hover:underline">Remove</button>
                   </div>
-                ) : <span className="text-center text-xs text-muted">Square, 500px+<br />PNG, JPG, GIF, WebP · up to 4 MB</span>}
+                ) : <span className="text-center text-xs text-muted">Square, 500px+<br />PNG, JPG, GIF, WebP · up to 4 MB<br />or paste a picture here</span>}
               </div>
               <input ref={file} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
               <div className="flex w-full min-w-0 flex-1 flex-col gap-3.5">

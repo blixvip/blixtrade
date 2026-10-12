@@ -4,7 +4,7 @@ import { UNLOCK_USD, useAiUnlock } from "../AiPicks";
 import { SolanaLogo } from "@/components/brand";
 import { useFeeBps } from "@/components/ShareLink";
 import { SiteLogo, PADS, padOf, type Site } from "@/components/logos";
-import { depositPaper, loadPaperSizes, useTrade } from "@/lib/mode";
+import { depositPaper, loadPaperSizes, setCur, useCur, USDC_MINT, USDC_SIZES, useTrade, type Cur } from "@/lib/mode";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -74,19 +74,25 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [sizes, setSizes] = useState<number[]>([0.1, 0.25, 0.5, 1]);
   const [sol, setSolState] = useState<number>(() => store.get("trade:sol", 0.25));
+  // In USDC (Axiom's switch): the buy is sized in USDC and a sell is paid in USDC; its own amount, kept apart.
+  const cur = useCur((st) => st.cur), inUsdc = cur === "USDC";
+  const [usdc, setUsdcState] = useState<number>(() => store.get("trade:usdc", 25));
   const [pct, setPct] = useState(100);
   const [slip, setSlipState] = useState<number>(() => store.get("trade:slip", 300));
   const [q, setQ] = useState<{ key: string; quote?: Quote; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const setSol = (v: number) => { store.set("trade:sol", v); setSolState(v); };
+  const setUsdc = (v: number) => { store.set("trade:usdc", v); setUsdcState(v); };
   const setSlip = (v: number) => { store.set("trade:slip", v); setSlipState(v); };
   const wallet = useTrade((st) => st.wallet), paperOn = useTrade((st) => st.paper);
-  // Paper off: the same panel trades the signed-in wallet's real SOL, and sells what that wallet holds.
+  // Paper off: the same panel trades the signed-in wallet's real SOL (or USDC), and sells what that wallet holds.
   const me = useMe((st) => st.me), held = me?.wallet?.tokens?.find((x) => x.mint === mint)?.ui ?? 0;
+  const usdcHeld = me?.wallet?.tokens?.find((x) => x.mint === USDC_MINT)?.ui ?? 0;
   const canSell = paperOn ? open.length > 0 : held > 0;
   const s = side === "sell" && !canSell ? "buy" : side;
   const realSell = !paperOn && s === "sell";
-  const key = s === "buy" ? `buy:${mint}:${sol}:${slip}:${paperOn ? "p" : "r"}` : realSell ? `sell:real:${pct}` : `sell:${open.map((p) => p.id).join(",")}:${pct}`;
+  const amount = inUsdc ? usdc : sol;   // what the buy spends, in `cur`
+  const key = s === "buy" ? `buy:${mint}:${cur}:${amount}:${slip}:${paperOn ? "p" : "r"}` : realSell ? `sell:real:${pct}:${cur}` : `sell:${open.map((p) => p.id).join(",")}:${pct}:${cur}`;
   const keyRef = useRef(key); keyRef.current = key;
 
   useEffect(() => { loadPaperSizes().then((s) => s && setSizes(s)); }, []);
@@ -94,15 +100,18 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
   useEffect(() => {
     let alive = true, timer = 0;
     const run = async () => {
-      if (realSell || !(s === "buy" ? sol > 0 : open[0])) { setQ(null); return; }
+      if (realSell || !(s === "buy" ? amount > 0 : open[0])) { setQ(null); return; }
       try {
         // A sell takes the same share of every open paper row (each buy is its own row): their previews summed.
-        // A real buy trades the SOL less Blix's fee, so it is quoted on that.
-        const quote = s === "buy" ? await api<Quote>(`quote?mint=${mint}&side=buy&amount=${paperOn ? sol : +(sol * (1 - FEE)).toFixed(9)}&slip=${slip}`)
+        // A real buy trades the SOL less Blix's fee, so it is quoted on that (a USDC buy trades all its USDC; its fee
+        // is SOL beside it).
+        const quote = s === "buy" ? await api<Quote>(`quote?mint=${mint}&side=buy&amount=${paperOn || inUsdc ? amount : +(sol * (1 - FEE)).toFixed(9)}&slip=${slip}${inUsdc ? "&quote=usdc" : ""}`)
           : await Promise.all(open.map((p) => api<Quote>(`paper/${p.id}/preview?pct=${pct}`))).then((qs) => ({ ...qs[0], outSol: qs.reduce((a, x) => a + (x.outSol || 0), 0), impactPct: Math.max(...qs.map((x) => x.impactPct ?? 0)) }));
         if (alive && keyRef.current === key) setQ({ key, quote });
       } catch (e) { if (alive && keyRef.current === key) setQ({ key, error: (e as Error).message }); }
-      if (alive) timer = window.setTimeout(run, 3000);
+      // Again every 6 s while the tab is in view (it was 3 s: a panel left open on a bonded coin was a fifth of
+      // the radar's Jupiter allowance by itself, 2026-10-11); a hidden tab waits until it is back.
+      if (alive) timer = window.setTimeout(function again() { if (document.hidden) { timer = window.setTimeout(again, 2000); return; } run(); }, 6000);
     };
     const t = window.setTimeout(run, 250);
     return () => { alive = false; clearTimeout(t); clearTimeout(timer); };
@@ -110,8 +119,9 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
 
   const submit = async () => {
     setBusy(true);
-    const ok = await trade(s === "buy" ? { side: "buy", mint, symbol, sol, slippageBps: slip } : { side: "sell", mint, symbol, pct, slippageBps: slip },
-      async () => { if (s === "buy") return post("paper/quoted", { mint, sol, slippageBps: slip }); for (const p of open) await post(`paper/${p.id}/sellq`, { pct, why: "coin page" }); });
+    const money = inUsdc ? { usdc } : { sol };
+    const ok = await trade(s === "buy" ? { side: "buy", mint, symbol, ...money, slippageBps: slip } : { side: "sell", mint, symbol, pct, to: cur, slippageBps: slip },
+      async () => { if (s === "buy") return post("paper/quoted", { mint, ...money, slippageBps: slip }); for (const p of open) await post(`paper/${p.id}/sellq`, { pct, why: "coin page" }); });
     if (ok) onDone();
     setBusy(false);
   };
@@ -120,7 +130,12 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
   // Buy is green, sell is red: the side colours the tabs, the picked chips, the amount box and the button.
   const sideOn = buy ? "border-up/45 bg-up/[0.1] text-ink shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-up)_20%,transparent)]" : "border-down/45 bg-down/[0.1] text-ink shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--color-down)_20%,transparent)]";
   const chip = (on: boolean) => cn("num h-8 rounded-lg border text-sm font-semibold transition-colors duration-150", on ? sideOn : "border-white/[0.07] bg-paper text-ink-2 hover:border-white/15 hover:text-ink");
-  const balance = paperOn ? (wallet ? wallet.cash.toFixed(3) : null) : me?.signedIn ? (me.wallet?.sol ?? 0).toFixed(3) : null;
+  // The balance in the money picked: SOL, or USDC (the paper desk holds SOL: its worth in USDC at the live price).
+  const usdcTxt = (v: number) => (v >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(2));
+  const balance = inUsdc
+    ? paperOn ? (wallet && wallet.solUsd > 0 ? usdcTxt(wallet.cash * wallet.solUsd) : null) : me?.signedIn ? usdcTxt(usdcHeld) : null
+    : paperOn ? (wallet ? wallet.cash.toFixed(3) : null) : me?.signedIn ? (me.wallet?.sol ?? 0).toFixed(3) : null;
+  const curBtn = (c: Cur) => cn("num h-5 rounded-md px-1.5 text-[11px] font-bold transition-colors duration-150", cur === c ? "bg-paper-5 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.08)]" : "text-muted hover:text-ink-2");
   const stat = (label: string, value: ReactNode, cls = "text-ink-2") => <div className="flex items-center justify-between gap-2"><span className="text-muted">{label}</span><b className={cn("truncate text-right font-semibold", cls)}>{value}</b></div>;
   return (
     <div className={cn(card, "flex flex-col gap-3 p-3.5")}>
@@ -130,9 +145,9 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
         <button onClick={() => setSide("sell")} disabled={!canSell} title={canSell ? undefined : "Nothing to sell yet"} className={cn("h-8 rounded-lg text-sm font-bold transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-35", !buy ? "bg-down text-on-fill shadow-[0_2px_12px_-2px_color-mix(in_oklch,var(--color-down)_60%,transparent)]" : "text-muted hover:text-ink")}>Sell</button>
       </div>
       <div className="flex items-center gap-2">
-        <span className="flex min-w-0 items-center gap-1.5 text-sm text-muted" title={paperOn && wallet ? `Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}` : undefined}>
+        <span className="flex min-w-0 items-center gap-1.5 text-sm text-muted" title={paperOn && wallet ? `Paper wallet: ${wallet.cash.toFixed(4)} fake SOL left of ${wallet.start}${inUsdc ? " (shown as USDC at the live SOL price)" : ""}` : undefined}>
           <Icon.wallets className="size-3.5 shrink-0" />
-          {balance != null ? <><SolanaLogo className="size-3 shrink-0" /><b className="num font-semibold text-ink">{balance}</b><span>SOL</span></> : <span>Not signed in</span>}
+          {balance != null ? <>{inUsdc ? <img src="brand/pay/usdc.png" alt="" title="USDC" className="size-3 shrink-0 rounded-full" /> : <SolanaLogo className="size-3 shrink-0" />}<b className="num truncate font-semibold text-ink" title={`${balance} ${cur}`}>{balance}</b></> : <span>Not signed in</span>}
         </span>
         {paperOn && wallet && <button onClick={() => depositPaper(10).then((w) => toast(`Added 10 fake SOL. ${w.cash.toFixed(3)} SOL to spend.`), (e) => toast((e as Error).message))}
           title="Add 10 fake SOL to the paper wallet (positions stay)" className="num rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-semibold text-ink-2 transition-colors hover:bg-white/[0.12] hover:text-ink">+10</button>}
@@ -148,15 +163,29 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
       {buy ? (
         <div className="flex flex-col gap-2">
           <label className={cn("flex h-12 items-center gap-2.5 rounded-xl border bg-paper px-3.5 transition-colors duration-150 focus-within:border-up/50", "border-white/[0.08] hover:border-white/15")}>
-            <SolanaLogo className="size-4.5 shrink-0" />
-            <input type="number" min="0" step="0.01" value={sol || ""} onChange={(e) => setSol(Math.max(0, +e.target.value || 0))} aria-label="SOL to spend" placeholder="0.0"
+            {inUsdc ? <img src="brand/pay/usdc.png" alt="" className="size-4.5 shrink-0 rounded-full" /> : <SolanaLogo className="size-4.5 shrink-0" />}
+            <input type="number" min="0" step={inUsdc ? "1" : "0.01"} value={amount || ""} onChange={(e) => (inUsdc ? setUsdc : setSol)(Math.max(0, +e.target.value || 0))} aria-label={`${cur} to spend`} placeholder="0.0"
               className="num w-full min-w-0 bg-transparent text-xl font-semibold tracking-tight text-ink outline-none placeholder:text-muted/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
-            <span className="text-sm font-semibold text-muted">SOL</span>
+            {/* The money the buy is sized in: SOL or USDC (Axiom's switch), right where the amount is typed. */}
+            <div role="radiogroup" aria-label="Trade in SOL or USDC" className="flex shrink-0 gap-0.5 rounded-lg bg-paper-3 p-0.5">
+              <button role="radio" aria-checked={!inUsdc} onClick={(e) => { e.preventDefault(); setCur("SOL"); }} className={curBtn("SOL")}>SOL</button>
+              <button role="radio" aria-checked={inUsdc} onClick={(e) => { e.preventDefault(); setCur("USDC"); }} className={curBtn("USDC")}>USDC</button>
+            </div>
           </label>
-          <div className="grid grid-cols-4 gap-1.5">{sizes.map((v) => <button key={v} onClick={() => setSol(v)} className={chip(sol === v)}>{v}</button>)}</div>
+          <div className="grid grid-cols-4 gap-1.5">{(inUsdc ? USDC_SIZES : sizes).map((v) => <button key={v} onClick={() => (inUsdc ? setUsdc : setSol)(v)} className={chip(amount === v)}>{v}</button>)}</div>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-1.5">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} className={cn(chip(pct === v), "h-10 text-md")}>{v === 100 ? "All" : `${v}%`}</button>)}</div>
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-3 gap-1.5">{PCTS.map((v) => <button key={v} onClick={() => setPct(v)} className={cn(chip(pct === v), "h-10 text-md")}>{v === 100 ? "All" : `${v}%`}</button>)}</div>
+          {/* What the sale is paid in (a paper sale is kept in SOL; its figure is shown in the money picked). */}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-muted">Paid in</span>
+            <div role="radiogroup" aria-label="Paid in SOL or USDC" className="flex gap-0.5 rounded-lg bg-paper p-0.5">
+              <button role="radio" aria-checked={!inUsdc} onClick={() => setCur("SOL")} className={curBtn("SOL")}>SOL</button>
+              <button role="radio" aria-checked={inUsdc} onClick={() => setCur("USDC")} className={curBtn("USDC")}>USDC</button>
+            </div>
+          </div>
+        </div>
       )}
       {buy && (
         <div className="flex items-center justify-between gap-2">
@@ -169,7 +198,7 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
       )}
 
       <div className="min-h-[5.5rem] rounded-xl border border-white/[0.06] bg-paper/60 p-3 text-sm">
-        {realSell ? <span className="text-ink-2">Sells {pct}% of the {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol} in your wallet for SOL, at the market price.</span>
+        {realSell ? <span className="text-ink-2">Sells {pct}% of the {held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol} in your wallet for {cur}, at the market price.</span>
           : error ? <span className="text-down">{error}</span>
           : !quote ? <div className="flex flex-col gap-2"><i className="h-5 w-2/3 animate-pulse rounded bg-white/[0.06]" /><i className="h-3 w-full animate-pulse rounded bg-white/[0.04]" /><i className="h-3 w-5/6 animate-pulse rounded bg-white/[0.04]" /></div>
           : (
@@ -178,13 +207,13 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
               <span className="text-xs font-medium text-muted">You get</span>
               {quote.usdIn != null && <span className="num text-xs text-muted">{usdK(buy ? quote.usdIn : quote.usdOut)}</span>}
             </div>
-            <b className="num mt-0.5 mb-2.5 block truncate text-xl font-semibold tracking-tight text-ink">{buy ? <>{tokN(quote.outTokens)} <span className="text-ink-2">{symbol}</span></> : <SolAmt v={quote.outSol} />}</b>
+            <b className="num mt-0.5 mb-2.5 block truncate text-xl font-semibold tracking-tight text-ink">{buy ? <>{tokN(quote.outTokens)} <span className="text-ink-2">{symbol}</span></> : inUsdc && quote.usdOut != null ? <>{quote.usdOut.toFixed(2)} <span className="text-ink-2">USDC</span></> : <SolAmt v={quote.outSol} />}</b>
             <div className="num grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/[0.06] pt-2.5 text-xs">
               {stat("Avg fill MC", usdK(quote.avgMcapUsd))}
               {stat("Now MC", usdK(quote.spotMcapUsd))}
               {stat("Impact", quote.impactPct != null ? `${quote.impactPct.toFixed(2)}%` : "—", (quote.impactPct ?? 0) > 5 ? "text-down" : (quote.impactPct ?? 0) > 2 ? "text-warn" : "text-ink-2")}
               {stat("Route", quote.route?.join(" › ") || "—")}
-              {!paperOn && stat("Blix fee", buy ? `${+(sol * FEE).toFixed(5)} SOL` : `${+(FEE * 100).toFixed(2)}%`)}
+              {!paperOn && stat("Blix fee", buy ? (inUsdc ? `${+(usdc * FEE).toFixed(2)} USDC, paid in SOL` : `${+(sol * FEE).toFixed(5)} SOL`) : `${+(FEE * 100).toFixed(2)}%`)}
             </div>
           </>
         )}
@@ -198,7 +227,7 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
             : "bg-gradient-to-b from-down to-[color-mix(in_oklch,var(--color-down)_82%,black)] shadow-[0_8px_24px_-10px_var(--color-down),inset_0_1px_0_oklch(100%_0_0/0.25)]")}>
         <span className="relative flex items-center justify-center gap-2">
           {busy ? <><i className="size-4 animate-spin rounded-full border-2 border-on-fill/30 border-t-on-fill" />Placing…</>
-            : <span>{buy ? <>Buy <span className="num">{sol}</span> SOL of ${symbol}</> : <>Sell {pct === 100 ? "all" : `${pct}%`} of ${symbol}</>}</span>}
+            : <span>{buy ? <>Buy <span className="num">{amount}</span> {cur} of ${symbol}</> : <>Sell {pct === 100 ? "all" : `${pct}%`} of ${symbol}{inUsdc && !paperOn ? " for USDC" : ""}</>}</span>}
           {paperOn && !busy && <span className="rounded-[5px] bg-black/15 px-1.5 py-px text-[10px] font-bold tracking-[0.08em] uppercase">Paper</span>}
         </span>
       </button>

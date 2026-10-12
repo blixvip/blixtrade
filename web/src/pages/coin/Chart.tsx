@@ -12,6 +12,8 @@ import { SiteLogo } from "@/components/logos";
 import { EmptyState } from "@/components/page";
 import { CandlestickSeries, LineSeries, ColorType, createChart, createSeriesMarkers, HistogramSeries, LineStyle, type AutoscaleInfo, type IPriceLine, type CandlestickData, type IChartApi, type ISeriesApi, type ISeriesMarkersPluginApi, type SeriesMarker, type Time, type UTCTimestamp } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
+import { observeAttention } from "@/lib/attention";
+import { useMetricVisibility } from "@/lib/metrics";
 import { api, apiAged } from "@/lib/api";
 import { usdP } from "@/lib/coin";
 import { earlyBars, onLevel } from "@/lib/jupEarly";
@@ -190,13 +192,20 @@ function cached(mint: string, tf: number): Row[] | null {
 // Fetch a coin's candles ahead of time (the pointer resting on its link), so its chart draws on the first frame.
 const warming = new Map<string, number>();
 export function warmCandles(mint: string, tfs: number[]) {
-  for (const tf of tfs) {
-    const key = `${mint}:${tf}`, t = Date.now();
-    if (t - (warming.get(key) || 0) < 10_000 || (memo.get(key) && t - memo.get(key)!.at < 10_000)) continue;
-    warming.set(key, t);
-    if (warming.size > 200) warming.delete(warming.keys().next().value!);
-    apiAged<Candles>(`candles/${mint}?tf=${tf}`, undefined, 0, false).then(({ data: d }) => { const got = d.rows.filter((x) => x.open > 0 && x.close > 0); if (got.length) remember(key, got); }).catch(() => {});
-  }
+  const at = Date.now();
+  if (document.hidden || at - (warming.get(mint) || 0) < 10_000) return;
+  warming.set(mint, at);
+  if (warming.size > 200) warming.delete(warming.keys().next().value!);
+  type Packed = [number, number, number, number, number, number][];
+  apiAged<{ coins: Record<string, { m?: Packed; s?: Packed }> }>(`candles/warm?m=${mint}`, undefined, 0, false).then(({ data }) => {
+    const coin = data.coins?.[mint];
+    for (const tf of tfs) {
+      const size = tf >= 60 ? 60 : 5, packed = size === 60 ? coin?.m : coin?.s;
+      if (tf < size || tf % size || !packed?.length) continue;
+      const bars = normalizeBars(packed.map(([time, open, high, low, close, value]) => ({ time, open, high, low, close, value })));
+      if (bars.length) remember(`${mint}:${tf}`, tf === size ? bars : bucket(bars, tf));
+    }
+  }).catch(() => {});
 }
 
 export interface ChartPaper { t: number; exit_t?: number | null }
@@ -206,6 +215,10 @@ export interface Level { price: number; buy: boolean; title: string; migrate?: b
 
 export function CoinChart({ mint, marks, people, events, paper, signals, levels, defaultTf, born, migrated, migrating, exact }: { mint: string; marks: Mark[]; people?: ChartPeople | null; events?: ChartEvent[]; paper?: ChartPaper[]; signals?: ChartSignal[]; levels?: Level[]; defaultTf: number; born?: number | null; migrated?: number | null; migrating?: number | null; exact?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null), attentive = useRef(true);
+  const metricRef = useMetricVisibility(mint, true);
+  useEffect(() => panel.current ? observeAttention(panel.current, value => { attentive.current = value; }) : undefined, [mint]);
+  const watching = () => attentive.current && !document.hidden;
   const [pick, setTfState] = useState<number>(() => store.get("coin:tf", 0) || defaultTf);
   // All's candle size: from the coin's launch time (fixed while it is open, so a coin ageing past a boundary does
   // not rebuild the chart; set again when the real launch time arrives). If the first answer fills the server's
@@ -250,7 +263,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     if (!gecko || !geckoBox.current) return;
     mountGecko(mint, geckoBox.current, born);
     let alive = true, timer = 0;
-    const tick = async () => { try { const d = await api<{ mc: number | null }>(`gecko/price/${mint}`); if (alive && d.mc) { pushCoinMc(mint, d.mc); setGeckoMc(d.mc); } } catch {} if (alive) timer = window.setTimeout(tick, document.hidden ? 15_000 : 5_000); };
+    const tick = async () => { if (watching()) try { const d = await api<{ mc: number | null; t?: number }>(`gecko/price/${mint}`); if (alive && d.mc && d.t && Date.now() - d.t < 60_000 && d.t <= Date.now()) { pushCoinMc(mint, d.mc); setGeckoMc(d.mc); } } catch {} if (alive) timer = window.setTimeout(tick, document.hidden ? 15_000 : 5_000); };
     tick();
     return () => { alive = false; clearTimeout(timer); unmountGecko(); setGeckoMc(null); };
   }, [gecko, mint]);
@@ -293,7 +306,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   const [left, setLeft] = useState(0);
   useEffect(() => {
     if (all) return;
-    const go = () => { if (!document.hidden) setLeft(tf - (Math.floor(Date.now() / 1000) % tf)); };
+    const go = () => { if (watching()) setLeft(tf - (Math.floor(Date.now() / 1000) % tf)); };
     go();
     const id = window.setInterval(go, 1000);
     return () => clearInterval(id);
@@ -509,7 +522,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       let ffails = 0;
       const ftick = async () => {
         fcatch = false;
-        if (!document.hidden) {
+        if (watching()) {
           try { await fload(); polls++; ffails = 0; if (box.current) box.current.dataset.err = ""; }
           catch (e) {
             ffails++;
@@ -621,9 +634,9 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       // the level (k) when Jupiter's caps sit on another supply.
       let ptimer = 0;
       const price = async () => {
-        try {
-          const d = await api<{ mc: number | null }>(`gecko/price/${mint}`);
-          if (alive && d.mc && last && loaded) {
+        if (watching()) try {
+          const d = await api<{ mc: number | null; t?: number }>(`gecko/price/${mint}`);
+          if (alive && d.mc && d.t && Date.now() - d.t < 60_000 && d.t <= Date.now() && last && loaded) {
             const r = d.mc / last.close;
             // A major (SOL, cbBTC, USDC: `exact`) is kept on the live price to 1%: Jupiter reads cbBTC on a supply 5% off.
             // Any other coin's level was settled before its first paint (gload): never rescaled under the viewer.
@@ -634,7 +647,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
             }
             // The open candle follows this price only while it agrees with the candles (within 20%): a read on another
             // supply or a stale one wicked the candle far off and Jupiter's next read pulled it back.
-            const time = Math.floor(Date.now() / 1000 / tf) * tf;
+            const time = Math.floor(d.t / 1000 / tf) * tf;
             if (time >= last.time && Math.abs(d.mc / last.close - 1) < 0.2 && Date.now() - liveAt >= 15_000) {
               const x: Row = time === last.time ? { ...last, high: Math.max(last.high, d.mc), low: Math.min(last.low, d.mc), close: d.mc } : { time, open: last.close, high: Math.max(last.close, d.mc), low: Math.min(last.close, d.mc), close: d.mc, value: 0 };
               if (time === last.time) rows[rows.length - 1] = x; else rows.push(x);
@@ -649,7 +662,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       };
       let gfails = 0;
       const gtick = async () => {
-        if (!document.hidden || !loaded) {
+        if (watching()) {
           try { await gload(); polls++; gfails = 0; if (box.current) box.current.dataset.err = ""; }
           catch (e) {
             gfails++;
@@ -670,7 +683,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       // no slot field) and a trade far off the drawn level (another supply) are not drawn.
       let ftimer = 0, metaRaf = 0, metaRow: Row | null = null;
       const focus = async () => {
-        if (!document.hidden) { try { await api(`chartfocus/${mint}`); } catch { /* an older server: the reads alone */ } }
+        if (watching()) { try { await api(`chartfocus/${mint}`); } catch { /* an older server: the reads alone */ } }
         if (alive) ftimer = window.setTimeout(focus, document.hidden ? 20_000 : 5_000);
       };
       focus();
@@ -679,7 +692,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       let rtimer = 0;
       const retryBlix = async () => {
         if (!alive) return;
-        if (!document.hidden && !geckoOnlyNow() && picked.current !== mint && !fellBack.has(`${mint}:blix`) && !replaying(mint)) {
+        if (watching() && !geckoOnlyNow() && picked.current !== mint && !fellBack.has(`${mint}:blix`) && !replaying(mint)) {
           try { const d = await api<Candles>(`candles/${mint}?tf=${pick === ALL ? 60 : pick}`); if (alive && d.rows?.some((r) => r.open > 0 && r.close > 0)) { setSrcState("blix"); return; } } catch { /* still away */ }
         }
         if (alive) rtimer = window.setTimeout(retryBlix, 20_000);
@@ -687,7 +700,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       if (!geckoOnlyNow() && picked.current !== mint) rtimer = window.setTimeout(retryBlix, FELL_MS);
       const untrade = onCoinTrade(mint, (x) => {
         const [, ms, mc, v] = x, slot = (x as unknown as (number | null | undefined)[])[5];
-        if (!alive || !loaded || !last || slot === undefined || !validTrade(mc, v, ms) || Math.abs(mc / last.close - 1) >= 0.5) return;
+        if (!alive || !watching() || !loaded || !last || slot === undefined || !validTrade(mc, v, ms) || Math.abs(mc / last.close - 1) >= 0.5) return;
         const time = Math.floor(ms / 1000 / tf) * tf;
         if (time < last.time) return;
         const row: Row = time > last.time
@@ -829,7 +842,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     let streamT = 0, catchUp = false, fails = 0;   // catchUp: what was just drawn was a kept copy; read on from it at once
     const tick = async () => {
       catchUp = false;
-      if (!document.hidden) {
+      if (watching()) {
         // (A replay's candles come from its own trades, exact from the last one on: never read again in full.)
         try { await load(++polls % 20 === 0 && !replayOn); fails = 0; if (box.current) box.current.dataset.err = ""; }
         catch (e) {
@@ -853,7 +866,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     let paint = 0, painted: Row | null = null;
     const untrade = onCoinTrade(mint, (x) => {
       const [, ms, mc, v] = x, slot = (x as unknown as (number | null)[])[5];
-      if (!alive || !validTrade(mc, v, ms)) return;
+      if (!alive || !watching() || !validTrade(mc, v, ms)) return;
       streamT = Date.now();
       if (box.current) box.current.dataset.psrc = slot != null ? "logs" : "fast";   // which stream moved the chart last (probe)
       if (first || !last) return;
@@ -873,7 +886,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       // The figures over the chart follow at most once a frame.
       painted = last;
       if (!paint) paint = requestAnimationFrame(() => { paint = 0; if (alive && painted) setMeta((m) => ({ ...m, last: painted })); });
-    });
+    }, true, box.current);
     return () => { alive = false; unframe(); untrade(); cancelAnimationFrame(paint); clearTimeout(timer); removeChart(); clearChartMc(mint); s.current = {}; setHover(null); setTip(null); };
   }, [mint, tf, all, src, replayEpoch]);   // src: a source switch ends the old loader before the new one starts (or none, for Gecko)
 
@@ -1017,7 +1030,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
   // is off screen). The chart keeps asking every few seconds, so it fills in by itself.
   // [title, text, button]: the button switches to Blix's own candles in Fomo mode, to 1m candles in Blix mode.
   const why: [string, string, boolean] | null = gecko || !shown || !meta.empty ? null
-    : meta.note === "untraded" ? ["No trades yet", "Nobody has traded this coin since it was made. Its chart starts with the first trade and fills in by itself.", false]
+    : meta.note === "untraded" ? ["No trades yet", "No trades are available from the current source yet. This does not establish that the coin is inactive.", false]
     : tv && meta.note ? [/busy/i.test(meta.note) ? "Waiting for the chart" : "No candles yet", /busy/i.test(meta.note) ? "The chart's sources didn't answer. Blix asks again in a moment." : "There are no candles for this coin at this size yet. Try another size.", false]
     : fomo && meta.note ? ["Couldn't load Fomo's chart", `${meta.note.replace(/\.$/, "")}. Trying again every few seconds.`, true]
     : fomo ? ["No bars on Fomo yet", "Fomo has no candles for this coin at this size yet. Blix's own candles are built from every trade it reads from the chain.", true]
@@ -1026,7 +1039,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     : tf < 60 ? ["No live trades yet", "Second candles are built from the trades Blix sees live. 1m and longer show the coin's whole history.", true]
     : ["No candles yet", "No trades in this window yet. Candles appear with the first trade Blix sees.", false];
   return (
-    <div className="flex flex-col gap-1.5 p-2.5">
+    <div ref={element => { panel.current = element; metricRef(element); }} className="flex flex-col gap-1.5 p-2.5">
       <div className="flex flex-wrap items-center gap-3">
           {fomoDown && !fomo && <span className="ml-2 truncate text-[11px] text-muted" title={fomoDown}>{fomoDown}</span>}
         {!gecko && <div role="radiogroup" aria-label="Candle size" className="relative inline-flex items-center gap-0.5 rounded-full border border-rule bg-paper-3/70 p-0.5">
@@ -1069,6 +1082,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
             </span>
           );
         })()}
+        {shown && meta.last && <ChartAge time={meta.last.time} tf={tf} />}
         {/* Blix live shows no countdown or source label here (the owner, 2026-10-10): the chart speaks for itself. */}
         {tv && <a href="https://www.tradingview.com/" target="_blank" rel="noopener" title="Charts by TradingView; candles from Jupiter, GeckoTerminal when Jupiter has none" className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-ink">Chart by TradingView ↗</a>}
         {gecko && <span className="ml-auto flex items-center gap-2 text-xs text-muted">
@@ -1171,4 +1185,12 @@ function TipPanel({ tip, w, h }: { tip: { x: number; y: number; r: number; lines
       )}
     </div>
   );
+}
+
+function ChartAge({ time, tf }: { time: number; tf: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = window.setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 5000); return () => clearInterval(timer); }, []);
+  const age = Math.max(0, Math.floor((now - time * 1000) / 1000));
+  if (age < Math.max(60, tf * 2)) return null;
+  return <span data-chart-age className="text-[11px] text-muted" title="Time since the last available candle began. A data gap or quiet market does not prove a rug.">Last candle {age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h`} ago</span>;
 }

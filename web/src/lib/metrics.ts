@@ -39,13 +39,16 @@ export function metricDescription(field?: MetricField) {
 }
 
 const interests = new Map<symbol, { mint: string; active: boolean }>();
-let timer: number | undefined, soon: number | undefined, busy = false;
+let timer: number | undefined, soon: number | undefined, busy = false, pending = false;
 async function refresh() {
-  soon = undefined; if (busy) return;
+  soon = undefined; if (busy) { pending = true; return; }
   const rows = document.hidden ? [] : [...interests.values()];
-  const mints = [...new Set(rows.map(x => x.mint))].slice(0, 200), active = rows.find(x => x.active)?.mint || '';
+  const mints = [...new Set(rows.sort((a, b) => Number(b.active) - Number(a.active)).map(x => x.mint))].slice(0, 200), active = rows.find(x => x.active)?.mint || '';
   busy = true;
-  try { receiveMetrics(await api(`metrics?session=${metricSession}&m=${mints.join(',')}&active=${active}`), replayed); } catch {} finally { busy = false; }
+  try { receiveMetrics(await api(`metrics?session=${metricSession}&m=${mints.join(',')}&active=${active}`), replayed); } catch {} finally {
+    busy = false;
+    if (pending) { pending = false; changed(); }
+  }
 }
 let replayed: (mint: string) => boolean = () => false;
 export const metricReplayGuard = (fn: (mint: string) => boolean) => { replayed = fn; };
@@ -62,8 +65,7 @@ export function useMetricVisibility(mint?: string | null, active = false) {
     if (!mint || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return;
     const key = Symbol(mint);
     const update = (visible: boolean) => { if (visible) interests.set(key, { mint, active }); else interests.delete(key); changed(); };
-    if (active) update(true);
-    const observer = new IntersectionObserver(entries => update(active || entries.some(x => x.isIntersecting)), { rootMargin: '80px' });
+    const observer = new IntersectionObserver(entries => update(entries.some(x => x.isIntersecting)), { rootMargin: '80px' });
     if (ref.current) observer.observe(ref.current);
     return () => { observer.disconnect(); interests.delete(key); changed(); };
   }, [mint, active]);

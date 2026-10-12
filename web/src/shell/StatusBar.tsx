@@ -1,9 +1,11 @@
 // The strip along the bottom of every page, laid out like Axiom's: connection, settings, Watchlist, Wallets,
-// PnL, Activity, then Pulse, Discover and Alerts (named as the side rail names those pages),
+// PnL, Activity, then Pulse, Discover, Trending (the Feed's "Hot right now" box as a window, 2026-10-11) and Alerts
+// (named as the side rail names those pages),
 // the live feed's pace, BTC/ETH/SOL prices, and links.
 // Each item maps to the Blix page or figure that does the same job; the small windows (Watchlist, PnL, Feed,
 // Alerts) open upward and only ask the server while they are open. Desktop only (phones keep the bottom tabs).
-import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SVGProps } from "react";
+import { createPortal } from "react-dom";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
 import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
@@ -20,6 +22,7 @@ import { LiveMc } from "@/components/Live";
 import { thumb } from "@/lib/thumb";
 import { useRole } from "@/lib/role";
 import { SLOW_MS, useNet, watchNet } from "@/lib/net";
+import { Hot } from "@/pages/Feed";
 
 const I = (d: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("shrink-0", className)} {...p}>{d}</svg>
@@ -30,6 +33,7 @@ const Ico = {
   pnl: I(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />),
   feed: I(<><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></>),
   trend: I(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />),
+  flame: I(<path d="M12 22c4.4 0 7.5-3 7.5-7.2 0-3.3-2-5.6-3.6-7.5-.4 1.4-1.3 2.4-2.3 3C13.9 7.5 13 4.6 10.6 2c-.4 3.4-2.3 4.9-3.8 6.6C5.3 10.3 4.5 12.3 4.5 14.8 4.5 19 7.6 22 12 22Zm0-1c-2 0-3.3-1.4-3.3-3.3 0-1.5.9-2.4 1.8-3.3.3 1 .8 1.6 1.5 2 .4-.9.5-1.9.3-2.9 1.4 1.1 3 2.4 3 4.2 0 1.9-1.3 3.3-3.3 3.3Z" />),
   alpha: I(<path d="M18 6c-2 0-3.5 2.5-5 6s-3 6-5.5 6A3.5 3.5 0 0 1 4 14.5C4 10 7 6 10.5 6c3 0 4 4 5 8s1.5 4 2.5 4" />),
   callout: I(<path d="M3 11l14-6v14L3 13zM11.6 16.8a3 3 0 1 1-5.8-1.6" />),
   docs: I(<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />),
@@ -47,25 +51,32 @@ const DISCORD_URL = "https://discord.gg/3VWHBP6paA";
 const item = "flex h-full items-center gap-1.5 px-2 text-xs whitespace-nowrap text-ink-2 transition-colors duration-100 hover:bg-paper-3 hover:text-ink";
 
 // A small window that opens upward from its button and closes on a click anywhere else.
-function Pop({ label, icon, children, width = "w-80", badge }: { label: string; icon: ReactNode; children: (open: boolean) => ReactNode; width?: string; badge?: ReactNode }) {
+// `body`: the window's height and scrolling (a page-sized box like Trending's asks for more than the default);
+// `bare`: no header of its own, the contents bring theirs. It also closes when the page changes (a row clicked).
+// The window is rendered on the body (a portal), fixed just above its button: the bar clips what overflows it
+// (overflow-hidden, below), which hid a window drawn inside the bar.
+function Pop({ label, icon, children, width = "w-80", badge, body = "max-h-96 overflow-y-auto", bare = false }: { label: string; icon: ReactNode; children: (open: boolean) => ReactNode; width?: string; badge?: ReactNode; body?: string; bare?: boolean }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement>(null), panel = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ left: number; bottom: number } | null>(null);
   useEffect(() => {
     if (!open) return;
-    const off = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const place = () => { const r = ref.current?.getBoundingClientRect(); if (r) setAt({ left: Math.max(4, Math.min(r.left, innerWidth - 8 - (panel.current?.offsetWidth || 320))), bottom: innerHeight - r.top + 4 }); };
+    place();
+    const off = (e: MouseEvent) => { const t = e.target as Node; if (!ref.current?.contains(t) && !panel.current?.contains(t)) setOpen(false); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", off); document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); };
+    const went = () => setOpen(false);
+    document.addEventListener("mousedown", off); document.addEventListener("keydown", esc); addEventListener("hashchange", went); addEventListener("resize", place);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); removeEventListener("hashchange", went); removeEventListener("resize", place); };
   }, [open]);
   return (
     <div ref={ref} className="relative h-full">
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className={cn(item, open && "bg-paper-3 text-ink")}>{icon}<span className="max-xl:sr-only">{label}</span>{badge}</button>
-      {open && (
-        <div className={cn("absolute bottom-full left-0 z-50 mb-1 overflow-hidden rounded-card border border-rule-2 bg-paper-2 shadow-raised", width)}>
-          <header className="border-b border-rule px-3 py-2 text-sm font-semibold">{label}</header>
-          <div className="max-h-96 overflow-y-auto">{children(open)}</div>
-        </div>
-      )}
+      {open && at && createPortal(
+        <div ref={panel} role="dialog" aria-label={label} className={cn("fixed z-50 overflow-hidden rounded-card border border-rule-2 bg-paper-2 shadow-raised", width)} style={{ left: at.left, bottom: at.bottom }}>
+          {!bare && <header className="border-b border-rule px-3 py-2 text-sm font-semibold">{label}</header>}
+          <div className={body}>{children(open)}</div>
+        </div>, document.body)}
     </div>
   );
 }
@@ -214,6 +225,93 @@ function RadarRows({ open }: { open: boolean }) {
     </div>
   ))}</>;
 }
+// ---------- trending: the Feed's "Hot right now" box, in a window of its own anywhere in Blix ----------
+// The same box the Feed page shows beside its posts (pages/Feed.tsx Hot: the coins Fomo and pump.fun traders posted
+// about most in the last 1 to 60 minutes, live), with `keep` so the server keeps reading the feeds while it is open.
+// Only built while open: a closed window asks the server for nothing.
+const HOT_SOURCES: ("fomo" | "pump")[] = ["fomo", "pump"], NO_POSTS: never[] = [];
+// A floating panel (the user, 2026-10-11: "you should be able to move it around … anywhere you want on your
+// screen"): it opens above its button with a short rise, is dragged by its top bar anywhere on the screen (kept
+// inside it, the place remembered), stays while pages change (a coin clicked opens with the panel still there),
+// and goes on its ×, on Escape, or on the button again.
+const FLOAT_W = 384, EDGE = 8, POS_KEY = "trending:pos";
+function Trending() {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button ref={btn} onClick={() => setOpen((o) => !o)} aria-expanded={open} className={cn(item, open && "bg-paper-3 text-ink")}>
+        <Ico.flame className="size-3.5" /><span className="max-xl:sr-only">Trending</span>
+      </button>
+      {open && <Float title="Trending" anchor={btn} onClose={() => setOpen(false)}>
+        <Hot items={NO_POSTS} sources={HOT_SOURCES} keep className="block min-w-0 pt-3 pb-1" />
+      </Float>}
+    </>
+  );
+}
+// The panel itself: on the body, fixed; moved directly (transform) while dragging, React told only at the end.
+function Float({ title, anchor, onClose, children }: { title: string; anchor: RefObject<HTMLButtonElement | null>; onClose: () => void; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const pos = useRef<{ x: number; y: number } | null>(null);
+  const keep = (x: number, y: number) => {
+    const el = box.current, w = el?.offsetWidth || FLOAT_W, h = el?.offsetHeight || 600;
+    return { x: Math.max(EDGE, Math.min(x, innerWidth - EDGE - w)), y: Math.max(EDGE, Math.min(y, innerHeight - EDGE - h)) };
+  };
+  const move = (x: number, y: number) => { pos.current = keep(x, y); if (box.current) box.current.style.transform = `translate3d(${Math.round(pos.current.x)}px, ${Math.round(pos.current.y)}px, 0)`; };
+  // Where it opens: where it was left, else just above its button. Then the rise in; on close, a short fall out.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const saved = store.get<{ x: number; y: number } | null>(POS_KEY, null), r = anchor.current?.getBoundingClientRect();
+    const start = saved ?? { x: r ? r.left : EDGE, y: r ? r.top - 6 - el.offsetHeight : innerHeight - EDGE - el.offsetHeight };
+    move(start.x, start.y);
+    el.animate([{ opacity: 0, transform: `translate3d(${Math.round(pos.current!.x)}px, ${Math.round(pos.current!.y + 14)}px, 0) scale(0.97)` }, { opacity: 1, transform: el.style.transform }], { duration: 220, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
+    const onResize = () => { if (pos.current) move(pos.current.x, pos.current.y); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    addEventListener("resize", onResize); document.addEventListener("keydown", esc);
+    return () => { removeEventListener("resize", onResize); document.removeEventListener("keydown", esc); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const closing = useRef(false);
+  const close = () => {
+    if (closing.current) return;
+    closing.current = true;
+    const el = box.current;
+    const a = el?.animate([{ opacity: 1, transform: el.style.transform }, { opacity: 0, transform: `${el.style.transform} translateY(10px) scale(0.98)` }], { duration: 140, easing: "ease-in", fill: "forwards" });
+    if (a) a.onfinish = onClose; else onClose();
+  };
+  // Dragging by the top bar: the pointer is captured, the panel follows it frame by frame, the place is kept at the end.
+  const drag = (e: ReactPointerEvent) => {
+    if (e.button !== 0 || (e.target as Element).closest("button, a")) return;
+    const el = box.current, p0 = pos.current;
+    if (!el || !p0) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    const sx = e.clientX - p0.x, sy = e.clientY - p0.y;
+    let frame = 0, lx = e.clientX, ly = e.clientY;
+    el.classList.add("select-none", "shadow-2xl");
+    const onMove = (ev: PointerEvent) => { lx = ev.clientX; ly = ev.clientY; if (!frame) frame = requestAnimationFrame(() => { frame = 0; move(lx - sx, ly - sy); }); };
+    const onUp = () => {
+      el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp);
+      cancelAnimationFrame(frame); frame = 0; move(lx - sx, ly - sy);
+      el.classList.remove("select-none", "shadow-2xl");
+      if (pos.current) store.set(POS_KEY, pos.current);
+    };
+    el.addEventListener("pointermove", onMove); el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
+  };
+  return createPortal(
+    <div ref={box} role="dialog" aria-label={title} className="fixed top-0 left-0 z-50 flex max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-card border border-rule-2 bg-paper-2 shadow-raised will-change-transform" style={{ width: FLOAT_W }}>
+      <div onPointerDown={drag} className="flex h-9 shrink-0 cursor-grab items-center gap-2 border-b border-rule bg-paper-3/60 pr-1 pl-3 active:cursor-grabbing">
+        <span aria-hidden className="grid grid-cols-2 gap-[3px] text-muted"><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /></span>
+        <span className="flex items-center gap-1.5 text-sm font-semibold text-ink"><Ico.flame className="size-3.5 text-up" />{title}</span>
+        <span className="ml-auto text-2xs text-muted">drag to move</span>
+        <button onClick={close} aria-label="Close" className="grid size-7 place-items-center rounded-control text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink">
+          <svg viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden><path d="M3 3l6 6M9 3l-6 6" /></svg>
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin]">{children}</div>
+    </div>, document.body);
+}
+
 type Sig = { id: number; mint: string; t: number; title: string; detail: string; symbol?: string };
 function Alerts() {
   return <Pop label="Alerts" icon={<Ico.bell className="size-3.5" />} width="w-[26rem]">{(open) => <AlertRows open={open} />}</Pop>;
@@ -298,6 +396,7 @@ function DesktopStatusBar() {
       <Feed />
       {go("", "Pulse", <Icon.pulse className="size-3.5" />, "Every new pump.fun coin, live")}
       {go("coins", "Discover", <Ico.trend className="size-3.5" />, "The most traded coins right now")}
+      <Trending />
       <Alerts />
       <span className="my-2 w-px bg-rule" />
       <Tip tip="pump.fun trades per second, from the live feed">

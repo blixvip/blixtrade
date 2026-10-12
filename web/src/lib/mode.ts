@@ -66,3 +66,13 @@ export function paperReady(): boolean {
   toast("Paper trading is off. Switch Paper on in the top bar to trade with fake SOL.");
   return false;
 }
+
+// ---------- the money a trade is in ----------
+// Buys sized in SOL or in USDC, sells paid in SOL or in USDC (Axiom's switch; the user, 2026-10-11: "buy coins by
+// USDC only"). One setting for every trade panel, kept in this browser. Real USDC trades go through Jupiter from or
+// to USDC in the wallet service; the paper desk prices a USDC buy as the same SOL at the live price.
+export type Cur = "SOL" | "USDC";
+export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const USDC_SIZES = [10, 25, 50, 100];   // buy presets in USDC until edited
+export const useCur = create<{ cur: Cur }>(() => ({ cur: store.get<Cur>("trade:cur", "SOL") === "USDC" ? "USDC" : "SOL" }));
+export const setCur = (cur: Cur) => { store.set("trade:cur", cur); useCur.setState({ cur }); };

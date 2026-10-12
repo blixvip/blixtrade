@@ -7,6 +7,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Empty, Loading, Panel, Problem } from "@/components/page";
 import { usePoll } from "@/lib/coin";
 import { cn } from "@/lib/utils";
+import { Tip } from "@/components/ui/tooltip";
+import { Icon } from "@/shell/icons";
 import { noteLive, sparkOrKeep } from "@/components/Spark";
 import { DiscoverRow, GRID, withLive, type ExtCoin, type LiveFigures, type Row } from "./parts";
 import { freshest, keptRow, takeRows, takeSparks, withGrace } from "./fresh";
@@ -54,14 +56,16 @@ function keep(kind: string, d: FomoList) {
   try { if (d.rows?.length) localStorage.setItem(KEEP(kind), JSON.stringify({ rows: d.rows, t: d.t, loading: false, error: null, signedOut: false })); } catch { /* storage full or off */ }
 }
 
-export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: number }) {
+// `hidden`, `onHide`, `onHideAll`: the page's hidden coins (Coins.tsx): hidden Solana coins are left out, and a
+// Solana row's eye (on hover) hides it.
+export function FomoTab({ kind, q, sol, hidden, onHide, onHideAll }: { kind: FomoKind; q: string; sol: number; hidden?: Set<string>; onHide?: (mint: string) => void; onHideAll?: (mints: string[]) => void }) {
   const list = kind === "top" ? "trending" : kind;
   const { data: fresh, error } = usePoll<FomoList>(`fomo/list?kind=${list}`, 3000);
   const saved = useMemo(() => kept(list), [list]);
   useEffect(() => { if (fresh?.rows?.length) keep(list, fresh); }, [fresh, list]);
   const d = fresh?.rows?.length ? fresh : saved && !fresh?.signedOut ? { ...saved, error: fresh?.error ?? null } : fresh;
   // Most held: every Solana coin Fomo lists (only ~12), then Blix's own most-held coins (src "blix", fomolists.js).
-  const listed = d?.rows?.filter((r) => shownChain(r.chain) && (kind !== "held" || (r.chain === SOL && r.mint !== WSOL))) || null;
+  const listed = d?.rows?.filter((r) => shownChain(r.chain) && (kind !== "held" || (r.chain === SOL && r.mint !== WSOL)) && !(r.chain === SOL && hidden?.has(r.mint))) || null;
   const shown = listed && withGrace(`fomo:${list}`, listed, (r) => `${r.chain}:${r.mint}`);
   // In a fixed order: these addresses then only change when the coins do (answers are kept by address).
   const mints = shown?.filter((r) => r.chain === SOL).map((r) => r.mint).sort().join(",") || "";
@@ -94,13 +98,15 @@ export function FomoTab({ kind, q, sol }: { kind: FomoKind; q: string; sol: numb
           <div className={cn(GRID, "metal-bar sticky top-0 z-10 px-4 py-2 text-sm font-medium text-muted")}>
             <span>Pair info</span><span>Price 24h</span><span className="text-right">Market cap</span><span className="text-right">Liquidity</span>
             <span className="text-right">Volume 24h</span><span className="text-right">Txns 24h</span><span>Token info</span>
-            <span />
+            <span className="flex items-center justify-end">
+              {onHideAll && rows && rows.some((r) => !r.ext) && <Tip tip="Hide every coin on screen"><button onClick={() => onHideAll(rows.filter((r) => !r.ext).map((r) => r.row.mint))} className="flex items-center gap-1 rounded-chip px-1.5 py-0.5 text-xs text-muted hover:bg-paper-4 hover:text-ink"><Icon.eyeOff className="size-3.5" />Hide all</button></Tip>}
+            </span>
           </div>
           {d?.signedOut ? <Problem text="Nothing to show right now. This list fills in by itself." />
             : !rows ? (error || d?.error ? <Problem text="Nothing to show right now. This list fills in by itself." /> : <div className="p-3"><Loading /><p className="px-1 pt-2 text-sm text-muted">Loading…</p></div>)
             : rows.length ? rows.map(({ row, ext, key }) => (
               <Fragment key={key}>
-                <DiscoverRow r={row} tf="24h" sol={sol} ext={ext} />
+                <DiscoverRow r={row} tf="24h" sol={sol} ext={ext} onHide={ext ? undefined : onHide} />
               </Fragment>))
             : <Empty>{needle ? "No coin in Fomo's list matches." : kind === "held" ? "Fomo's Most held list is empty right now." : "Fomo's list is empty right now."}</Empty>}
         </div>

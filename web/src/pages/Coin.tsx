@@ -6,7 +6,7 @@
 // the stream, every trade the moment the radar reads it from the chain (`ctrade`) and the holder figures each
 // time the chain changes them (`cholders`).
 import { cn } from "@/lib/utils";
-import { useMetrics, useMetricVisibility, metricNumber } from '@/lib/metrics';
+import { useMetrics, metricNumber } from '@/lib/metrics';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadPaperSizes } from "@/lib/mode";
 import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
@@ -48,7 +48,6 @@ const NO_INFO: CoinData["info"] = { holders: null, top10: null, devPct: null, sn
 
 export function Coin({ mint }: { mint: string }) {
   const metrics = useMetrics(mint);
-  useMetricVisibility(mint, true);
   const token = usePoll<TokenDetail>(`token/${mint}`, 15_000);
   // Every trade arrives on the stream the moment the radar reads it (ctrade, below); these reads fill in the rest.
   const coinPolled = usePoll<CoinData>(`coin/${mint}`, 3_000);

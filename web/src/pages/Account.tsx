@@ -23,6 +23,7 @@ import { Sol } from "@/shell/Rail";
 import { MyProfile } from "./profile/parts";
 import { ShareLink } from "@/components/ShareLink";
 import { takeWithdraw, WITHDRAW_EVENT } from "@/components/WalletMenu";
+import { Qr } from "@/components/Exchange";
 
 interface Token { mint: string; ui: number; usd: number | null }
 interface Wallet { sol: number; solUsd: number; tokensUsd: number; tokens: Token[] }
@@ -61,7 +62,7 @@ const GoogleG = () => (
   </svg>
 );
 
-const panel = "rounded-card border border-rule bg-paper-2";
+const panel = "rounded-2xl border border-white/[0.06] bg-paper-2";
 const Field = ({ label, ...props }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) => (
   <label className="flex flex-col gap-1.5"><span className="label">{label}</span>
     <input {...props} className={cn("h-9 min-w-0 rounded-control border border-rule-2 bg-paper px-3 text-md outline-none focus:border-accent-dim", props.className)} /></label>
@@ -96,6 +97,24 @@ function CoinCell({ mint, name }: { mint: string; name?: { symbol?: string; name
       </span>
       <span className="flex min-w-0 flex-col"><b className="truncate font-semibold text-ink">{name?.symbol || shortAddr(mint)}</b><span className="text-xs text-muted">{shortAddr(mint)}</span></span>
     </a>
+  );
+}
+
+// An empty ledger: faint ghost rows fading out behind the message, so the panel reads as a table waiting for rows.
+function Empty({ icon, title, hint, children }: { icon: ReactNode; title: string; hint: string; children?: ReactNode }) {
+  return (
+    <div className="relative flex flex-col items-center gap-3 overflow-hidden px-6 pt-20 pb-16 text-center">
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 flex flex-col opacity-70 [mask-image:linear-gradient(to_bottom,black,transparent_85%)]">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-3 border-t border-white/[0.04] px-5 py-3">
+            <span className="size-8 shrink-0 rounded-md bg-white/[0.04]" /><span className="h-2.5 w-24 rounded-full bg-white/[0.05]" /><span className="ml-auto h-2.5 w-16 rounded-full bg-white/[0.04]" /><span className="h-2.5 w-12 rounded-full bg-white/[0.04]" /><span className="h-2.5 w-10 rounded-full bg-white/[0.04]" />
+          </div>
+        ))}
+      </div>
+      <span aria-hidden className="relative grid size-12 place-items-center rounded-xl border border-white/[0.08] bg-paper-3 text-ink-2 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.8)]">{icon}</span>
+      <div className="relative"><p className="text-md font-semibold text-ink">{title}</p><p className="mt-1 text-sm text-muted">{hint}</p></div>
+      {children && <div className="relative flex gap-2">{children}</div>}
+    </div>
   );
 }
 
@@ -227,54 +246,89 @@ export function Account() {
   if (me.needsWallet) return <WalletSetup key={me.email} onCreated={onCreated} />;
 
   const total = w ? w.solUsd + w.tokensUsd : null, empty = Boolean(justCreated || (w && w.sol === 0 && w.tokens.length === 0));
+  const copyAddr = () => { navigator.clipboard?.writeText(me.address!); toast("Address copied"); };
   const accountActions = <>
-    <button onClick={() => openExchange("deposit")} className="flex h-9 items-center rounded-full bg-ink px-5 text-md font-semibold text-on-fill transition-transform duration-100 hover:bg-focus active:scale-[0.97]">Deposit</button>
+    <button onClick={() => openExchange("deposit")} className="flex h-9 items-center gap-1.5 rounded-full bg-ink px-5 text-md font-semibold text-on-fill transition-transform duration-100 hover:bg-focus active:scale-[0.97] [&_svg]:size-3.5"><Icon.send className="rotate-180" />Deposit</button>
     <Button size="lg" className="h-9 rounded-full px-4" onClick={() => setOpen("withdraw")}><Icon.send />Withdraw</Button>
     <Button size="lg" className="h-9 rounded-full px-4" onClick={() => setOpen("buy")}><Icon.bolt />Buy</Button>
     <Button size="lg" variant="ghost" className="size-9 rounded-full p-0" onClick={load} aria-label="Refresh" title="Refresh"><Icon.refresh /></Button>
   </>;
-  const Fig = ({ label, children, sub, cls }: { label: string; children: ReactNode; sub?: ReactNode; cls?: string }) => (
-    <div className="flex min-w-0 flex-col gap-1 border-rule px-5 py-4 max-sm:px-4 [&:not(:first-child)]:border-l max-md:[&:nth-child(3)]:border-l-0">
-      <span className="text-2xs font-semibold tracking-[0.06em] text-muted uppercase">{label}</span>
-      <b className={cn("num flex items-center gap-1.5 truncate text-xl leading-tight font-semibold text-ink", cls)}>{children}</b>
-      {sub && <span className="num truncate text-xs text-muted">{sub}</span>}
+  // A figure in the strip under the header: a glyph on a tile, the label, the number, a line under it.
+  const Fig = ({ icon: I, label, children, sub, cls }: { icon: (p: { className?: string }) => ReactNode; label: string; children: ReactNode; sub?: ReactNode; cls?: string }) => (
+    <div className="flex min-w-0 items-center gap-3.5 border-white/[0.06] px-5 py-4 max-sm:px-4 [&:not(:first-child)]:border-l max-md:[&:nth-child(n+3)]:border-t max-md:[&:nth-child(3)]:border-l-0">
+      <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-ink-2"><I className="size-4" /></span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="label">{label}</span>
+        <b className={cn("num flex items-center gap-1.5 truncate text-lg leading-tight font-semibold text-ink", cls)}>{children}</b>
+        {sub && <span className="num truncate text-xs text-muted">{sub}</span>}
+      </div>
+    </div>
+  );
+  const chip = "flex h-6 items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 text-xs font-medium text-ink-2";
+  // The first three things to do with a new wallet, as one strip; the step that is next is lit.
+  const Step = ({ n, title, text, action, active }: { n: number; title: string; text: string; action?: ReactNode; active?: boolean }) => (
+    <div className={cn("flex min-w-0 items-start gap-3.5 border-white/[0.06] px-5 py-4 max-sm:px-4 [&:not(:first-child)]:border-l max-md:[&:not(:first-child)]:border-t max-md:[&:not(:first-child)]:border-l-0", active && "bg-up/[0.05]")}>
+      <span className={cn("num grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold", active ? "border-up/40 bg-up/15 text-up" : "border-white/[0.08] bg-white/[0.04] text-muted")}>{n}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <b className="text-md leading-tight font-semibold text-ink">{title}</b>
+        <span className="text-sm leading-snug text-muted">{text}</span>
+        {action && <span className="mt-1.5">{action}</span>}
+      </div>
     </div>
   );
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4 p-4 max-md:p-3 max-md:pb-6">
       {off && <p role="alert" className="rounded-control border border-warn/40 px-3 py-2 text-md text-ink-2">Couldn’t refresh your wallet. Showing the last balance. {off}</p>}
 
-      {/* Who you are, what you can do, and what your wallet holds: one card. */}
+      {/* Who you are, what the wallet is worth, what you can do: one card, the figures in a strip under it. */}
       {me.hosted ? (
         <section className={cn(panel, "overflow-hidden")}>
-          <div className="flex flex-wrap items-center justify-between gap-4 px-5 pt-5 pb-4 max-sm:px-4">
-            <div className="flex min-w-0 items-center gap-3.5">
-              <AccountAvatar me={me} className="size-12" />
-              <div className="min-w-0"><h1 className="truncate text-xl leading-tight font-semibold">{me.name || "Your wallet"}</h1><p className="mt-0.5 truncate text-md text-muted">{me.email}</p></div>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-5 px-6 pt-6 pb-5 max-sm:px-4 max-sm:pt-5">
+            <div className="flex min-w-0 flex-1 basis-72 items-center gap-4">
+              <AccountAvatar me={me} className="size-16 shrink-0 ring-2 ring-white/10 ring-offset-2 ring-offset-paper-2" />
+              <div className="min-w-0">
+                <h1 className="truncate font-display text-2xl leading-tight font-semibold tracking-[-0.02em] text-ink">{me.name || "Your wallet"}</h1>
+                <p className="mt-0.5 truncate text-md text-muted">{me.email}</p>
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <span className={chip}><i aria-hidden className="size-1.5 rounded-full bg-up" />Live wallet</span>
+                  <button onClick={copyAddr} title="Copy your deposit address" className={cn(chip, "font-outlier transition-colors hover:border-white/20 hover:text-ink")}>{shortAddr(me.address || "")}<Icon.copy className="size-3 text-muted" /></button>
+                </div>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">{accountActions}</div>
-          </div>
-          <div className="grid grid-cols-4 border-t border-rule max-md:grid-cols-2">
-            <Fig label="Total value" sub={w ? `${w.tokens.length} coin${w.tokens.length === 1 ? "" : "s"} held` : undefined}>{usd(total)}</Fig>
-            <Fig label="Available" sub={w ? usd(w.solUsd) : undefined}><Sol className="size-4 text-ink-2" />{w ? sol(w.sol) : "—"}</Fig>
-            <Fig label="In coins" sub={w && solPrice ? `${sol(heldSol, 3)} SOL` : undefined}>{w ? usd(w.tokensUsd) : "—"}</Fig>
-            <Fig label="Profit & loss" cls={book.n ? toneOf(pnl) : "text-ink-2"} sub={book.n ? `${sol(book.bought, 3)} bought · ${sol(book.sold, 3)} sold` : "no trades yet"}><Sol className="size-4" />{book.n ? signed(pnl, 3) : "0"}</Fig>
-          </div>
-          {empty && (
-            <div role="status" className="flex flex-wrap items-center gap-3 border-t border-rule bg-up/[0.05] px-5 py-3 max-sm:px-4">
-              <span aria-hidden className="grid size-7 shrink-0 place-items-center rounded-full bg-up/15 text-up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" className="size-3.5"><path d="m5 12 4 4L19 6" /></svg></span>
-              <p className="min-w-0 flex-1 text-md text-ink-2"><b className="font-semibold text-ink">Your wallet is ready.</b> Deposit SOL to start trading.</p>
-              <button onClick={() => { setJustCreated(false); openExchange("deposit"); }} className="h-8 rounded-full bg-up px-4 text-sm font-bold text-on-fill hover:brightness-110">Fund wallet</button>
+            <div className="flex flex-col items-end gap-3.5 max-sm:w-full max-sm:items-start">
+              <div className="text-right max-sm:text-left">
+                <span className="label">Total value</span>
+                <b className="num mt-1 block font-display text-[2.5rem] leading-none font-semibold tracking-[-0.03em] text-ink max-sm:text-[2rem]">{usd(total)}</b>
+                <span className="num mt-2 flex items-center justify-end gap-1.5 text-sm text-muted max-sm:justify-start"><Sol className="size-3.5 shrink-0" />{w ? `${sol(w.sol + heldSol, 3)} SOL` : "—"}{w ? ` · ${w.tokens.length} coin${w.tokens.length === 1 ? "" : "s"} held` : ""}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 max-sm:justify-start">{accountActions}</div>
             </div>
-          )}
+          </div>
+          <div className="grid grid-cols-4 border-t border-white/[0.06] max-md:grid-cols-2">
+            <Fig icon={Icon.wallets} label="Available" sub={w ? usd(w.solUsd) : undefined}><Sol className="size-3.5 shrink-0" />{w ? sol(w.sol) : "—"}</Fig>
+            <Fig icon={Icon.coins} label="In coins" sub={w && solPrice ? (w.tokens.length ? `${sol(heldSol, 3)} SOL across ${w.tokens.length} coin${w.tokens.length === 1 ? "" : "s"}` : "no coins held") : undefined}>{w ? usd(w.tokensUsd) : "—"}</Fig>
+            <Fig icon={Icon.record} label="Profit & loss" cls={book.n ? toneOf(pnl) : "text-ink-2"} sub={book.n ? `${sol(book.bought, 3)} bought · ${sol(book.sold, 3)} sold` : "no trades yet"}><Sol className="size-3.5 shrink-0" />{book.n ? signed(pnl, 3) : "0"}</Fig>
+            <Fig icon={Icon.candles} label="Trades" sub={txs.length ? `${txs.length} transaction${txs.length === 1 ? "" : "s"} on file` : "nothing yet"}>{book.n}</Fig>
+          </div>
           {w && w.sol > 0 && paperOn && (
-            <div role="status" className="flex flex-wrap items-center gap-3 border-t border-rule bg-warn/[0.05] px-5 py-3 max-sm:px-4">
+            <div role="status" className="flex flex-wrap items-center gap-3 border-t border-white/[0.06] bg-warn/[0.05] px-5 py-3 max-sm:px-4">
               <p className="min-w-0 flex-1 text-md text-ink-2"><b className="font-semibold text-ink">You're on Paper.</b> Your wallet has {sol(w.sol)} SOL: switch to trade it for real.</p>
               <button onClick={() => { setPaper(false); location.hash = "#/coins"; }} className="h-8 rounded-full bg-ink px-4 text-sm font-semibold text-on-fill hover:bg-focus">Trade with real SOL</button>
             </div>
           )}
         </section>
       ) : <MyProfile actions={<>{accountActions}<Button size="lg" variant="ghost" className="rounded-full" onClick={() => logOut(load)}>Log out</Button></>} />}
+
+      {/* A new, empty wallet: the three steps to the first trade. */}
+      {me.hosted && empty && (
+        <section role="status" className={cn(panel, "grid grid-cols-3 overflow-hidden max-md:grid-cols-1")}>
+          <Step n={1} active title="Deposit SOL" text="By card, from an exchange or from any wallet. It lands in seconds."
+            action={<button onClick={() => { setJustCreated(false); openExchange("deposit"); }} className="flex h-8 items-center rounded-full bg-up px-4 text-sm font-bold text-on-fill hover:brightness-110">Fund wallet</button>} />
+          <Step n={2} title="Find a coin" text="Pulse shows every launch the second it happens; Discover ranks the ones running."
+            action={<a href="#/pulse" className="flex h-8 w-fit items-center rounded-full border border-white/[0.1] px-4 text-sm font-semibold text-ink-2 transition-colors hover:border-white/20 hover:text-ink">Open Pulse</a>} />
+          <Step n={3} title="Trade and track" text="Buy in one tap. Your positions, profit and history live on this page." />
+        </section>
+      )}
 
       {me.problem && <p className="rounded-control border border-warn/40 bg-warn/10 px-3 py-2 text-md text-ink-2"><b className="text-ink">The wallet service did not answer.</b> {me.problem}</p>}
       {confirmAgain && <p className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-md text-ink-2">
@@ -284,7 +338,7 @@ export function Account() {
       <div className="grid items-start gap-4 grid-cols-[minmax(0,1fr)_400px] max-xl:grid-cols-[minmax(0,1fr)]">
         {/* Positions and history. */}
         <section className={cn(panel, "min-w-0 overflow-hidden")}>
-          <header className="flex h-14 items-center justify-between gap-3 border-b border-rule px-5 max-sm:px-4">
+          <header className="flex h-14 items-center justify-between gap-3 border-b border-white/[0.06] px-5 max-sm:px-4">
             <Segmented value={tab} options={[["positions", `Positions${w?.tokens.length ? ` · ${w.tokens.length}` : ""}`], ["history", `History${txs.length ? ` · ${txs.length}` : ""}`]]} onChange={setTab} label="Positions or history" />
             {tab === "positions" && w?.tokens.length ? <span className="num text-sm text-muted">{usd(w.tokensUsd)} in coins</span> : null}
           </header>
@@ -305,14 +359,10 @@ export function Account() {
                   })}
                 </tbody></table>
               ) : (
-                <div className="flex flex-col items-center gap-3 px-6 py-14 text-center">
-                  <span aria-hidden className="grid size-12 place-items-center rounded-full border border-rule-2 bg-paper-3 text-muted"><Icon.wallets className="size-5" /></span>
-                  <div><p className="text-md font-semibold text-ink">No open positions</p><p className="mt-1 text-sm text-muted">Deposit SOL, then buy from Pulse or paste a contract.</p></div>
-                  <div className="flex gap-2">
-                    <button onClick={() => openExchange("deposit")} className="h-8 rounded-full bg-ink px-4 text-sm font-semibold text-on-fill hover:bg-focus">Deposit</button>
-                    <a href="#/pulse" className="flex h-8 items-center rounded-full border border-rule-2 px-4 text-sm font-semibold text-ink-2 hover:text-ink">Open Pulse</a>
-                  </div>
-                </div>
+                <Empty icon={<Icon.wallets className="size-5" />} title="No open positions" hint="Deposit SOL, then buy from Pulse or paste a contract.">
+                  <button onClick={() => openExchange("deposit")} className="h-8 rounded-full bg-ink px-4 text-sm font-semibold text-on-fill hover:bg-focus">Deposit</button>
+                  <a href="#/pulse" className="flex h-8 items-center rounded-full border border-white/[0.1] px-4 text-sm font-semibold text-ink-2 transition-colors hover:border-white/20 hover:text-ink">Open Pulse</a>
+                </Empty>
               )
             ) : (
               txs.length ? (
@@ -325,30 +375,36 @@ export function Account() {
                       <td className={td}>{t.sig ? <a href={`https://solscan.io/tx/${t.sig}`} target="_blank" rel="noreferrer" className="font-outlier text-xs text-ink-2 underline decoration-rule-2 underline-offset-2 hover:text-ink">{shortAddr(t.sig)}</a> : "—"}</td>
                       <td className={cn(td, "capitalize", t.status === "confirmed" ? "text-up" : t.status === "failed" ? "text-down" : "text-warn")}>{t.status}</td></tr>))}
                 </tbody></table>
-              ) : <p className="px-6 py-14 text-center text-md text-muted">No trades yet.</p>
+              ) : <Empty icon={<Icon.record className="size-5" />} title="No transactions yet" hint="Deposits, buys, sells and withdrawals show here with their Solscan links." />
             )}
           </div>
         </section>
 
         <aside className="flex min-w-0 flex-col gap-4">
-          {/* Your deposit address. */}
-          <section className={cn(panel, "flex flex-col gap-3 p-5 max-sm:p-4")}>
-            <div className="flex items-center justify-between"><h2 className="text-md font-semibold">Wallet</h2><span className="text-xs text-muted">Solana · deposit address</span></div>
-            <button onClick={() => { navigator.clipboard?.writeText(me.address!); toast("Address copied"); }} title="Copy address"
-              className="group flex items-center gap-2 rounded-control border border-rule bg-paper px-3 py-2.5 text-left transition-colors hover:border-rule-2">
-              <span className="min-w-0 flex-1 font-outlier text-sm break-all text-ink">{me.address}</span>
-              <Icon.copy className="size-4 shrink-0 text-muted group-hover:text-ink" />
-            </button>
-            <div className="flex flex-wrap gap-2">
-              <Button asChild size="lg" className="h-8 rounded-full"><a href={`https://solscan.io/account/${me.address}`} target="_blank" rel="noreferrer"><SiteLogo site="solscan" className="size-4" />Solscan</a></Button>
-              <Button size="lg" className="h-8 rounded-full" onClick={() => { setSecret(null); setOpen("export"); }}><Icon.key />Export key</Button>
+          {/* Your deposit address, as text and as a code to scan. */}
+          <section className={cn(panel, "overflow-hidden")}>
+            <header className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3.5 max-sm:px-4">
+              <h2 className="text-md font-semibold text-ink">Deposit address</h2>
+              <span className={chip}><Sol className="size-3" />Solana</span>
+            </header>
+            <div className="flex items-start gap-4 p-5 max-sm:p-4">
+              <Qr text={me.address!} className="size-[6.75rem] rounded-xl border-[3px] p-1.5" />
+              <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+                <button onClick={copyAddr} title="Copy address" className="rounded-xl border border-white/[0.08] bg-paper px-3 py-2.5 text-left font-outlier text-[0.8125rem] leading-snug break-all text-ink-2 transition-colors hover:border-white/20 hover:text-ink">{me.address}</button>
+                <div className="flex flex-wrap gap-1.5">
+                  <Button size="lg" className="h-8 rounded-full" onClick={copyAddr}><Icon.copy />Copy</Button>
+                  <Button asChild size="lg" className="h-8 rounded-full"><a href={`https://solscan.io/account/${me.address}`} target="_blank" rel="noreferrer"><SiteLogo site="solscan" className="size-4" />Solscan</a></Button>
+                  <Button size="lg" className="h-8 rounded-full" onClick={() => { setSecret(null); setOpen("export"); }}><Icon.key />Export key</Button>
+                </div>
+                <p className="text-xs leading-snug text-muted">Send SOL on the Solana network only. Coins sent on another network are lost.</p>
+              </div>
             </div>
           </section>
 
           <ShareLink />
 
           <section className={cn(panel, "flex items-center justify-between gap-3 px-5 py-3.5 max-sm:px-4")}>
-            <p className="min-w-0 text-sm text-muted">Signed in as <b className="font-semibold text-ink-2">{me.email}</b></p>
+            <p className="min-w-0 truncate text-sm text-muted">Signed in as <b className="font-semibold text-ink-2">{me.email}</b></p>
             <button onClick={() => logOut(load)} className="shrink-0 text-sm font-semibold text-down hover:underline">Log out</button>
           </section>
         </aside>

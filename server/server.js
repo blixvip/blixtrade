@@ -23,6 +23,7 @@ import { replayFomo } from "./replayfomo.js";
 import { startCandleStore, rebuild as rebuildCandles, storeStats as candleStoreStats, revisionOf } from "./candlestore.js";
 import * as coinIndex from "./coinindex.js";
 import * as xtrack from "./xtrack.js";
+import * as wtrack from "./wtrack.js";
 import { computeNarratives, THEMES, themesFor } from "./narratives.js";
 import { narrativeFeed } from "./narfeed.js";
 import { settings, saveSettings, publicSettings, withOverrides, SECRETS, PRIVATE } from "./settings.js";
@@ -818,6 +819,8 @@ function healthReport() {
     `${rpc.calls.toLocaleString()} calls · ${rpc.errors} errors · rate limited ${rpc.limited}×${cooling ? ` · resting ${Math.ceil((rpc.coolingUntil - now) / 1000)}s` : ""}${rpc.lastError ? ` · last problem ${ago(rpc.lastErrorAt)}: ${rpc.lastError}` : ""}`,
     { lastOk: rpc.lastOk || null, lastFail: rpc.lastErrorAt || null, lastError: rpc.lastError, fix: rpc.public && rpc.limited > 5 ? "The free public RPC is throttling. A free Helius RPC URL in Settings reads wallets about 10x faster and rarely limits." : null });
   const lagged = tr.wallets.filter((w) => now - w.checked > 5 * MIN).length, missed = tr.wallets.reduce((s, w) => s + (w.missed || 0), 0);
+  const wts = wtrack.status();
+  add("wtrack", "Wallet tracker (members)", !wts.wallets ? "off" : "ok", !wts.wallets ? "No wallets on any member's list" : `${wts.wallets} wallets on ${wts.members} list${wts.members === 1 ? "" : "s"} · ${wts.live} live-feed trades, ${wts.chain} chain-read, ${wts.transfers} transfers · ${wts.pushed} pushed`, { lastOk: Math.max(wts.lastLive, wts.lastChain) || null, stats: wts });
   add("wallets", "Wallet tracking", !tr.wallets.length ? "off" : !tr.stream.connected ? "degraded" : lagged > tr.wallets.length / 3 ? "degraded" : "ok",
     !tr.wallets.length ? "No wallets followed" : `${tr.stream.connected ? `Live stream on ${tr.stream.wallets} of ${tr.wallets.length} wallets, ${tr.stream.events.toLocaleString()} events` : "Live stream down (polling only, minutes behind)"} · ${tr.backlog} transactions waiting to be read · ${lagged} wallet${lagged === 1 ? "" : "s"} not checked in 5+ min · ${missed} transactions known missed`,
     { lastOk: tr.stream.lastEvent || tr.stream.since || null, lastError: tr.stream.error, stream: tr.stream, backlog: tr.backlog, missed });
@@ -1293,6 +1296,25 @@ async function handleRequest(req, res) {
     if (p === "/api/overview") return send(res, 200, warmPics(cached("overview", 3000, overview)));
     // BTC/ETH/SOL: shared 15-second cache, first healthy provider answers; richer 24h figures fill in later.
     if (p === "/api/market") return send(res, 200, await marketPrices());
+    // Wallet tracker (wtrack.js): the member's own list (the owner's as ""), their trades and transfers as they happen.
+    if (p.startsWith("/api/wtrack")) {
+      const who = res.blixAs || "";
+      if (p === "/api/wtrack") return send(res, 200, wtrack.overview(who, { grp: params.grp ? +params.grp : null, limit: +params.limit || undefined }));
+      if (p === "/api/wtrack/feed") return send(res, 200, wtrack.feedSince(who, params.since, +params.limit || undefined));
+      if (p === "/api/wtrack/monitor") return send(res, 200, await wtrack.monitor(who));
+      if (p === "/api/wtrack/kols") return send(res, 200, await wtrack.kols(who, params.range));
+      if (p === "/api/wtrack/export") return send(res, 200, { wallets: wtrack.exportList(who) });
+      if (p === "/api/wtrack/wallets" && POST) {
+        const b = await readBody(req);
+        if (Array.isArray(b.wallets)) { let added = 0, skipped = 0; for (const w of b.wallets.slice(0, 200)) { try { wtrack.add(who, w); added++; } catch { skipped++; } } return send(res, 200, { added, skipped }); }
+        return send(res, 200, wtrack.add(who, b));
+      }
+      if (p === "/api/wtrack/import" && POST) { const b = await readBody(req); return send(res, 200, wtrack.importText(who, b.text)); }
+      const wt = p.match(new RegExp(`^/api/wtrack/wallets/(${MINT})$`));
+      if (wt && req.method === "DELETE") return send(res, 200, wtrack.remove(who, wt[1]));
+      if (wt && POST) { const b = await readBody(req); return send(res, 200, wtrack.update(who, wt[1], b)); }
+      return send(res, 404, { error: "Not found." });
+    }
     // X tracker (xtrack.js): accounts, their posts with the coins they mention, profile changes, reader status.
     if (p === "/api/x") {
       const posts = xtrack.feed({ handle: params.handle || null, limit: params.limit, coins: params.coins === "1", since: +params.since || 0 });
@@ -1632,9 +1654,12 @@ bus.on("signal", (s) => {
   notifySignal(s).catch((e) => logEvent("error", `notify: ${e.message}`));
 });
 bus.on("tick", (s) => broadcast("tick", s));
+attachFirehose(bus);
 bus.on("brief", (b) => broadcast("brief", b));
 // The owner's followed wallets are the owner's business: their trades go to the owner's own clients only.
-bus.on("walletTrade", (ev) => broadcast("walletTrade", ev, ""));
+bus.on("walletTrade", (ev) => { broadcast("walletTrade", ev, ""); try { wtrack.fromEngine(ev); } catch {} });
+// The wallet tracker's live pushes go to the one member whose list the wallet is on (wtrack.js).
+wtrack.start((who, event, data) => broadcast(event, data, who));
 // New pump.fun coins go to the page the moment they're created; live trade numbers every 100ms.
 bus.on("launch", (l) => {
   watched.add(l.mint);

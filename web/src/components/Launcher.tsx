@@ -8,7 +8,9 @@ import { useTrade } from "@/lib/mode";
 import { usePulse, type Coin } from "@/lib/pulse";
 import { trade } from "@/lib/trade";
 import { cn, store } from "@/lib/utils";
-import { CoinImg } from "@/components/page";
+import { CoinImg, eagerAgain } from "@/components/page";
+import { SiteLogo, type Site } from "@/components/logos";
+import { warmPics } from "@/lib/pics";
 import { LiveMc } from "@/components/Live";
 import { toast } from "@/components/ui/toast";
 import { Icon } from "@/shell/icons";
@@ -60,8 +62,8 @@ const fromPulse = (c: Coin, solUsd: number): Row => ({ mint: c.mint, symbol: c.s
   vol: c.liveVol ?? c.vol, dex: c.dex, graduated: c.graduated, x: c.x, web: c.web, tg: c.tg, score: c.ai?.score ?? null });
 
 // Launchpad filters along the top. `dex` values are the radar's (server DEXES).
-const PADS: [key: string, label: string, dex: string[] | null][] = [["all", "All", null], ["pump", "Pump", ["pumpfun", "pumpswap"]],
-  ["bonk", "Bonk", ["launchlab"]], ["meteora", "Meteora", ["meteoradbc", "meteora"]], ["bags", "Bags", ["bags"]], ["raydium", "Raydium", ["raydium"]]];
+const PADS: [key: string, label: string, dex: string[] | null, logo: Site | null][] = [["all", "All", null, null], ["pump", "Pump", ["pumpfun", "pumpswap"], "pumpfun"],
+  ["bonk", "Bonk", ["launchlab"], "bonk"], ["meteora", "Meteora", ["meteoradbc", "meteora"], "meteora"], ["bags", "Bags", ["bags"], "bags"], ["raydium", "Raydium", ["raydium"], "raydium"]];
 type Sort = "score" | "new" | "mcap" | "vol" | "liq";
 const SORTS: [Sort, string, ReactNode][] = [["score", "Trending", <Icon.pulse />], ["new", "Newest", <Icon.refresh />], ["mcap", "Market cap", <Icon.candles />],
   ["vol", "Volume", <Icon.rank />], ["liq", "Liquidity", <Icon.curve />]];
@@ -116,7 +118,7 @@ function Body({ close }: { close: () => void }) {
         .then((r) => { if (!gone) setFound({ term, rows: r.rows.map(fromApi), hist: !term }); })
         .catch(() => { if (!gone) { setFound({ term, rows: [], hist: !term }); setFailed(true); } })
         .finally(() => { if (!gone) setLoading(false); });
-    }, term ? 160 : 0);
+    }, term ? 40 : 0);
     return () => { gone = true; clearTimeout(t); };
   }, [term, histKey]);
 
@@ -141,6 +143,9 @@ function Body({ close }: { close: () => void }) {
     return out;
   }, [found, live, solUsd, pad, sort, term, lower, history]);
 
+  // The logos of every row, fetched in one bulk read as soon as the rows are known (not one by one as each row
+  // scrolls into view), and the first screenful drawn at once: a result never shows up without its picture.
+  useEffect(() => { eagerAgain(); warmPics(rows.map((r) => r.mint)); }, [rows]);
   useEffect(() => setSel(0), [term, pad, sort]);
   useEffect(() => setSel((i) => Math.min(i, Math.max(0, rows.length - 1))), [rows.length]);
   useEffect(() => { listRef.current?.querySelector(`[data-i="${sel}"]`)?.scrollIntoView({ block: "nearest" }); }, [sel]);
@@ -153,6 +158,10 @@ function Body({ close }: { close: () => void }) {
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(rows.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); }
+    else if (e.key === "PageDown") { e.preventDefault(); setSel((i) => Math.min(rows.length - 1, i + 8)); }
+    else if (e.key === "PageUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 8)); }
+    else if (e.key === "End" && !q) { e.preventDefault(); setSel(Math.max(0, rows.length - 1)); }
+    else if (e.key === "Home" && !q) { e.preventDefault(); setSel(0); }
     else if (e.key === "Enter" && rows[sel]) { e.preventDefault(); go(rows[sel]); }
   };
   const pickPad = (k: string) => { setPad(k); store.set("launcher:pad", k); };
@@ -163,10 +172,10 @@ function Body({ close }: { close: () => void }) {
     <>
       <div className="flex shrink-0 items-center gap-2 px-5 pt-4">
         <div role="radiogroup" aria-label="Launchpad" className="flex min-w-0 flex-wrap items-center gap-2">
-          {PADS.map(([k, label]) => (
+          {PADS.map(([k, label, , logo]) => (
             <button key={k} role="radio" aria-checked={pad === k} onClick={() => pickPad(k)}
-              className={cn("h-8 rounded-control border px-3 text-md font-semibold transition-colors duration-100",
-                pad === k ? "border-accent bg-accent/15 text-ink" : "border-rule-2 bg-paper-3 text-ink-2 hover:border-muted hover:text-ink")}>{label}</button>
+              className={cn("flex h-8 items-center gap-1.5 rounded-control border px-3 text-md font-semibold transition-colors duration-100",
+                pad === k ? "border-accent bg-accent/15 text-ink" : "border-rule-2 bg-paper-3 text-ink-2 hover:border-muted hover:text-ink")}>{logo && <SiteLogo site={logo} className="size-4 rounded-full" />}{label}</button>
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -252,7 +261,7 @@ function LRow({ r, i, active, sol, onHover, onOpen, onBuy }: { r: Row; i: number
             <span className="truncate text-lg text-muted">{r.name}</span>
             <button onClick={copy} aria-label="Copy contract address" title={r.mint} className="shrink-0 text-muted hover:text-ink [&_svg]:size-3.5"><Icon.copy /></button>
           </div>
-          <div className="flex items-center gap-2.5 text-md">
+          <div className="flex items-center gap-2.5 overflow-hidden text-md whitespace-nowrap">
             {age != null && <span className="num font-medium text-up">{ageStr(age)}</span>}
             <span className="num text-xs text-muted">{shortAddr(r.mint)}</span>
             {r.x && safeHref(r.x) && <XHover href={safeHref(r.x)!}><a href={safeHref(r.x)!} target="_blank" rel="noreferrer" aria-label={xKindLabel(xKind(safeHref(r.x)!))} className="text-muted hover:text-ink [&_svg]:size-4"><XLinkIcon href={safeHref(r.x)!} /></a></XHover>}{social(r.web, <Icon.web />, "Website")}{social(r.tg, <Icon.tg />, "Telegram")}

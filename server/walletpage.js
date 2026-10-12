@@ -22,7 +22,7 @@ const PUMP = { origin: "https://pump.fun", referer: "https://pump.fun/", "user-a
 const now = () => Date.now();
 const pages = new Map();   // wallet -> { data, t, building }
 
-async function pumpProfile(address) {
+export async function pumpProfile(address) {
   try {
     const r = await fetch(`https://frontend-api-v3.pump.fun/users/${address}`, { headers: PUMP, signal: AbortSignal.timeout(6000) });
     if (!r.ok) return null;

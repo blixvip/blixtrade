@@ -17,6 +17,7 @@ import { OWNER_ONLY, useRole, useRoleKnown } from "@/lib/role";
 import { loadExchange, loadLauncher, useExchange, useLauncher, useWelcome } from "@/lib/modals";
 import { closeQuick } from "@/lib/quick";
 import { useMe, useUi } from "@/lib/ui";
+import { loadTracker, useTracker } from "@/lib/wtrack";
 import "@/lib/update";   // the "new version" bar after a deploy
 
 // A page loaded on demand. If its file cannot be fetched (the app was rebuilt while this tab was open, or the radar
@@ -94,6 +95,9 @@ const AiPicks = page(() => import("@/pages/AiPicks"), (m) => gated("picks", m.Ai
 const Settings = page(() => import("@/pages/Settings"), (m) => m.Settings);
 const Traders = page(() => import("@/pages/Traders"), (m) => m.Traders);
 const XTracker = page(() => import("@/pages/XTracker"), (m) => m.XTracker);
+const Tracker = page(() => import("@/pages/Tracker"), (m) => m.Tracker);
+// The wallet tracker's floating window (components/WalletTracker.tsx): its code loads only once it is opened.
+const TrackerWindow = lazy(() => load(loadTracker).then((m) => ({ default: m.TrackerWindow })));
 const Coin = page(() => import("@/pages/Coin"), (m) => m.Coin);
 const Trader = page(() => import("@/pages/Trader"), (m) => m.Trader);
 const Profile = page(() => import("@/pages/Profile"), (m) => m.Profile);
@@ -157,7 +161,7 @@ class PageGuard extends Component<{ route: string; children: ReactNode }, { erro
   }
 }
 const PAGES: Record<string, PageOf> = { api: Api, mcp: Mcp, settings: Settings, "": Pulse, account: Account, coins: Coins, feed: Feed,
-  launch: Launch, narratives: Narratives, "ai-picks": AiPicks, health: Health, traders: Traders, x: XTracker, u: Profile, practice: Practice };
+  launch: Launch, narratives: Narratives, "ai-picks": AiPicks, health: Health, traders: Traders, tracker: Tracker, x: XTracker, u: Profile, practice: Practice };
 for (const [route, P] of Object.entries({ ...PAGES, coin: Coin, trader: Trader })) pageCode[route] = P.code;
 
 // Tab names for pages that aren't in the rail.
@@ -179,6 +183,8 @@ function App() {
   const route = useRoute(), arg = useRouteArg(), View = PAGES[route];
   const needsWallet = useMe(s => Boolean(s.me?.signedIn && s.me?.needsWallet));
   const focusFeed = useUi(s => s.feedFocus) && route === 'feed';
+  // The wallet tracker's floating window stays over every page but its own.
+  const trackerFloat = useTracker((s) => s.float) && route !== "tracker";
   // Google sign-in may land on any page. Start onboarding once the missing wallet is known.
   useEffect(() => { if (needsWallet) location.replace("#/account"); }, [needsWallet]);
   useEffect(() => {
@@ -217,6 +223,7 @@ function App() {
           {!focusFeed && <ShellGuard name="statusbar"><StatusBar /></ShellGuard>}
         </div>
       </div>
+      {trackerFloat && <ShellGuard name="tracker"><Suspense fallback={null}><TrackerWindow /></Suspense></ShellGuard>}
       <ShellGuard name="modals"><Modals /></ShellGuard>
       <ShellGuard name="toasts"><Toaster /></ShellGuard>
       <ShellGuard name="netnotice"><NetNotice /></ShellGuard>

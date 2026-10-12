@@ -47,7 +47,7 @@ function useCopy() {
 // highest error correction covers the cleared modules). The QR library (50 KB) is fetched when a code is first
 // drawn, not with the app.
 const EYES = (n: number): [number, number][] => [[0, 0], [n - 7, 0], [0, n - 7]];
-function Qr({ text, mark }: { text: string; mark?: string }) {
+export function Qr({ text, mark, className }: { text: string; mark?: string; className?: string }) {
   const [{ n, dots }, setQr] = useState({ n: 0, dots: "" });
   useEffect(() => {
     let alive = true;
@@ -65,7 +65,7 @@ function Qr({ text, mark }: { text: string; mark?: string }) {
     return () => { alive = false; };
   }, [text]);
   return (
-    <span className="relative block size-[13.25rem] shrink-0 rounded-[18px] border-[5px] border-black bg-white p-2 max-sm:size-36 max-sm:rounded-[14px] max-sm:p-1.5">
+    <span className={cn("relative block shrink-0 border-black bg-white", className || "size-[13.25rem] rounded-[18px] border-[5px] p-2 max-sm:size-36 max-sm:rounded-[14px] max-sm:p-1.5")}>
       {n > 0 && (
         <svg viewBox={`0 0 ${n} ${n}`} role="img" aria-label="QR code of your deposit address" className="size-full">
           <path d={dots} fill="#000" />
@@ -76,8 +76,8 @@ function Qr({ text, mark }: { text: string; mark?: string }) {
             </g>))}
         </svg>
       )}
-      {mark ? <img src={mark} alt="" className="absolute top-1/2 left-1/2 size-11 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white p-0.5 max-sm:size-8" />
-        : <SolCoin className="absolute top-1/2 left-1/2 size-11 -translate-x-1/2 -translate-y-1/2 ring-0 max-sm:size-8" />}
+      {mark ? <img src={mark} alt="" className="absolute top-1/2 left-1/2 size-[21%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white p-0.5" />
+        : <SolCoin className="absolute top-1/2 left-1/2 size-[21%] -translate-x-1/2 -translate-y-1/2 ring-0" />}
     </span>
   );
 }

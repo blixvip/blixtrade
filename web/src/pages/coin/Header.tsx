@@ -28,9 +28,7 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
   const graduated = Boolean(t.graduated);
   // The latest trade, live from the coin's own stream, for a coin in its first day; an older coin's figure follows
   // its Gecko chart (pushed in), so no per-coin chain subscription is held for it.
-  const bornAt = c?.created ? (typeof c.created === "number" ? c.created : Date.parse(String(c.created))) : (t.pair_created || t.first_seen || NaN);
-  const firstDay = Number.isFinite(bornAt) && bornAt > 0 && Date.now() - bornAt < 24 * 3600e3;
-  const traded = useTradeMc(t.mint, firstDay);
+  const traded = useTradeMc(t.mint, false); // the visible chart owns the dedicated stream
   // While the chart is open the header says exactly what the chart's newest candle says (lib/chartMc.ts), for every
   // chart source; the coin's own figures only until the chart has drawn.
   const chartMc = useChartMc((s) => s[t.mint]);
@@ -67,7 +65,7 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
       <div className="flex min-w-[4.75rem] shrink-0 flex-col gap-1 border-l border-white/[0.06] px-3 py-0.5 first:border-l-0 first:pl-0 max-sm:border-l-0 max-sm:px-0">
         <span className="text-2xs font-semibold tracking-[0.06em] whitespace-nowrap text-muted uppercase">{label}</span>
         <b className="num truncate text-md leading-none font-semibold text-ink">{value}</b>
-        <span className="num flex h-2.5 items-center text-2xs leading-none whitespace-nowrap text-muted">{sub}</span>
+        <span className="num flex h-2.5 max-w-[11rem] items-center truncate text-2xs leading-none whitespace-nowrap text-muted" title={typeof sub === "string" ? sub : undefined}>{sub}</span>
       </div>
     </Tip>
   );

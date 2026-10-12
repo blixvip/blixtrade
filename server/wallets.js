@@ -132,7 +132,7 @@ async function drain(emit) {
   try {
     // One transaction per wallet per pass, your own wallets first, so a busy bot cannot starve the rest.
     for (let pass = 0; pass < 400; pass++) {
-      const wallets = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'fomo' DESC").all().filter((w) => backlog.get(w.address)?.length);
+      const wallets = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'tracker' DESC, source = 'fomo' DESC").all().filter((w) => backlog.get(w.address)?.length);
       for (const a of backlog.keys()) if (!wallets.some((w) => w.address === a)) backlog.delete(a);   // paused or unfollowed
       if (!wallets.length) break;
       for (const w of wallets) {
@@ -148,6 +148,9 @@ async function drain(emit) {
   } finally { reading = false; }
 }
 
+// Every transaction read, swap or not, goes to these too: the wallet tracker (wtrack.js) reads transfers from them.
+const txHooks = [];
+export const onTx = (fn) => txHooks.push(fn);
 async function readTx(w, job, emit) {
   const key = `${w.address}:${job.sig}`;
   if (readSigs.has(key) || db.prepare("SELECT 1 FROM wallet_trades WHERE sig = ? AND wallet = ?").get(job.sig, w.address)) return;
@@ -155,6 +158,7 @@ async function readTx(w, job, emit) {
   if (!tx) throw new Error("transaction not available yet");
   readSigs.add(key);
   if (readSigs.size > 20000) for (const k of [...readSigs].slice(0, 5000)) readSigs.delete(k);
+  for (const fn of txHooks) { try { fn(w, tx, job); } catch {} }
   const price = await solPrice();
   for (const sw of sol.parseSwaps(tx, w.address)) {
     const usd = sw.usd ?? sw.sol * price;
@@ -176,9 +180,12 @@ async function pollWallets(emit) {
   if (polling) return;
   polling = true;
   try {
-    const list = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY backfilled ASC, source = 'you' DESC, source = 'fomo' DESC, COALESCE(last_poll, 0) ASC").all();
+    // Your own and members' tracked wallets first, then whoever has waited longest. (Grouping by source after that
+    // starved the smart-money wallets: with 70 Fomo wallets ahead of them in the order and 4 polls a tick, a smart
+    // wallet outside the stream's 60 was never polled again; some went a week unchecked, 2026-10-12.)
+    const list = db.prepare("SELECT * FROM wallets WHERE watching = 1 ORDER BY backfilled ASC, source IN ('you', 'tracker') DESC, COALESCE(last_poll, 0) ASC").all();
     // With the live stream up, polling only needs to sweep slowly for anything the stream dropped.
-    const budget = settings.rpcUrl ? 30 : stream.connected ? 4 : 8;
+    const budget = settings.rpcUrl ? 30 : stream.connected ? 6 : 8;
     for (const w of list.slice(0, budget)) await pollOne(w).catch((e) => { if (!e.limited) logEvent("error", `wallet ${short(w.address)}: ${e.message}`); });
     pauseBots();
   } finally {
@@ -232,7 +239,7 @@ async function pollOne(w) {
 export const stream = { connected: false, wallets: 0, events: 0, lastEvent: 0, url: null, since: 0, error: null };
 function startStream(emit) {
   let ws, subs = new Map(), pending = new Map(), id = 0, alive = true, opened = 0;
-  const wanted = () => db.prepare("SELECT address FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, COALESCE(last_trade, 0) DESC LIMIT 60").all().map((r) => r.address);
+  const wanted = () => db.prepare("SELECT address FROM wallets WHERE watching = 1 ORDER BY source = 'you' DESC, source = 'tracker' DESC, COALESCE(last_trade, 0) DESC LIMIT 60").all().map((r) => r.address);
   const sync = () => {
     if (ws?.readyState !== 1) return;
     const want = new Set(wanted()), have = new Set([...subs.values(), ...pending.values()]);

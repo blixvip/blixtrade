@@ -3,8 +3,11 @@
 // the real chart's candles, size, polls and trades), with its picture, ticker, launchpad, the market cap the chart
 // is drawing this instant and the move across the candles on screen, its bonding progress while on the curve, and
 // under the chart the row's own figures. It behaves exactly as the Discover card (pages/discover/hovercard.tsx):
-// one card for the whole page in its own layer, opening 140 ms after the pointer rests on a row with its top-left
-// corner at the pointer, following the pointer frame by frame (moved directly, not through React). Moving to
+// one card for the whole page in its own layer, opening the instant the pointer touches a row (no rest, no delay:
+// the user, 2026-10-11, "the chart should show up instantly") with its top-left corner at the pointer, following the
+// pointer frame by frame (moved directly, not through React). Its chart is drawn from memory in the same frame: every
+// row on the page has its candles read ahead (hoverChart.ts warm) and the chart's chunk is loaded as the page opens,
+// so the card never says "loading". Moving to
 // another row swaps what it shows in place; it fades and slides in, fades out 150 ms after the pointer has left the
 // row. The card takes no pointer events at all (the user, 2026-10-11: "you shouldn't be able to scroll onto it"):
 // the pointer is never on it, the wheel scrolls the list under it, and a click goes to the row beneath, which opens
@@ -20,21 +23,23 @@ import { usdP } from "@/lib/coin";
 import { usePulse, type Coin } from "@/lib/pulse";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
-import { Icon } from "@/shell/icons";
-import { OVERVIEW_TF, primeCandles, tfLabel } from "./hoverChart";
+import { CHART_BG, OVERVIEW_TF, primeCandles, tfLabel, unwatchRow, watchRow } from "./hoverChart";
 import type { MiniState } from "./MiniChart";
 
 const loadChart = () => import("./MiniChart");
 const MiniChart = lazy(() => loadChart().then((m) => ({ default: m.MiniChart })));
+// The chart's chunk (lightweight-charts) is fetched as soon as the page is idle, not on the first hover.
+// (...and at the latest 1.5 s in: a busy page may never go idle, and the first hover then paid ~400 ms for the chunk.)
+if (typeof window !== "undefined") { const go = () => { loadChart().catch(() => {}); }; window.requestIdleCallback?.(go); setTimeout(go, 1500); }
 
-const W = 360, CHART_H = 190, GAP = 14, OPEN_MS = 140, CLOSE_MS = 150;
+const W = 360, CHART_H = 190, GAP = 14, CLOSE_MS = 150;
 // Inside a row, these keep their own hover (links, buttons, the picture's big preview, the known-holder faces): no
 // chart card from them.
 const OWN = "a, button, [data-coin-pic], [data-known-holders]";
 
 const useCard = create<{ mint: string | null; open: boolean }>(() => ({ mint: null, open: false }));
 let box: HTMLDivElement | null = null;            // the card's outer layer, moved directly
-let at = { x: 0, y: 0 }, frame = 0, openTimer = 0, closeTimer = 0, mounted = false;
+let at = { x: 0, y: 0 }, frame = 0, closeTimer = 0, mounted = false;
 
 // The card's top-left corner just below-right of the pointer; flipped to the other side near the window's edges.
 function place() {
@@ -48,7 +53,7 @@ function place() {
 }
 const follow = (x: number, y: number) => { at = { x, y }; if (!frame) frame = requestAnimationFrame(place); };
 const cancelClose = () => clearTimeout(closeTimer);
-const closeSoon = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); closeTimer = window.setTimeout(() => useCard.setState({ open: false }), CLOSE_MS); };
+const closeSoon = () => { clearTimeout(closeTimer); closeTimer = window.setTimeout(() => useCard.setState({ open: false }), CLOSE_MS); };
 // The rows on the page, by coin, so after a scroll the card can show whichever row is now under the pointer.
 const cells = new Map<string, Coin>();
 let scrollFrame = 0;
@@ -65,7 +70,7 @@ function underPointer() {
   if (useCard.getState().mint !== mint) { primeCandles(c.mint); useCard.setState({ mint: c.mint }); }
 }
 const onScroll = () => { if (!scrollFrame) scrollFrame = requestAnimationFrame(underPointer); };
-const closeNow = () => { clearTimeout(openTimer); openTimer = 0; clearTimeout(closeTimer); if (useCard.getState().open) useCard.setState({ open: false }); };
+const closeNow = () => { clearTimeout(closeTimer); if (useCard.getState().open) useCard.setState({ open: false }); };
 function ensureLayer() {
   if (mounted || typeof document === "undefined") return;
   mounted = true;
@@ -77,6 +82,8 @@ function ensureLayer() {
 type Trigger = ReactElement<{ onPointerMove?: (e: unknown) => void; onPointerLeave?: (e: unknown) => void; onPointerDown?: (e: unknown) => void; "data-coin-cell"?: string }>;
 export function ChartHover({ coin, children }: { coin: Coin; children: Trigger }) {
   useEffect(() => { cells.set(coin.mint, coin); return () => { if (cells.get(coin.mint) === coin) cells.delete(coin.mint); }; }, [coin]);
+  // While the row is on the page its candles are read ahead, so the card opens on them at once.
+  useEffect(() => { watchRow(coin.mint); return () => unwatchRow(coin.mint); }, [coin.mint]);
   const move = (e: unknown) => {
     const ev = e as PointerEvent;
     if (ev?.pointerType && ev.pointerType !== "mouse") return;
@@ -85,11 +92,10 @@ export function ChartHover({ coin, children }: { coin: Coin; children: Trigger }
     follow(ev.clientX, ev.clientY);
     const s = useCard.getState();
     if (s.open) { if (s.mint !== coin.mint) { primeCandles(coin.mint); useCard.setState({ mint: coin.mint }); } return; }
-    if (openTimer) return;
+    // Open now, on this very move: no wait for the pointer to rest.
     ensureLayer();
-    loadChart();
     primeCandles(coin.mint);
-    openTimer = window.setTimeout(() => { openTimer = 0; useCard.setState({ mint: coin.mint, open: true }); }, OPEN_MS);
+    useCard.setState({ mint: coin.mint, open: true });
   };
   const p = children.props;
   return cloneElement(children, {
@@ -111,9 +117,9 @@ function Layer() {
       const was = shown;
       setShown(mint);
       place();
-      // In: a short fade and slide down from the pointer. Another coin while open: a quick fade of the contents.
-      if (!was) inner.current?.animate([{ opacity: 0, transform: "translateY(-6px) scale(0.98)" }, { opacity: 1, transform: "none" }], { duration: 170, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
-      else if (last.current !== mint) inner.current?.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 140, easing: "ease-out" });
+      // In: a short fade and slide down from the pointer. Another coin while open: the contents simply change (the
+      // new chart is drawn in the same frame); a dip in opacity on the swap read as a blink.
+      if (!was) inner.current?.animate([{ opacity: 0, transform: "translateY(-6px) scale(0.98)" }, { opacity: 1, transform: "none" }], { duration: 110, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
       last.current = mint;
     } else if (!open && shown) {
       const a = inner.current?.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-4px) scale(0.985)" }], { duration: 120, easing: "ease-in", fill: "forwards" });
@@ -158,7 +164,9 @@ function Card({ mint }: { mint: string }) {
     return () => clearTimeout(t);
   }, [st?.liveAt]);
   if (!coin) return null;
-  const mc = st?.last?.close ?? coin.mcap ?? null;
+  // The row's own figure first (the card hangs over that row: the two never disagree), the chart's last close when
+  // the row has none yet.
+  const mc = coin.mcap ?? st?.last?.close ?? null;
   const chg = st?.last && st.first && st.first.open > 0 ? (st.last.close / st.first.open - 1) * 100 : null;
   const up = chg == null || chg >= 0;
   const H = coin.hl || {};
@@ -196,19 +204,18 @@ function Card({ mint }: { mint: string }) {
             : <span className="text-[11px] leading-none text-muted">market cap</span>}
         </div>
       </header>
-      <div className="relative mx-2.5 overflow-hidden rounded-[10px] ring-1 ring-white/[0.06]" style={{ height: CHART_H, background: "linear-gradient(180deg, #0b0b0e 0%, #08080a 100%)" }}>
+      <div className="relative mx-2.5 overflow-hidden rounded-[10px] ring-1 ring-white/[0.06]" style={{ height: CHART_H, background: `linear-gradient(180deg, ${CHART_BG[0]} 0%, ${CHART_BG[1]} 100%)` }}>
         <Suspense fallback={null}><MiniChart mint={mint} born={coin.born} onState={setSt} /></Suspense>
         {/* over the chart's top-left: LIVE (lit after a trade) and the candle size */}
         <span className="pointer-events-none absolute top-2 left-2 z-10 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-[3px] text-[10px] leading-none font-bold tracking-wide backdrop-blur-sm">
           <span className={cn("size-1.5 rounded-full transition-[background-color,box-shadow] duration-300", live ? "bg-up shadow-[0_0_6px_var(--color-up)]" : "bg-muted/60")} aria-hidden />
-          <span className={cn(live ? "text-up" : "text-muted")}>LIVE</span>
+          <span className={cn(live ? "text-up" : "text-muted")}>{live ? 'LIVE' : st?.last ? 'LAST PRICE' : 'CHART'}</span>
           <span aria-hidden className="text-rule-2">·</span>
           <span className="num text-ink-2">{tfLabel(st?.tf ?? OVERVIEW_TF)}</span>
         </span>
-        {/* Before the first candles: a quiet word rather than a black box. */}
-        {!st && <span className="absolute inset-0 z-10 grid animate-pulse place-items-center text-xs text-muted">Loading chart…</span>}
-        {/* No candles: nothing traded yet, or the read failed (it is tried again with a growing wait). */}
-        {st?.empty && <span className="absolute inset-0 grid place-items-center px-6 text-center text-xs text-muted">{st.note && /^(HTTP|Failed|The|Network)/i.test(st.note) ? "Chart is busy, trying again…" : st.note || "No trades yet"}</span>}
+        {/* Never a "loading" word (the user, 2026-10-11): before the first candles the chart's dark ground alone. No
+            candles at all once read: nothing traded yet (a failed read is tried again quietly, with a growing wait). */}
+        {st?.empty && <span className="absolute inset-0 grid place-items-center px-6 text-center text-xs text-muted">{st.note ? 'Chart data unavailable; retrying' : 'No candles available yet'}</span>}
       </div>
       {/* On the curve: how far to bonding, the same green the row's picture frame fills with. */}
       {curve && prog != null && (
@@ -230,10 +237,6 @@ function Card({ mint }: { mint: string }) {
         <Line k="Dev" v={dev != null ? `${(+dev).toFixed(dev < 10 ? 1 : 0)}%` : "—"} tone={dev != null && dev > 8 ? "text-down" : undefined} />
         <Line k="5m change" v={coin.chg5 != null ? pct(coin.chg5) : "—"} tone={coin.chg5 != null && coin.chg5 !== 0 ? (coin.chg5 > 0 ? "text-up" : "text-down") : undefined} />
       </dl>
-      <footer className="flex items-center justify-between border-t border-white/[0.06] bg-black/20 px-4 py-2.5 text-xs text-muted">
-        <span className="flex items-center gap-1.5"><Icon.candles className="size-3.5" />Same candles as the full chart</span>
-        <span className="flex items-center gap-1 font-semibold text-ink-2">Click to open<svg viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3.5 8.5 8.5 3.5M4.5 3.5h4v4" /></svg></span>
-      </footer>
     </div>
   );
 }

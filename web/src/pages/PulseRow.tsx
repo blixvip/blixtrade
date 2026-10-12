@@ -203,7 +203,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
           <div className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-4 overflow-hidden">
             <Age born={t.born} />
             <span className="flex items-center gap-2.5">
-              {PADS[padOf(t)] && <IconLink href={PADS[padOf(t)].url(mint)} icon={<PadLogo pad={padOf(t)} className="size-4" />} label={`Open on ${PADS[padOf(t)].name}`} />}
+              {/* No launchpad link here: the badge on the picture already says where it launched (user, 2026-10-11). */}
               {safeHref(xUrl(t.x)) && <XHover href={safeHref(xUrl(t.x))!}><a href={safeHref(xUrl(t.x))!} target="_blank" rel="noopener noreferrer nofollow" aria-label={`${xKindLabel(xKind(safeHref(xUrl(t.x))!))} (set by the creator, unverified)`} className="text-ink-2 transition-colors duration-100 hover:text-ink [&_svg]:size-3.5"><XLinkIcon href={safeHref(xUrl(t.x))!} /></a></XHover>}
               <IconLink href={t.web} icon={<Icon.web />} label="Website (set by the creator, unverified)" />
               <IconLink href={t.tg} icon={<Icon.tg />} label="Telegram" />
@@ -212,7 +212,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             </span>
             {holders != null && <Count icon={<Icon.users />} value={holders} tip={H.h != null ? "Holders now, from the chain's trades" : "Holders (RugCheck)"} />}
             {t.traders != null && <Count icon={<Icon.candles />} value={t.traders} tip="Wallets seen trading it live" />}
-            {t.tr != null && <Count icon={<Icon.rank />} value={t.tr} tip="Live rank 0–100: real demand this second. 60+ is the pick line." className={t.tr >= 60 ? "text-up" : undefined} />}
+            {/* The live rank figure was taken off the row (user, 2026-10-11: "I don't like this"). */}
             {prefs.compact && <span className="text-sm"><AiCall coin={t} /></span>}
           </div>
           {chg != null && <span className={cn("num shrink-0 font-medium", tone(chg))}>{pct(chg)}</span>}
@@ -236,7 +236,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
           {/* one line of whole chips: one that does not fit wraps onto a second line that is clipped away, never cut in half */}
           <div className="flex h-6 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-2 overflow-hidden">
             {prefs.pills && <>
-            {t.warn && <Chip icon={<Icon.ghost />} text={t.warn.kind === "emptied" ? "emptied" : t.warn.kind === "stale" ? "stale price" : "check price"} state="bad" tip={t.warn.text} />}
+            {t.warn && <Chip icon={<Icon.ghost />} text={t.warn.kind === "stale" ? "stale price" : "check price"} state="info" tip={t.warn.kind === "emptied" ? "Previous price warning; liquidity needs rechecking. This is not confirmation of a rug." : t.warn.text} />}
             {top10 != null && <Chip icon={<Icon.userStar />} text={`${Math.round(top10)}%`} state={top10 > 45 ? "bad" : "ok"} tip="Top 10 holders' share of the supply" />}
             {devSold ? <Chip icon={<Icon.chef />} text="DS" state="info" tip="The dev wallet sold everything it held" />
               : devSelling ? <Chip icon={<Icon.chef />} text="selling" state="bad" tip="The dev wallet has sold more than half of what it held" />
