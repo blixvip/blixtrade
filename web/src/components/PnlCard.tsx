@@ -314,7 +314,7 @@ export function PnlCardDialog({ data, open, onOpenChange }: { data: CardData | n
       <D.Portal>
         <D.Overlay className="fixed inset-0 z-40 bg-black/45 backdrop-blur-md" />
         <D.Content aria-describedby={undefined}
-          className="fixed top-1/2 left-1/2 z-50 flex w-[min(42rem,calc(100vw-2rem),calc((100dvh-13rem)*1.47))] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
+          className="fixed top-1/2 left-1/2 z-50 flex w-[min(54rem,calc(100vw-2rem),calc((100dvh-13rem)*1.47))] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
           <D.Title className="sr-only">{data?.kind === "session" ? "Practice session card" : "PnL card"}</D.Title>
           <div className="relative w-full overflow-hidden rounded-[22px] bg-black shadow-[0_40px_90px_-24px_rgba(0,0,0,0.95)]" style={{ aspectRatio: `${W} / ${H}` }}>
             <canvas ref={ref} width={W} height={H} className={cn("block h-full w-full transition-opacity duration-300", ready ? "opacity-100" : "opacity-0")} />
