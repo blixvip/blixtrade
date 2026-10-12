@@ -7,7 +7,7 @@
 // time the chain changes them (`cholders`).
 import { cn } from "@/lib/utils";
 import { useMetrics, metricNumber } from '@/lib/metrics';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { loadPaperSizes } from "@/lib/mode";
 import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
 import { onCoinRows, useCoinHolders } from "@/lib/pulse";
@@ -15,6 +15,7 @@ import type { ChartEvent, ChartPeople, Level, Mark } from "./coin/Chart";
 import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
 import { QuickTrade } from "./coin/QuickTrade";
+import { ResizeHandle, useSize } from "@/components/Resize";
 import { setQuickCoin } from "@/lib/quick";
 import { Addresses, Flow, Info, Links, Position, TradePanel, About } from "./coin/Side";
 import { CoinTabs, SideTrades } from "./coin/Tabs";
@@ -36,7 +37,7 @@ const ORDER: Record<string, [string, string]> = {
 // The chart is its own file with the charting library (~70 KB gz): the header, trades and trade panel draw while
 // it arrives (index.html asks for it with the page, lib/coin.ts on hover). The space it takes is held meanwhile.
 const CoinChart = lazy(() => import("./coin/Chart").then((m) => ({ default: m.CoinChart })));
-const ChartSpace = () => <div className="flex flex-col gap-1.5 p-2.5" aria-hidden><div className="h-7" /><div className="h-[clamp(340px,52vh,760px)]" /></div>;
+const ChartSpace = () => <div className="flex flex-col gap-1.5 p-2.5" aria-hidden><div className="h-7" /><div className="h-[var(--chart-h,clamp(340px,52vh,760px))]" /></div>;
 
 // The three-column page (chart | live trades and bubble map | trade panel) from this content width: every PC
 // screen from 1366 px wide (and 1920 px at 125% scaling) gets it, the columns narrowing on smaller screens.
@@ -134,6 +135,13 @@ export function Coin({ mint }: { mint: string }) {
   // The wide trade list runs from the top of the page down to the line under the tab bar (Known holders …
   // Instant Trade), not to the foot of the tall trade column: measured, as that bar moves with the chart.
   const tabsRef = useRef<HTMLElement>(null), tradesRef = useRef<HTMLDivElement>(null);
+  // Drag to resize (components/Resize.tsx): the trade column's width, the live trades column's width, the chart's
+  // height. Kept in this browser; double-click a handle for the page's own size again.
+  const [asideW, setAsideW] = useSize("coin:aside", 260, 620);
+  const [tradesW, setTradesW] = useSize("coin:trades", 220, 560);
+  const [chartH, setChartH] = useSize("coin:chart", 260, 1400);
+  const asideRef = useRef<HTMLElement>(null), tradesColRef = useRef<HTMLDivElement>(null), chartRef = useRef<HTMLElement>(null);
+  const sizeVars = { ...(asideW ? { "--cw-aside": `${asideW}px` } : {}), ...(tradesW ? { "--cw-trades": `${tradesW}px` } : {}), ...(chartH ? { "--chart-h": `${chartH}px` } : {}) } as CSSProperties;
   const [tradesH, setTradesH] = useState<number | undefined>();
   useEffect(() => {
     const sec = tabsRef.current, tr = tradesRef.current;
@@ -217,17 +225,21 @@ export function Coin({ mint }: { mint: string }) {
     <div className="flex min-w-0 flex-col p-3 max-md:pb-20">
       {/* The header, chart and tabs on the left; the live trades (wide) run down to the tab bar with the coin's live
           bubble map under them, filling the rest of that column; the trade column from the top of the page. */}
-      <div ref={mainRef} className={cn("grid items-start gap-2.5 lg:grid-rows-[auto_1fr] grid-cols-[minmax(0,1fr)_340px] max-xl:grid-cols-[minmax(0,1fr)_300px] max-lg:grid-cols-1", wide && "grid-cols-[minmax(0,1fr)_340px_340px] max-2xl:grid-cols-[minmax(0,1fr)_290px_310px] max-xl:grid-cols-[minmax(0,1fr)_264px_290px]")}>
+      <div ref={mainRef} style={sizeVars} className={cn("grid items-start gap-2.5 lg:grid-rows-[auto_1fr] grid-cols-[minmax(0,1fr)_var(--cw-aside,340px)] max-xl:grid-cols-[minmax(0,1fr)_var(--cw-aside,300px)] max-lg:grid-cols-1", wide && "grid-cols-[minmax(0,1fr)_var(--cw-trades,340px)_var(--cw-aside,340px)] max-2xl:grid-cols-[minmax(0,1fr)_var(--cw-trades,290px)_var(--cw-aside,310px)] max-xl:grid-cols-[minmax(0,1fr)_var(--cw-trades,264px)_var(--cw-aside,290px)]")}>
         <div className="flex min-w-0 flex-col gap-2.5 lg:col-start-1 lg:row-start-1">
           <CoinHeader r={r} c={c} sizes={sizes} onPaper={refresh} />
           {warn.map(([bad, text]) => <p key={text} className={bad ? "rounded-control border border-down/50 bg-down/10 px-3 py-2 text-sm text-ink-2" : "rounded-control border border-rule-2 bg-paper-3 px-3 py-2 text-sm text-ink-2"}>{text}</p>)}
-          <section className="surface relative min-w-0 overflow-hidden">
+          <section ref={chartRef} className="surface relative min-w-0 overflow-visible [&>*]:rounded-[inherit]">
+            <ResizeHandle axis="y" label="Chart height" className="-bottom-[9px]" start={() => chartRef.current?.querySelector<HTMLElement>("[data-coin-chart]")?.offsetHeight || 500}
+              onSize={(v) => setChartH(v, false)} onDone={() => setChartH(chartH)} onReset={() => setChartH(null)} />
             <ReplayBar mint={mint} symbol={symbol} onTick={() => { refresh(); polled.refresh(); big.refresh(); people.refresh(); }} />
-            <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} exact={Boolean(r.token.asset_class && r.token.asset_class !== "meme")} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : undefined} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} migrating={migratingNow(c?.migrating?.since)} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
+            <Suspense fallback={<ChartSpace />}><CoinChart mint={mint} exact={Boolean(r.token.asset_class && r.token.asset_class !== "meme")} marks={marks} people={people.data} events={events} paper={pos.paper ? r.paper : pos.trades} ownPaper={pos.paper} signals={r.signals} levels={levels} defaultTf={defaultTf} migrated={migratedAt} migrating={migratingNow(c?.migrating?.since)} born={Number.isFinite(born) ? born : r.token.first_seen || null} /></Suspense>
           </section>
         </div>
         {wide && (
-          <div className="col-start-2 row-span-2 row-start-1 flex min-h-0 min-w-0 flex-col gap-2.5 self-stretch">
+          <div ref={tradesColRef} className="relative col-start-2 row-span-2 row-start-1 flex min-h-0 min-w-0 flex-col gap-2.5 self-stretch">
+            <ResizeHandle axis="x" dir={-1} label="Trades width" className="-left-[10px]" start={() => tradesColRef.current?.offsetWidth || 320}
+              onSize={(v) => setTradesW(v, false)} onDone={() => setTradesW(tradesW)} onReset={() => setTradesW(null)} />
             <div ref={tradesRef} style={{ height: tradesH }} className="surface flex shrink-0 overflow-hidden [&>div]:w-full [&>div]:border-l-0"><SideTrades trades={trades.data} /></div>
             {/* A square as wide as the trades above it; it does not stretch down with the page. */}
             <section aria-label="Bubble map" className="surface flex aspect-square w-full shrink-0 flex-col overflow-hidden"><BubbleMapTab mint={mint} compact /></section>
@@ -238,7 +250,12 @@ export function Coin({ mint }: { mint: string }) {
         </section>
         {/* The trade column scrolls on its own (screen height less the top bar, status bar and margins), so its lower
             cards are reachable without scrolling the chart and the holders away. */}
-        <aside className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static lg:max-h-[calc(100dvh-6.75rem)] lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin] lg:[&>*]:shrink-0 lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
+        {/* the trade column's resize handle: its own layer over the column's left edge, so it stays put while the column scrolls */}
+        <div className="pointer-events-none relative self-stretch max-lg:hidden lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
+          <ResizeHandle axis="x" dir={-1} label="Trade column width" className="pointer-events-auto -left-[10px]" start={() => asideRef.current?.offsetWidth || 340}
+            onSize={(v) => setAsideW(v, false)} onDone={() => setAsideW(asideW)} onReset={() => setAsideW(null)} />
+        </div>
+        <aside ref={asideRef} className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static lg:max-h-[calc(100dvh-6.75rem)] lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin] lg:[&>*]:shrink-0 lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
           <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} migrating={migratingNow(c?.migrating?.since)} />
           <Flow c={c} />
           <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} migrating={migratingNow(c?.migrating?.since)} />

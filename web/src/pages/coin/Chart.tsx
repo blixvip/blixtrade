@@ -14,6 +14,7 @@ import { CandlestickSeries, LineSeries, ColorType, createChart, createSeriesMark
 import { useEffect, useRef, useState } from "react";
 import { observeAttention } from "@/lib/attention";
 import { useMetricVisibility } from "@/lib/metrics";
+import { useMe } from "@/lib/ui";
 import { api, apiAged } from "@/lib/api";
 import { usdP } from "@/lib/coin";
 import { earlyBars, onLevel } from "@/lib/jupEarly";
@@ -208,12 +209,13 @@ export function warmCandles(mint: string, tfs: number[]) {
   }).catch(() => {});
 }
 
-export interface ChartPaper { t: number; exit_t?: number | null }
+// Your own trades: a paper row (a buy at `t`, its sell at `exit_t`), or a live trade with its `side`.
+export interface ChartPaper { t: number; exit_t?: number | null; sol?: number | null; mcap0?: number | null; exit_sol?: number | null; exit_mcap?: number | null; side?: "buy" | "sell" }
 export interface ChartSignal { t: number }
 // `migrate`: where a curve coin moves to its pool (pump.fun); drawn plain, and never stretches the price axis.
 export interface Level { price: number; buy: boolean; title: string; migrate?: boolean }
 
-export function CoinChart({ mint, marks, people, events, paper, signals, levels, defaultTf, born, migrated, migrating, exact }: { mint: string; marks: Mark[]; people?: ChartPeople | null; events?: ChartEvent[]; paper?: ChartPaper[]; signals?: ChartSignal[]; levels?: Level[]; defaultTf: number; born?: number | null; migrated?: number | null; migrating?: number | null; exact?: boolean }) {
+export function CoinChart({ mint, marks, people, events, paper, ownPaper, signals, levels, defaultTf, born, migrated, migrating, exact }: { mint: string; marks: Mark[]; people?: ChartPeople | null; events?: ChartEvent[]; paper?: ChartPaper[]; ownPaper?: boolean; signals?: ChartSignal[]; levels?: Level[]; defaultTf: number; born?: number | null; migrated?: number | null; migrating?: number | null; exact?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null), attentive = useRef(true);
   const metricRef = useMetricVisibility(mint, true);
@@ -940,14 +942,23 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
     const snap = (ms: number) => Math.floor(ms / 1000 / ctf) * ctf;
     const clock = clockStr;
     // Your own buys and sells, as Axiom draws them: a green B / red S bubble over the candle, stacked with the rest
-    // of that candle's icons (several in one candle: one bubble with the count).
+    // of that candle's icons. The card is your account (name and picture, as the top bar shows them), the SOL and
+    // the cap of the trade: not "You" (the user, 2026-10-12).
+    const me = useMe.getState().me;
+    const meName = me?.name || me?.email?.split("@")[0] || "You", pic = me?.picture || null;
     const ownBadges: Badge[] = [];
-    const addOwn = (ms: number, buy: boolean) => ownBadges.push({ time: snap(ms), price: null, buy, kind: "own", text: buy ? "B" : "S", n: 1,
-      tip: [`You ${buy ? "bought" : "sold"}${paper?.length ? " (paper)" : ""}`, clock(ms)],
-      card: { name: "You", tag: buy ? "Buy" : "Sell", tone: buy ? "up" : "down", t: ms, sub: paper?.length ? "Paper trade" : undefined } });
-    // A partial sell splits a paper row and the parts keep the buy's time: each buy is marked once.
-    const buys = new Set<number>();
-    for (const p of paper || []) { if (!buys.has(p.t)) { buys.add(p.t); addOwn(p.t, true); } if (p.exit_t) addOwn(p.exit_t, false); }
+    const addOwn = (ms: number, buy: boolean, sol?: number | null, mc?: number | null) => ownBadges.push({ time: snap(ms), price: null, buy, kind: "own", text: buy ? "B" : "S", n: 1,
+      tip: [`${meName} ${buy ? "bought" : "sold"}${sol ? ` ${solN(sol)} SOL` : ""}${ownPaper ? " (paper)" : ""}`, clock(ms)],
+      card: { name: meName, pic, tag: buy ? "Buy" : "Sell", tone: buy ? "up" : "down", t: ms, sol: sol || undefined, mc: mc || null, sub: ownPaper ? "Paper trade" : undefined } });
+    // A partial sell splits a paper row and the parts keep the buy's time: each buy is marked once, with the SOL
+    // of all its parts. A live trade is one row with its side.
+    const buyRows = new Map<number, ChartPaper[]>();
+    for (const p of paper || []) {
+      if (p.side === "sell") { addOwn(p.t, false, p.sol, p.mcap0); continue; }
+      const parts = buyRows.get(p.t); if (parts) parts.push(p); else buyRows.set(p.t, [p]);
+      if (p.exit_t) addOwn(p.exit_t, false, p.exit_sol, p.exit_mcap);
+    }
+    for (const [t, parts] of buyRows) addOwn(t, true, parts.reduce((a, p) => a + (p.sol || 0), 0), parts[0].mcap0);
     // Signals stay the library's small squares, which need a drawn candle's own time.
     // (Alert squares were taken off 2026-10-09: older alerts all snapped onto the first candle as a grey column.)
     const list: SeriesMarker<Time>[] = [];
@@ -1112,7 +1123,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
       <div className="relative">
         {gecko
           ? <>
-            <div ref={geckoBox} data-coin-chart data-src="Gecko" className="h-[clamp(340px,52vh,760px)] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />
+            <div ref={geckoBox} data-coin-chart data-src="Gecko" className="h-[var(--chart-h,clamp(340px,52vh,760px))] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />
             {/* Your average buy and sell over GeckoTerminal's chart: its frame is another site's page, so no line can be
                 drawn on its candles; pills in its corner instead, with how far the market cap is from each now. */}
             {live.some((l) => !l.migrate) && (
@@ -1131,7 +1142,7 @@ export function CoinChart({ mint, marks, people, events, paper, signals, levels,
               </div>
             )}
           </>
-          : <div ref={box} data-coin-chart className="h-[clamp(340px,52vh,760px)] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />}
+          : <div ref={box} data-coin-chart className="h-[var(--chart-h,clamp(340px,52vh,760px))] w-full overflow-hidden rounded-control border border-rule" style={{ background: CHART_BG }} />}
         {/* The average buy and sell labels: a square in the line's colour, the name, the cap. Placed by the effect above. */}
         {!gecko && live.filter((l) => !l.migrate).map((l) => (
           <span key={l.title} ref={(el) => { if (el) levelEls.current.set(l.title, el); else levelEls.current.delete(l.title); }} style={{ visibility: "hidden" }}
