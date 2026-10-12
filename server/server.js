@@ -1654,7 +1654,6 @@ bus.on("signal", (s) => {
   notifySignal(s).catch((e) => logEvent("error", `notify: ${e.message}`));
 });
 bus.on("tick", (s) => broadcast("tick", s));
-attachFirehose(bus);
 bus.on("brief", (b) => broadcast("brief", b));
 // The owner's followed wallets are the owner's business: their trades go to the owner's own clients only.
 bus.on("walletTrade", (ev) => { broadcast("walletTrade", ev, ""); try { wtrack.fromEngine(ev); } catch {} });
