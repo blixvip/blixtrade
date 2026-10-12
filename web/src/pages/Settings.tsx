@@ -210,7 +210,7 @@ function PaperCard() {
 
 // This browser's own choices (kept here, not on the server, so each person on the public site has their own):
 // the size of everything, the Pulse's columns and rows, the default slippage, hidden coins.
-const SIZES: [string, string][] = [["0.9", "Small"], ["1", "Normal"], ["1.15", "Large"], ["1.3", "Larger"]];
+const SIZES: [string, string][] = [["auto", "Auto"], ["0.9", "Small"], ["1", "Normal"], ["1.15", "Large"], ["1.3", "Larger"]];
 const PULSE_COLS: [PulseCol, string, string][] = [["new", "New Pairs", "Coins that just launched"], ["stretch", "Final Stretch", "Close to bonding"], ["migrated", "Migrated", "Bonded and trading in the pool"]];
 const SLIPS: [string, string][] = [["100", "1%"], ["300", "3%"], ["500", "5%"], ["1000", "10%"]];
 
@@ -219,8 +219,8 @@ function DisplayCard() {
   const open = PULSE_COLS.filter(([c]) => p.cols[c]).length;
   return (
     <Card id="display" icon="sliders" title="Display" blurb="How Blix looks in this browser. Saved here, right away">
-      <Row label="Interface size" hint="Everything grows or shrinks together">
-        <Segmented label="Interface size" value={String(p.scale)} options={SIZES} onChange={(v) => setPrefs({ scale: +v })} />
+      <Row label="Interface size" hint={`Everything grows or shrinks together. Auto fits the full layout to this window (now ${Math.round(p.fit * 100)}%)`}>
+        <Segmented label="Interface size" value={p.autoScale ? "auto" : String(p.scale)} options={SIZES} onChange={(v) => (v === "auto" ? setPrefs({ autoScale: true }) : setPrefs({ autoScale: false, scale: +v }))} />
       </Row>
       <Sub title="Pulse columns" />
       {PULSE_COLS.map(([c, label, hint]) => (

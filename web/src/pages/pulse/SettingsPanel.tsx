@@ -5,7 +5,7 @@ import { FILTER_KEYS, PREFS0, RUG_CHECKS, setPrefs, usePrefs, type PulseCol, typ
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 
-const SIZES: [number, string][] = [[0.9, "Small"], [1, "Normal"], [1.15, "Large"], [1.3, "Larger"]];
+const SIZES: [number | "auto", string][] = [["auto", "Auto"], [0.9, "Small"], [1, "Normal"], [1.15, "Large"], [1.3, "Larger"]];
 const COLS: [PulseCol, string, string][] = [["new", "New Pairs", "Just launched"], ["stretch", "Final Stretch", "Close to bonding"], ["migrated", "Migrated", "Trading in the pool"]];
 type FilterKey = (typeof FILTER_KEYS)[number];
 const FILTERS: [FilterKey, string, string][] = [
@@ -126,15 +126,15 @@ function DisplayTab({ p }: { p: PulsePrefs }) {
   return (
     <>
       <Card title="Size">
-        <div className="grid grid-cols-4 gap-1.5 p-2">
-          {SIZES.map(([v, label]) => (
-            <button key={v} role="radio" aria-checked={p.scale === v} onClick={() => setPrefs({ scale: v })}
+        <div className="grid grid-cols-5 gap-1.5 p-2">
+          {SIZES.map(([v, label]) => { const on = v === "auto" ? p.autoScale : !p.autoScale && p.scale === v; return (
+            <button key={String(v)} role="radio" aria-checked={on} onClick={() => (v === "auto" ? setPrefs({ autoScale: true }) : setPrefs({ autoScale: false, scale: v }))}
               className={cn("flex flex-col items-center gap-1 rounded-lg border py-2.5 transition-colors duration-150",
-                p.scale === v ? "border-white/20 bg-paper-5 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.08)]" : "border-transparent text-muted hover:bg-white/[0.03] hover:text-ink-2")}>
-              <span className="leading-none font-semibold" style={{ fontSize: `${Math.round(13 * v)}px` }}>Aa</span>
-              <span className="text-xs">{label}</span>
+                on ? "border-white/20 bg-paper-5 text-ink shadow-[inset_0_1px_0_oklch(100%_0_0/0.08)]" : "border-transparent text-muted hover:bg-white/[0.03] hover:text-ink-2")}>
+              <span className="leading-none font-semibold" style={{ fontSize: `${Math.round(13 * (v === "auto" ? p.fit : v))}px` }}>Aa</span>
+              <span className="text-xs">{v === "auto" ? `Auto ${Math.round(p.fit * 100)}%` : label}</span>
             </button>
-          ))}
+          ); })}
         </div>
         <Row on={p.compact} onChange={(v) => setPrefs({ compact: v })} label="Compact rows" hint="More coins on screen: no note line, no contract under the picture" />
       </Card>
