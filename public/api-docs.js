@@ -56,7 +56,7 @@ export const API_DOCS = [
   ]],
   ["Trade API (v1): your own wallet, your own key", [
     ["POST", "/api/v1/quote", "{ wallet, mint, side: buy|sell, sol | pct | tokens, slippageBps? }. What the trade fills at now on pump.fun's curve or PumpSwap pool, with Blix's fee, priority fee and tip shown. Key: Authorization: Bearer blx_live_…"],
-    ["POST", "/api/v1/trade/build", "Same body. The unsigned transaction (base64) with compute budget, priority fee, the swap, Blix's 1% fee and the Sender tip inside; sign it with your key and send it back"],
+    ["POST", "/api/v1/trade/build", "Same body. The unsigned transaction (base64) with compute budget, priority fee, the swap, Blix's 2% fee and the Sender tip inside; sign it with your key and send it back"],
     ["POST", "/api/v1/trade/send", "{ transaction }. Sends your signed transaction over Helius Sender's staked path and the RPCs, waits for it to land: signature, status, slot, ms"],
     ["GET", "/api/v1/trade/<signature>", "Where a sent trade stands: confirmed, failed (with the reason) or still pending"],
     ["GET", "/api/v1/stream", "WebSocket, PumpPortal-shaped: subscribeNewToken, subscribeTokenTrade, subscribeAccountTrade, subscribeMigration"],

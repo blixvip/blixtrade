@@ -19,6 +19,12 @@ const get = async (url, headers = {}, ms = 20000) => {
   try { const r = await fetch(url, { headers, signal: AbortSignal.timeout(ms), redirect: "manual" }); return { status: r.status, body: await r.text().catch(() => "") }; }
   catch (e) { return { status: 0, body: String(e?.message || e) }; }
 };
+// The wallet service, with its service token from the vault client config the page server uses (BLIX_VAULT_CONFIG).
+async function vaultGet(pathname) {
+  let cfg;
+  try { cfg = JSON.parse(fs.readFileSync(process.env.BLIX_VAULT_CONFIG || "/opt/blix/data/vault-client.json", "utf8")); } catch { return null; }
+  return get(`http://127.0.0.1:${cfg.port || 4470}${pathname}`, { host: `127.0.0.1:${cfg.port || 4470}`, authorization: `Bearer ${cfg.serviceToken}` }, 10000);
+}
 const unit = (name) => { try { return execFileSync("systemctl", ["is-active", name], { encoding: "utf8" }).trim(); } catch (e) { return String(e.stdout || "unknown").trim(); } };
 const failed = (name) => { try { return execFileSync("systemctl", ["is-failed", name], { encoding: "utf8" }).trim() === "failed"; } catch { return false; } };
 
@@ -48,6 +54,26 @@ const CHECKS = [
   ["disk", 1, async () => { const st = fs.statfsSync(DATA), free = (st.bavail * st.bsize) / 1e9; return free < 5 ? `Only ${free.toFixed(1)} GB free on the VM's disk (a full disk stops the site)` : null; }],
   ["services", 2, async () => { const down = ["blix", "blix-vault", "cloudflared"].filter((u) => unit(u) !== "active"); return down.length ? `Not running: ${down.join(", ")}` : null; }],
   ["backup", 1, async () => (failed("blix-backup") ? "Last night's backup failed (journalctl -u blix-backup on the VM says why)" : null)],
+  // The trade API (server/tradeapi.js in the page server + blix-vault local.js): a bad key must be refused as JSON 401
+  // (the route is alive and the key store answers), and the wallet service's trade endpoints must answer.
+  ["tradeapi", 2, async () => {
+    const r = await get("http://127.0.0.1:4421/api/v1/me", { host: "localhost:4421", authorization: "Bearer blx_live_alertwatch00000000000000000000000" });
+    if (r.status !== 401 || !/API key/.test(r.body)) return `The trade API answered ${r.status || "nothing"} to a key check (expected a 401 refusal): ${r.body.slice(0, 160)}`;
+    const v = await vaultGet("/v1/local/stats");
+    if (!v) return null;   // no vault client config here: nothing to check
+    if (v.status !== 200) return `The wallet service's trade endpoints answered ${v.status || "nothing"}: ${String(v.body).slice(0, 160)}`;
+    return null;
+  }],
+  // The fee wallet: below rent (0.00089 SOL) the vault skips every fee smaller than that, so small trades pay nothing.
+  ["fee-wallet", 1, async () => {
+    const v = await vaultGet("/v1/local/stats");
+    if (!v || v.status !== 200) return null;
+    let j; try { j = JSON.parse(v.body); } catch { return null; }
+    const t = j.treasury;
+    if (!t || !(t.feeBps > 0)) return null;
+    if (t.lamports == null) return null;   // not read yet
+    return t.lamports < 1_000_000 ? `The fee wallet ${t.address} holds ${(t.lamports / 1e9).toFixed(5)} SOL: fees under 0.00089 SOL are skipped until it holds at least 0.001 SOL. Send it a little SOL once.` : null;
+  }],
   // The one thing on the VM a person has to renew: its Fomo login (a copy of the owner's, bin/fomo-session.mjs).
   // When it runs out, Fomo charts, holders and the Fomo lists stop; the health text says so and how to put it back.
   ["fomo-login", 3, async () => {

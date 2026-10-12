@@ -63,7 +63,7 @@ test("key routes forward to the wallet service as the member, with their inviter
   const st = await call("GET", `/api/v1/trade/${"5".repeat(64)}`, { headers: H });
   assert.equal(st.status, 200);
   const me = await call("GET", "/api/v1/me", { headers: H });
-  assert.equal(me.body.fee.bps, 80, "an invited member pays 0.8%");
+  assert.equal(me.body.fee.bps, 160, "an invited member pays 1.6%");
   assert.equal(me.body.account, "in…@example.com");
   const usage = await call("GET", "/api/v1/usage", { email: "invited@example.com" });
   assert.equal(usage.body.days[0].quotes, 1); assert.equal(usage.body.days[0].builds, 1); assert.equal(usage.body.days[0].sends, 1); assert.equal(usage.body.days[0].confirmed, 1);

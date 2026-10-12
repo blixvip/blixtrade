@@ -94,14 +94,14 @@ const api = {
   h1: "Solana memecoin data. All in BLIX.",
   lede: `Research Solana memecoins with live market data, holder activity, wallet tracking and AI analysis in one terminal. Create a BLIX account to use the site. This guide explains the data and interfaces behind the platform.`,
   related: ["/trade-api", "/mcp", "/pump-fun-api", "/gmgn-api", "/axiom-api", "/fomo-api"],
-  body: `${cta(`<a class="btn" href="/trade-api">Trade API: your wallet, 1% a trade</a>`)}
+  body: `${cta(`<a class="btn" href="/trade-api">Trade API: your wallet, 2% a trade</a>`)}
 ${facts([
     ["Access", "Included with every BLIX account; your session is the key"],
     ["Permissions", "Your session reads everything the terminal shows and runs your paper desk; real trades go through the <a href=\"/trade-api\">trade API</a> with an API key and your own wallet"],
     ["Transport", "HTTP + JSON, and one Server-Sent Events stream"],
     ["Chain", "Solana: pump.fun launches, bonding curve, migrations, plus DexScreener and GeckoTerminal pairs"],
     ["Updates", "Live observations; freshness depends on connected feeds"],
-    ["Trading", "Paper desk at real quotes with your session; real trades with an API key: quote, build, sign with your own wallet, send (1% a trade, 0.8% with an invite)"],
+    ["Trading", "Paper desk at real quotes with your session; real trades with an API key: quote, build, sign with your own wallet, send (2% a trade, 1.6% with an invite)"],
   ])}
 <h2 id="quick-start">Quick start</h2>
 ${INSTALL}
@@ -119,7 +119,7 @@ console.table((pulse.newPairs || []).slice(0, 10).map(coin => ({
 <p>Holder ledgers, candles and AI reads are built from the trades BLIX sees, so a coin first seen mid-life is marked partial rather than guessed. Nothing on this page needs installing: the API is the terminal's own data, served to your account.</p>
 
 <h2 id="trade">Trade from your own wallet</h2>
-<p>Real trading is its own door: the <a href="/trade-api">trade API</a>. <code>POST /api/v1/quote</code> prices a buy or sell on pump.fun's curve or PumpSwap pool with every fee shown, <code>POST /api/v1/trade/build</code> returns the unsigned transaction with Blix's fee inside, you sign it with your own key, and <code>POST /api/v1/trade/send</code> puts it through Helius Sender's staked path and reports where it landed. <code>GET /api/v1/stream</code> is a WebSocket with PumpPortal's method names. An API key (made on the trade API page when you are signed in) authorizes those calls; Blix never holds a private key. 1% a trade, 0.8% with an invite, no subscription.</p>
+<p>Real trading is its own door: the <a href="/trade-api">trade API</a>. <code>POST /api/v1/quote</code> prices a buy or sell on pump.fun's curve or PumpSwap pool with every fee shown, <code>POST /api/v1/trade/build</code> returns the unsigned transaction with Blix's fee inside, you sign it with your own key, and <code>POST /api/v1/trade/send</code> puts it through Helius Sender's staked path and reports where it landed. <code>GET /api/v1/stream</code> is a WebSocket with PumpPortal's method names. An API key (made on the trade API page when you are signed in) authorizes those calls; Blix never holds a private key. 2% a trade, 1.6% with an invite, no subscription.</p>
 ${code(`curl -s ${BASE}/api/v1/quote -H "authorization: Bearer $BLIX_KEY" -H "content-type: application/json" \\
   -d '{"wallet":"<your wallet>","mint":"<mint>","side":"buy","sol":0.1}'`, "bash")}
 
@@ -169,7 +169,7 @@ ${refTables()}
 <h2 id="compare">Blix API vs GMGN, Axiom, Fomo and PumpPortal</h2>
 <p>What each option gives a developer today, checked on ${UPDATED_TEXT}. Each name links to the details and sources.</p>
 ${table(["", "Public API", "Key", "Cost", "Real trading"], [
-    ["Blix", `Yes: ${N_ENDPOINTS} endpoints and a live stream`, "Your account session for data; an API key for trading", "Included with the free account; trades 1% (0.8% with an invite)", `Yes: <a href="/trade-api">the trade API</a> builds pump.fun and PumpSwap trades for your own wallet, you sign, Blix sends`],
+    ["Blix", `Yes: ${N_ENDPOINTS} endpoints and a live stream`, "Your account session for data; an API key for trading", "Included with the free account; trades 2% (1.6% with an invite)", `Yes: <a href="/trade-api">the trade API</a> builds pump.fun and PumpSwap trades for your own wallet, you sign, Blix sends`],
     [`<a href="/gmgn-api">GMGN</a>`, "Yes, the GMGN OpenAPI", "Apply at gmgn.ai/ai with an Ed25519 public key", "Not published in its docs", "Yes. Swaps need your private key and an IP whitelist"],
     [`<a href="/axiom-api">Axiom Trade</a>`, "Not verified in reviewed sources", "Unofficial SDKs sign in as your account", "Not applicable", "Official access not verified"],
     [`<a href="/fomo-api">Fomo</a>`, "Not verified in reviewed sources", "Third-party APIs use their own key", "Check provider pricing and terms", "Official access not verified"],
@@ -177,12 +177,12 @@ ${table(["", "Public API", "Key", "Cost", "Real trading"], [
   ], "cmp")}
 <p>Use GMGN's API for execution through GMGN or chains beyond Solana, PumpPortal for a hosted pump.fun websocket, and BLIX when you want pump.fun from the first trade, holders with snipers and bundles, AI reads and an MCP connector, all with one free account.</p>`,
   faq: [
-    ["Is the Blix API free?", `Yes. It comes with every BLIX account, and the account is free: sign in with Google, open Developers and copy your session. Only real trades placed in the terminal pay a fee (1%, 0.8% with an invite).`],
+    ["Is the Blix API free?", `Yes. It comes with every BLIX account, and the account is free: sign in with Google, open Developers and copy your session. Only real trades placed in the terminal pay a fee (2%, 1.6% with an invite).`],
     ["Do I need an API key?", `For data, no: your account session authorizes every request, sent as the <code>blix_wait</code> cookie as the examples show; it reads data and runs your paper desk and cannot move funds. For real trades, yes: an API key from the <a href="/trade-api">trade API page</a> (signed in), sent as <code>Authorization: Bearer</code>.`],
     ["Is this the official GMGN or Axiom API?", `No. BLIX is independent. GMGN documents its own API; official Axiom and Fomo developer access was not verified in the sources reviewed. See the linked integration guides for sources and current limitations.`],
     ["Where does the data come from?", `New pump.fun coins come from PumpPortal's free launch stream with an on-chain backup for any it misses. Trades are decoded straight from Solana program logs over RPC. Prices for graduated coins come from Jupiter, pairs from DexScreener and GeckoTerminal, safety reports from RugCheck. Holders, snipers and bundles are computed by Blix from the trades it sees.`],
     ["How fast is it?", `New pump.fun coins reach the stream about a second after the chain and prices update per trade batch, several times a second on a busy coin. Use the stream rather than polling for anything live; polled endpoints are cached for 1 to 60 seconds.`],
-    ["Can I trade through the Blix API?", `Yes, with your own wallet: the <a href="/trade-api">trade API</a> quotes and builds pump.fun and PumpSwap trades, you sign them with your own key, and Blix sends them over staked connections. 1% a trade, 0.8% with an invite, paid inside the transaction. The session-authorized endpoints and the MCP connector stay read-only plus the paper desk.`],
+    ["Can I trade through the Blix API?", `Yes, with your own wallet: the <a href="/trade-api">trade API</a> quotes and builds pump.fun and PumpSwap trades, you sign them with your own key, and Blix sends them over staked connections. 2% a trade, 1.6% with an invite, paid inside the transaction. The session-authorized endpoints and the MCP connector stay read-only plus the paper desk.`],
     ["Which chains does it cover?", `Solana. pump.fun launches, the bonding curve and migrations get the deepest coverage; other Solana pairs come in through DexScreener and GeckoTerminal.`],
     ["Can an AI agent use it?", `Yes. The <a href="/mcp">Blix MCP server</a> turns the API into ${N_TOOLS} tools for Claude, Cursor, Codex and any other MCP client.`],
   ],
@@ -267,7 +267,7 @@ const gmgn = {
   eyebrow: "GMGN API · checked " + UPDATED_TEXT,
   h1: "GMGN API access and BLIX research compared",
   lede: `GMGN has an official API, the GMGN OpenAPI. You get a key at gmgn.ai/ai by uploading an Ed25519 public key; every request carries that key, and swaps also need the matching private key and an IP whitelist. GMGN's docs do not publish prices or rate limits. If what you need is Solana memecoin data (new pump.fun pairs, holders, snipers, bundles, candles, quotes), <a href="/api">BLIX</a> combines those research workflows in an account-based browser terminal.`,
-  related: ["/api", "/mcp", "/axiom-api", "/pump-fun-api"],
+  related: ["/gmgn-trading-api", "/trade-api", "/api", "/mcp", "/axiom-api", "/pump-fun-api"],
   body: `${cta(`<a class="btn" href="/api#endpoints">See the Blix endpoints</a>`)}
 <h2 id="what">What the GMGN API covers</h2>
 <p>According to GMGN's own docs and its agent-skills repository, the OpenAPI covers:</p>
@@ -298,7 +298,7 @@ ${table(["You want (GMGN)", "Blix endpoint", "Notes"], [
     ["Top holders", "<code>GET /api/holders/&lt;mint&gt;</code>", "Dev, sniper and bundle tags, top-10 share, who sold"],
     ["K-lines", "<code>GET /api/candles/&lt;mint&gt;?tf=1m</code>", "5s to 1h, built from real trades"],
     ["Wallet PnL", "<code>GET /api/wallet-page/&lt;address&gt;</code>", "Any wallet from the chain: holdings, latest swaps, positions, best closed trades, pump.fun rank"],
-    ["Swap", "<code>POST /api/v1/trade/build</code> + <code>send</code>", `<a href="/trade-api">The trade API</a>: pump.fun curve and PumpSwap, your own wallet signs, 1% a trade; <code>GET /api/quote</code> for Jupiter quotes without trading`],
+    ["Swap", "<code>POST /api/v1/trade/build</code> + <code>send</code>", `<a href="/trade-api">The trade API</a>: pump.fun curve and PumpSwap, your own wallet signs, 2% a trade; <code>GET /api/quote</code> for Jupiter quotes without trading`],
     ["Agent skills", `<a href="/mcp">Blix MCP</a>`, `${N_TOOLS} tools for Claude, Cursor, Codex`],
   ])}
 ${code(`# the Pulse, with the session from your Developers page
@@ -312,7 +312,7 @@ ${table(["", "GMGN OpenAPI", "Blix"], [
     ["Access", "API key from gmgn.ai/ai", "Your BLIX account session"],
     ["Price and limits", "Not published", "Included with the free account; fair-use limits per account"],
     ["Chains", "Solana, BSC, Base", "Solana"],
-    ["Real trading", "Yes, through the API", `Yes: <a href="/gmgn-trading-api">the trade API</a>, your own wallet, 1% a trade (0.8% with an invite)`],
+    ["Real trading", "Yes, through the API", `Yes: <a href="/gmgn-trading-api">the trade API</a>, your own wallet, 2% a trade (1.6% with an invite)`],
     ["AI", "No", "A rating, deep reads and picks on every coin"],
     ["Where it runs", "GMGN's servers", "blixvip.com; nothing to host"],
   ], "cmp")}
@@ -337,7 +337,7 @@ const axiom = {
   eyebrow: "Axiom Trade API · checked " + UPDATED_TEXT,
   h1: "Axiom Trade API: is there one?",
   lede: `We did not verify a public developer API in the Axiom Trade documentation reviewed. Check Axiom directly for current access. The "Axiom API" packages you will find are unofficial clients that sign in as your own Axiom account. If what you want is Axiom's Pulse (new pairs, final stretch, migrated) as data, <a href="/api">Blix</a> provides its own Solana discovery observations and research. Create a BLIX account to use its terminal.`,
-  related: ["/api", "/mcp", "/gmgn-api", "/pump-fun-api"],
+  related: ["/axiom-trading-api", "/trade-api", "/api", "/mcp", "/gmgn-api", "/pump-fun-api"],
   body: `${cta(`<a class="btn" href="/api#pulse">See the Pulse endpoint</a>`)}
 <div class="callout"><p>Searching "Axiom API" also finds <b>Axiom (axiom.co)</b>, a logging and observability company with its own API. It is unrelated to Axiom Trade, the crypto trading terminal this page is about.</p></div>
 
@@ -370,7 +370,7 @@ ${table(["You want (Axiom)", "Blix endpoint"], [
 ${table(["", "Unofficial Axiom SDKs", "Blix"], [
     ["Needs your Axiom login", "Yes", "No. Your own BLIX account"],
     ["Stability", "Breaks when Axiom changes", "Documented endpoints BLIX keeps stable"],
-    ["Real trading", "Yes, through your account", `Yes: <a href="/axiom-trading-api">the trade API</a> builds pump.fun and PumpSwap trades for your own wallet; 1% a trade`],
+    ["Real trading", "Yes, through your account", `Yes: <a href="/axiom-trading-api">the trade API</a> builds pump.fun and PumpSwap trades for your own wallet; 2% a trade`],
     ["Data", "Whatever Axiom's private endpoints return", "Pulse, holders, candles, quotes, safety, AI reads, wallets"],
     ["Cost", "Free packages; Axiom's trading fees apply", "Free with the account; 1% only on real trades"],
   ], "cmp")}
@@ -393,7 +393,7 @@ const fomo = {
   eyebrow: "Fomo API · checked " + UPDATED_TEXT,
   h1: "Fomo API: is there an official one?",
   lede: `We did not verify an official developer API or SDK on the Fomo homepage reviewed. Ask Fomo about current integration access. Independent services sell unofficial access to Fomo traders' wallets, PnL and activity on credits. <a href="/api">BLIX</a> takes a different route: Fomo traders' wallets are ordinary Solana wallets, so BLIX reads them from the chain and serves what Fomo's traders are buying, who is doing best and any wallet's trades to your account as JSON.`,
-  related: ["/api", "/mcp", "/gmgn-api", "/axiom-api"],
+  related: ["/fomo-trading-api", "/trade-api", "/api", "/mcp", "/gmgn-api", "/axiom-api"],
   body: `${cta(`<a class="btn" href="/api#endpoints">See the Blix endpoints</a>`)}
 <h2 id="unofficial">Unofficial Fomo APIs</h2>
 <p>Several independent services resolve Fomo handles to wallets and resell the data. They describe themselves as unofficial and not affiliated with fomo.family.</p>
@@ -445,7 +445,7 @@ const pump = {
   eyebrow: "pump.fun API · checked " + UPDATED_TEXT,
   h1: "Free pump.fun API",
   lede: `This page describes BLIX and PumpPortal integrations, not an official pump.fun API. PumpPortal's launch and migration streams are free, but its trade streams need an API key, a funded wallet and 0.01 SOL per 10,000 trades. <a href="/api">BLIX</a> is the alternative that comes with a free account: new coins from PumpPortal's free stream with an on-chain backup, every trade decoded straight from Solana, plus bonding progress, migrations, holders, snipers, bundles and candles as JSON and a live stream, authorized by your session.`,
-  related: ["/api", "/mcp", "/gmgn-api", "/axiom-api"],
+  related: ["/pump-fun-trading-api", "/trade-api", "/api", "/mcp", "/gmgn-api", "/axiom-api"],
   body: `${cta(`<a class="btn" href="/api#stream">See the live stream</a>`)}
 ${facts([
     ["Launches", "Every pump.fun launch, coverage and delay depend on upstream feeds and connectivity"],

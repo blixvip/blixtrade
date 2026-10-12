@@ -4,10 +4,10 @@
 // the colour tokens are copied into CSS below, so change them there when the app's identity changes.
 // The docs live at the root of blixvip.com (index.js routes these exact paths here); trade.blixvip.com and
 // blixvip.com/trade/<page> send them on with a 301 so all the ranking goes to one address.
+import { PAGE_TOPIC, PAGE_ALIASES, canonicalLinks } from './clusters.js';
 export const ORIGIN = "https://blixvip.com";
-export const REPO = "https://github.com/blixvip/blixtrade";
 export const UPDATED = "2026-10-08"; // when the facts on these pages were last checked
-export const UPDATED_TEXT = "October 4, 2026";
+export const UPDATED_TEXT = "October 8, 2026";
 
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -22,6 +22,8 @@ export const faq = (items) => `<div class="faq">${items.map(([q, a]) => `<sectio
 const plain = (html) => html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
 
 export const NAV = [
+  ["/guides", "Guides"],
+  ["/compare", "Compare"],
   ["/api", "API"],
   ["/mcp", "MCP"],
   ["/pump-fun-api", "pump.fun API"],
@@ -30,24 +32,24 @@ export const NAV = [
   ["/fomo-api", "Fomo API"],
 ];
 
-const ICON = `<svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#06140d"/><g fill="none" stroke="#39ff88" stroke-opacity=".35" stroke-width="2"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="13"/><circle cx="32" cy="32" r="5"/></g><path d="M32 32 52 21a21 21 0 0 1 1 11z" fill="#39ff88" fill-opacity=".55"/><circle cx="44" cy="24" r="3.5" fill="#39ff88"/><circle cx="22" cy="40" r="2.5" fill="#ffd166"/></svg>`;
-const GH = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>`;
+const ICON = `<img class="mark" src="/_pub/home/eye-logo.webp" width="44" height="44" alt=""><img class="word" src="/_pub/home/blix-logo.webp" width="86" height="58" alt="BLIX">`;
+export const DISCORD = "https://discord.gg/3VWHBP6paA";
+const JOIN = `<div class="join-actions"><a class="btn primary" href="/start">Create account <span aria-hidden="true">↗</span></a><a class="btn" href="${DISCORD}" target="_blank" rel="noopener noreferrer">Join Discord <span aria-hidden="true">↗</span></a></div>`;
 
 const CSS = `
 :root{color-scheme:dark;
---paper:oklch(15.5% .008 258);--paper-2:oklch(17.5% .009 258);--paper-3:oklch(19.5% .010 258);--paper-4:oklch(22.5% .012 258);
---rule:oklch(25% .012 258);--rule-2:oklch(33% .014 258);--ink:oklch(93% .006 258);--ink-2:oklch(76% .012 258);--muted:oklch(67% .014 258);
---accent:oklch(70% .15 255);--focus:oklch(74% .15 255);--up:oklch(74% .15 160);--down:oklch(67% .20 18);
---display:"Space Grotesk",system-ui,"Segoe UI Variable Display","Segoe UI",sans-serif;
---body:system-ui,"Segoe UI Variable Text","Segoe UI",-apple-system,Roboto,sans-serif;
+--paper:#050608;--paper-2:#0c0e12;--paper-3:#0c0e12;--paper-4:#171a20;
+--rule:#202329;--rule-2:#363b44;--ink:#f4f6fa;--ink-2:#c5c9d1;--muted:#aeb4bf;
+--accent:#d9dce2;--focus:#f4f6fa;--up:#22d38a;--down:#ff5a6a;
+--display:"Inter Tight",system-ui,sans-serif;--body:"Inter Tight",system-ui,sans-serif;
 --mono:"JetBrains Mono",ui-monospace,Consolas,monospace}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-padding-top:72px}
 body{margin:0;background:var(--paper);color:var(--ink);font:400 1rem/1.65 var(--body);overflow-x:hidden}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
-.top{position:sticky;top:0;z-index:5;background:var(--paper-2);border-bottom:1px solid var(--rule)}
-.top-in{max-width:1080px;margin:0 auto;padding:0 16px;height:56px;display:flex;align-items:center;gap:20px}
+.top{position:sticky;top:0;z-index:5;background:rgba(5,6,8,.95);border-bottom:1px solid var(--rule)}
+.top-in{max-width:1320px;margin:0 auto;padding:0 28px;height:90px;display:flex;align-items:center;gap:20px}
 .brand{display:flex;align-items:center;gap:9px;color:var(--ink);font:600 1.125rem/1 var(--display);letter-spacing:-.02em;flex:none}
 .brand:hover{text-decoration:none}
 .nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
@@ -57,19 +59,19 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline;tex
 .nav a[aria-current]{color:var(--ink);background:var(--paper-4)}
 .gh{display:flex;align-items:center;gap:7px;color:var(--ink);font-size:.875rem;font-weight:600;padding:7px 12px;border:1px solid var(--rule-2);border-radius:6px;background:var(--paper-4);flex:none}
 .gh:hover{text-decoration:none;border-color:var(--muted)}
-main{max-width:860px;margin:0 auto;padding:28px 16px 64px}
+main{max-width:1280px;margin:0 auto;padding:32px 28px 88px}
 .crumbs{font-size:.8125rem;color:var(--muted);margin:0 0 18px}.crumbs a{color:var(--muted)}.crumbs span{margin:0 6px}
 .eyebrow{font-size:.75rem;font-weight:600;letter-spacing:.045em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
-h1{font:600 clamp(2rem,5.2vw,2.75rem)/1.1 var(--display);letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance}
+h1{font:600 clamp(2.5rem,4.4vw,4.5rem)/1.03 var(--display);letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance}
 h2{font:600 1.5rem/1.25 var(--display);letter-spacing:-.02em;margin:52px 0 12px;padding-top:22px;border-top:1px solid var(--rule)}
 h3{font:600 1.0625rem/1.35 var(--body);margin:26px 0 6px}
 p{margin:0 0 14px;color:var(--ink-2)}p b,li b,td b{color:var(--ink);font-weight:600}
 .lede{font-size:1.125rem;line-height:1.6;color:var(--ink-2);margin-bottom:22px;max-width:68ch}
 ul,ol{color:var(--ink-2);padding-left:1.25rem;margin:0 0 14px}li{margin:4px 0}
 .cta{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
-.btn{display:inline-flex;align-items:center;gap:8px;font:600 .9375rem/1 var(--body);padding:12px 16px;border-radius:6px;border:1px solid var(--rule-2);background:var(--paper-4);color:var(--ink);white-space:nowrap}
+.btn{display:inline-flex;align-items:center;gap:8px;font:600 .9375rem/1 var(--body);padding:15px 24px;border-radius:999px;border:1px solid var(--rule-2);background:transparent;color:var(--ink);white-space:nowrap}
 .btn:hover{text-decoration:none;border-color:var(--muted)}
-.btn.primary{background:var(--ink);border-color:var(--ink);color:var(--paper)}.btn.primary:hover{background:#fff}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:var(--paper)}.btn.primary:hover{background:#fff}.btn.small{padding:8px 12px;font-size:.8rem}.btn:disabled{opacity:.5;cursor:default}input.field{padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--paper-3);color:var(--ink);min-width:260px;font:inherit}
 .meta{font-size:.8125rem;color:var(--muted);margin:0 0 8px}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:8px;overflow:hidden;margin:26px 0 8px}
 .facts div{background:var(--paper-3);padding:14px 16px}
@@ -107,6 +109,23 @@ footer{border-top:1px solid var(--rule);background:var(--paper-2)}
 .foot nav{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 14px}.foot nav a{color:var(--ink-2)}
 @media (max-width:720px){.gh span{display:none}.top-in{gap:12px}h2{margin-top:40px}.lede{font-size:1.0625rem}}
 @media (prefers-reduced-motion:no-preference){.btn,.gh,.nav a,.related a{transition:border-color .16s,background .16s,color .16s}}
+.brand{gap:10px}.brand img{object-fit:contain;flex:none}.brand .mark{border-radius:11px}.brand .word{width:86px;height:58px}
+.top-actions{display:flex;align-items:center;gap:22px;flex:none}.site-open{font-size:.9rem;color:var(--ink-2);font-weight:600;white-space:nowrap}.top-actions>.btn{font-size:.9rem}
+.hero-grid{position:relative;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);align-items:center;gap:40px;isolation:isolate;padding:48px 0 62px}
+.hero-grid::before{content:"";position:absolute;z-index:-1;inset:-24px 0;background:radial-gradient(ellipse at 82% 45%,rgba(174,180,191,.13),transparent 55%);pointer-events:none}
+.hero-copy{min-width:0}.hero-copy h1{background:linear-gradient(155deg,#fff 20%,#aeb4bf 88%);color:transparent;background-clip:text;-webkit-background-clip:text;max-width:15ch}
+.hero-copy .eyebrow{display:inline-flex;align-items:center;gap:9px;color:var(--ink-2);border:1px solid var(--rule-2);border-radius:999px;padding:7px 13px;letter-spacing:0;text-transform:none;margin-bottom:24px;font-size:.8rem}
+.hero-copy .eyebrow::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--up);flex:none}
+.hero-copy .lede{font-size:1.1rem;max-width:54ch;margin:20px 0 24px}.join-actions{display:flex;flex-wrap:wrap;gap:12px}.join-actions .btn{gap:18px;min-height:48px}.btn.primary{box-shadow:0 10px 30px rgba(220,226,240,.13)}
+.account-note{font-size:.84rem;color:var(--muted);margin:16px 0 0}.hero-preview{display:block;color:var(--muted);text-align:center;border-radius:24px;background:repeating-linear-gradient(90deg,transparent 0 109px,#14171c 110px 111px),repeating-linear-gradient(0deg,#080a0d 0 109px,#14171c 110px 111px);padding:22px 0 20px;box-shadow:inset 0 0 65px 28px #050608}
+.hero-preview img{display:block;width:100%;height:auto;filter:drop-shadow(0 16px 28px #000)}.hero-preview span{font-size:.8rem}.hero-preview:hover{text-decoration:none;color:var(--ink)}
+.article-content{max-width:860px;margin:0 auto}.article-content>.meta{padding:22px 0 4px;border-top:1px solid var(--rule)}.article-content>h2:first-of-type{margin-top:28px}
+.contents{margin:22px 0 32px;padding:20px 24px;border:1px solid var(--rule);border-radius:16px;background:var(--paper-2)}.contents summary{cursor:pointer;font-weight:600}.contents ol{margin:12px 0 0;padding-left:0;list-style:none;columns:2;column-gap:32px}.contents li{break-inside:avoid;font-size:.9rem}.contents a{display:inline-block;padding:3px 0}@media(max-width:640px){.contents ol{columns:1}}
+.closing-cta{max-width:860px;margin:76px auto 0;padding:42px;border:1px solid var(--rule-2);border-radius:24px;background:radial-gradient(ellipse at top right,rgba(174,180,191,.12),transparent 65%),#0c0e12}.closing-cta h2{border:0;padding:0;margin:0 0 12px;font:600 clamp(2rem,4vw,3rem)/1.06 var(--display);letter-spacing:-.035em}.closing-cta p{margin-bottom:24px}
+.foot{max-width:1280px;padding:34px 28px}.foot-brand{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:30px}.foot nav{gap:14px 22px}.foot p{max-width:860px}
+@media(max-width:900px){.nav{display:none}.top-in{justify-content:space-between}.hero-grid{gap:20px;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.hero-copy h1{font-size:48px}}
+@media(max-width:640px){.top-in{padding:0 20px;height:78px;gap:12px}.brand{gap:6px}.brand .mark{width:34px;height:34px}.brand .word{width:64px;height:44px}.top-actions{gap:12px}.top-actions>.site-open{display:none}.top-actions>.btn{padding:12px 16px;font-size:.83rem}main{padding:22px 20px 60px}.hero-grid{grid-template-columns:minmax(0,1fr);gap:24px;padding:22px 0 36px}.hero-copy h1{font-size:44px;max-width:15ch}.hero-copy .lede{font-size:1.05rem}.hero-preview{max-width:480px;width:100%;margin:0 auto}.hero-preview img{max-height:270px;object-fit:contain}.join-actions{gap:10px}.join-actions .btn{padding:14px 18px;font-size:.9rem}.closing-cta{padding:28px 22px;margin-top:48px}.foot{padding:28px 20px}.foot-brand{align-items:flex-start;flex-direction:column}.facts{grid-template-columns:minmax(0,1fr)}.related{grid-template-columns:minmax(0,1fr)}}
+
 `;
 
 // Copy buttons for code blocks. Progressive: without the script the blocks are plain and selectable.
@@ -115,17 +134,21 @@ export const SCRIPT = `document.querySelectorAll(".code").forEach(function(b){va
 // p: { path, title, description, h1, eyebrow, lede, body, faq?, related?, crumb, og, schema? }
 export function layout(p) {
   const url = ORIGIN + p.path;
+  const updated = p.updated || UPDATED;
+  const topic = PAGE_TOPIC.get(p.path);
+  const sections = [...p.body.matchAll(/<h2\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)];
+  const contents = sections.length >= 4 ? `<details class="contents" open><summary>On this page</summary><ol>${sections.map(([, id, heading]) => `<li><a href="#${esc(id)}">${esc(plain(heading))}</a></li>`).join("")}</ol></details>` : "";
   const graph = [
-    { "@type": "Organization", "@id": `${ORIGIN}/#org`, name: "Blix", url: `${ORIGIN}/`, logo: `${ORIGIN}/_pub/icon-512.png`, sameAs: [REPO, "https://github.com/blixvip", "https://blixvip.com"] },
+    { "@type": "Organization", "@id": `${ORIGIN}/#org`, name: "Blix", url: `${ORIGIN}/`, logo: `${ORIGIN}/_pub/icon-512.png`, sameAs: ["https://blixvip.com"] },
     { "@type": "WebSite", "@id": `${ORIGIN}/#site`, url: `${ORIGIN}/`, name: "BLIX", alternateName: ["Blix", "Blix VIP", "blixvip"], publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "TechArticle", "@id": `${url}#article`, headline: p.h1, description: p.description, url, mainEntityOfPage: url, image: `${ORIGIN}/_pub/${p.og}`,
-      datePublished: UPDATED, dateModified: UPDATED, inLanguage: "en", author: { "@id": `${ORIGIN}/#org` }, publisher: { "@id": `${ORIGIN}/#org` }, isPartOf: { "@id": `${ORIGIN}/#site` },
+      dateModified: updated, inLanguage: "en", author: { "@id": `${ORIGIN}/#org` }, publisher: { "@id": `${ORIGIN}/#org` }, isPartOf: { "@id": `${ORIGIN}/#site` },
       about: { "@id": `${ORIGIN}/#software` } },
     { "@type": "SoftwareApplication", "@id": `${ORIGIN}/#software`, name: "Blix Trade", alternateName: ["Blix", "Blix API", "Blix MCP"],
-      description: "Free, open-source Solana memecoin terminal with a local HTTP + SSE API and an MCP server: pump.fun launches, live trades, holders, snipers, bundles, candles, Jupiter quotes and AI reads.",
-      applicationCategory: "FinanceApplication", applicationSubCategory: "Crypto trading terminal and API", operatingSystem: "Windows, macOS, Linux (Node.js 24.16+)",
-      url: `${ORIGIN}/api`, downloadUrl: REPO, codeRepository: REPO, license: "https://opensource.org/licenses/MIT", isAccessibleForFree: true,
-      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" }, publisher: { "@id": `${ORIGIN}/#org` } },
+      description: "BLIX is an AI-powered Solana memecoin terminal for discovery, research, wallet tracking and trading. Create an account to access the site.",
+      applicationCategory: "FinanceApplication", applicationSubCategory: "Crypto trading terminal and API", operatingSystem: "Web",
+      url: `${ORIGIN}/`,
+      publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "BreadcrumbList", itemListElement: [
       { "@type": "ListItem", position: 1, name: "BLIX", item: `${ORIGIN}/` },
       { "@type": "ListItem", position: 2, name: p.crumb, item: url } ] },
@@ -133,9 +156,9 @@ export function layout(p) {
   if (p.faq?.length) graph.push({ "@type": "FAQPage", "@id": `${url}#faq`, mainEntity: p.faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: plain(a) } })) });
   const ld = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
   const nav = NAV.map(([href, label]) => `<a href="${href}"${href === p.path ? ' aria-current="page"' : ""}>${label}</a>`).join("");
-  const related = (p.related || []).map((href) => PAGE_CARDS[href]).filter(Boolean)
-    .map(([title, blurb, href]) => `<a href="${href}"><b>${title}</b><span>${blurb}</span></a>`).join("");
-  return `<!doctype html>
+  const related = [...new Set((p.related || []).map(href => PAGE_ALIASES[href] || href))].map((href) => PAGE_CARDS[href]).filter(Boolean)
+    .map(([title, blurb, href]) => `<a href="${esc(href)}"><b>${esc(title)}</b><span>${esc(blurb)}</span></a>`).join("");
+  return canonicalLinks(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -144,7 +167,7 @@ export function layout(p) {
 <meta name="description" content="${esc(p.description)}">
 <link rel="canonical" href="${url}">
 <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-<meta name="theme-color" content="#121419">
+<meta name="theme-color" content="#050608">
 <meta name="author" content="Blix">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Blix">
@@ -155,7 +178,7 @@ export function layout(p) {
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="${esc(p.h1)}">
-<meta property="article:modified_time" content="${UPDATED}">
+<meta property="article:modified_time" content="${updated}">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${esc(p.ogTitle || p.title)}">
 <meta name="twitter:description" content="${esc(p.description)}">
@@ -164,47 +187,45 @@ export function layout(p) {
 <link rel="icon" href="/_pub/icon-96.png?v=eye2" sizes="96x96" type="image/png">
 <link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye2">
 <link rel="alternate" type="text/plain" title="LLM summary" href="/llms.txt">
-<link rel="preload" href="/_pub/fonts/space-grotesk-600.woff2" as="font" type="font/woff2" crossorigin>
-<style>@font-face{font-family:'Space Grotesk';font-style:normal;font-weight:600;font-display:swap;src:url(/_pub/fonts/space-grotesk-600.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>
+<link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
+<style>@font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>
 <style>${CSS.replace(/\n/g, "")}</style>
 <script type="application/ld+json">${ld}</script>
 </head>
 <body>
 <header class="top"><div class="top-in">
-<a class="brand" href="/" aria-label="BLIX home">${ICON}<span>Blix</span></a>
+<a class="brand" href="/" aria-label="BLIX home">${ICON}</a>
 <nav class="nav" aria-label="Docs">${nav}</nav>
-<a class="gh" href="${REPO}" rel="noopener">${GH}<span>GitHub</span></a>
+<div class="top-actions"><a class="site-open" href="/">Open BLIX ↗</a><a class="btn primary" href="/start">Create account ↗</a></div>
 </div></header>
 <main>
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/">BLIX</a>${p.path === "/api" ? "<span>/</span>API" : `<span>/</span>${esc(p.crumb)}`}</nav>
 <article>
-<p class="eyebrow">${p.eyebrow}</p>
-<h1>${p.h1}</h1>
-<p class="lede">${p.lede}</p>
+<section class="hero-grid" aria-label="${esc(p.crumb)}">
+<div class="hero-copy"><p class="eyebrow">AI-powered memecoin terminal</p>
+<h1>${p.h1}</h1><p class="lede">${p.lede}</p>
+${JOIN}<p class="account-note">Create a BLIX account to access the terminal, tools and research. Already a member? <a href="/login">Log in</a>.</p></div>
+<a class="hero-preview" href="/" aria-label="Explore the main BLIX site"><img src="/_pub/home/laptop-800.webp" width="800" height="600" alt="The BLIX memecoin trading terminal" fetchpriority="high"><span>Explore the BLIX terminal ↗</span></a>
+</section>
+<div class="article-content"><p class="meta">By <a href="/about">BLIX</a> · Updated <time datetime="${updated}">${updated}</time>${topic ? ` · <a href="/guides#${topic.id}">${esc(topic.title)}</a>` : ''}</p>
+${contents}
 ${p.body}
 ${p.faq?.length ? `<h2 id="faq">Frequently asked questions</h2>${faq(p.faq)}` : ""}
 ${related ? `<h2 id="related">Related</h2><div class="related">${related}</div>` : ""}
+</div>
+<section class="closing-cta"><h2>Your next move starts here.</h2><p>Create your BLIX account to access the trading terminal. Join the Discord community to stay connected.</p>${JOIN}</section>
 </article>
 </main>
 <footer><div class="foot">
-<nav aria-label="Footer">${NAV.map(([href, label]) => `<a href="${href}">${label}</a>`).join("")}<a href="${REPO}" rel="noopener">GitHub</a><a href="https://blixvip.com" rel="noopener">blixvip.com</a></nav>
-<p>Blix is free, open-source software (MIT) by blixvip. It is independent and is not affiliated with or endorsed by GMGN, Axiom Trade, Fomo (Fomo Labs), pump.fun, PumpPortal or any other company named here; their names are used only to describe what Blix replaces or works alongside. Facts about third-party APIs were checked against their public pages on ${UPDATED_TEXT} and can change: <a href="${REPO}/issues">open an issue</a> if something is out of date.</p>
-<p>Not financial advice. Memecoins are extremely risky. Blix shows data and an AI's opinion of it; it never signs a transaction.</p>
+<div class="foot-brand"><a class="brand" href="/" aria-label="BLIX home">${ICON}</a><a class="site-open" href="/">Open the main BLIX site ↗</a></div>
+<nav aria-label="Footer"><a href="/start">Create account</a><a href="/login">Log in</a><a href="/about">About BLIX</a><a href="${DISCORD}" target="_blank" rel="noopener noreferrer">Join Discord</a>${NAV.map(([href, label]) => `<a href="${href}">${label}</a>`).join("")}</nav>
+<p>BLIX is independent of the third-party companies discussed in these guides. Network and service fees may apply when trading.</p>
+<p>Not financial advice. Memecoins are extremely risky. Hosted trading and token launches spend real SOL. Paper trading is simulated; the published MCP tools expose data and paper trades, not live execution.</p>
 </div></footer>
 <script>${SCRIPT}</script>
 </body>
-</html>`;
+</html>`);
 }
 
-// Cards for the "Related" grid: [title, blurb, href].
-export const PAGE_CARDS = {
-  "/api": ["Blix API", "52 endpoints and a live stream: launches, trades, holders, candles, quotes, AI reads.", "/api"],
-  "/mcp": ["Blix MCP server", "20 tools that give Claude, Cursor or Codex live Solana memecoin data.", "/mcp"],
-  "/pump-fun-tracker": ["Live pump.fun tracker", "New pairs, final stretch and migrations live, with holders, snipers and AI ratings.", "/pump-fun-tracker"],
-  "/solana-memecoin-screener": ["Memecoin screener with AI", "Trending and surging coins, live AI ratings, daily picks and narratives.", "/solana-memecoin-screener"],
-  "/memecoin-paper-trading": ["Memecoin paper trading", "Real prices and costs, take profit and stops, nothing on chain.", "/memecoin-paper-trading"],
-  "/pump-fun-api": ["Free pump.fun API", "Launches, trades, bonding progress, migrations, snipers and bundles. No key.", "/pump-fun-api"],
-  "/gmgn-api": ["GMGN API", "How GMGN's key works, what it covers, and a free alternative.", "/gmgn-api"],
-  "/axiom-api": ["Axiom Trade API", "Axiom has no public API. Axiom-style Pulse data without one.", "/axiom-api"],
-  "/fomo-api": ["Fomo API", "fomo.family has no public API. Track Fomo traders from the chain instead.", "/fomo-api"],
-};
+// Filled from the page registry before any page is rendered.
+export const PAGE_CARDS = Object.create(null);

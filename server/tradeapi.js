@@ -4,7 +4,7 @@
 // the fee rail and builds the transaction; the live stream is one shared connection to the radar's firehose.
 //
 // Keys: `blx_live_<token>`, shown once, kept hashed. Every key belongs to a member (their Google email); a key
-// pays the member's fee (1%, 0.8% when they joined through an invite) and credits their inviter like a trade in
+// pays the member's fee (2%, 1.6% when they joined through an invite) and credits their inviter like a trade in
 // the terminal does. The signer is always the caller: Blix never sees a private key.
 //
 // Routes (member = signed in on blixvip.com; key = Authorization: Bearer blx_live_…):
@@ -143,7 +143,7 @@ export function createTradeApi({ dataDir = DATA, vault = defaultVault, refOf = d
     throw fail(404, "Not found. The trade API is documented at https://blixvip.com/trade-api");
   }
 
-  function feeInfo(email) { const invited = Boolean(refOf(email)); return { bps: invited ? 80 : 100, invited, note: "Blix's fee rides inside every transaction built here, paid to Blix's fee wallet; your inviter earns 40% of it." }; }
+  function feeInfo(email) { const invited = Boolean(refOf(email)); return { bps: invited ? 160 : 200, invited, note: "Blix's fee rides inside every transaction built here, paid to Blix's fee wallet; your inviter earns 40% of it." }; }
   const mask = (email) => String(email).replace(/^(.{2}).*(@.*)$/, "$1…$2");
 
   // ---------- the live stream (WebSocket) ----------

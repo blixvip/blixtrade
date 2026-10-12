@@ -43,7 +43,7 @@ and remembers `sha256(message)` for 3 minutes. `send` parses the signed bytes, l
 or expired), verifies the ed25519 signature against the wallet the build was for, then sends and confirms exactly like
 the vault's own trades (`chain.send` + `chain.confirm`). The confirmed trade is a `txs` row with `user_id = 0`,
 `actor = api:<member email>`, `fee` set, so `feesSol` in the owner dashboard and `ref_earn` (40% to the inviter)
-count it with no query changes. Fee = `feeFor(treasury, { referrer }, lamports)`: 1% (0.8% invited), skipped only while
+count it with no query changes. Fee = `feeFor(treasury, { referrer }, lamports)`: 2% (1.6% invited), skipped only while
 the fee wallet is below rent (0.00089 SOL), as for every trade.
 
 Limits (`tradeapi.js LIMITS`): 5 keys/member, 120 quotes+builds/min, 60 sends/min, 3 streams/key, 200 mints and 200

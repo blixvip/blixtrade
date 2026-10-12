@@ -58,6 +58,8 @@ const HSTS = "max-age=15552000; includeSubDomains";
 const DOCS = new Set(PUBLIC_PATHS);
 const docOf = (p) => { const d = p.toLowerCase().replace(/\/+$/, ""); return PAGE_ALIASES[d] || (DOCS.has(d) ? d : null); };
 const atRoot = (p) => Boolean(docOf(p)) || p.startsWith("/_pub/") || p === "/llms.txt" || p === `/${INDEXNOW_KEY}.txt`;
+// blixvip-home's product slugs (case-insensitive there too) and where they sold: the blixvip GitHub repos.
+const OLD_SHOP = { nullmotion: "NullMotion", motionclone: "MotionClone", easyedit: "easyedit", "html-anime": "html-anime", "ai-broadcaster": "ai-broadcaster", "x-media": "x-media", skills: "skills", "motion-templates": "/" };
 const moved = (to, search = "") => new Response(null, { status: 301, headers: { location: `https://blixvip.com${to}${search}`, "cache-control": "public, max-age=86400" } });
 export default {
   // Anything thrown on the way (a KV or D1 read that failed, a bug) used to surface as Cloudflare's "Worker threw
@@ -91,8 +93,18 @@ async function serve(req, env, ctx) {
   {
     const url = new URL(req.url);
     const get = req.method === "GET" || req.method === "HEAD";
-    // www: the bare domain.
-    if (url.hostname === "www.blixvip.com") { url.hostname = "blixvip.com"; return Response.redirect(url.toString(), 301); }
+    // www: the bare domain, over https in one hop (http://www used to go to http://blixvip.com first, and Search
+    // Console listed every www address as "Page with redirect" on 2026-10-09; one 301 straight to the canonical
+    // address is what it expects).
+    if (url.hostname === "www.blixvip.com") { url.protocol = "https:"; url.hostname = "blixvip.com"; return Response.redirect(url.toString(), 301); }
+    // The storefront that lived here until 2026-10-07 (blixvip-home): Google still holds its product pages
+    // (/MotionClone, /motion-templates, ...), which fell through to the member gate's 401. Each goes to the
+    // repo it handed out, so old links and search results keep working instead of dying in the index.
+    if (get && (url.hostname === "blixvip.com" || url.hostname === "trade.blixvip.com")) {
+      const seg = url.pathname.split("/")[1].toLowerCase();
+      const repo = OLD_SHOP[seg];
+      if (repo) return new Response(null, { status: 301, headers: { location: `https://github.com/blixvip${repo === "/" ? "" : "/" + repo}`, "cache-control": "public, max-age=86400" } });
+    }
     // trade.blixvip.com still answers (signed-in browsers keep working there); its front door is blixvip.com.
     if (url.hostname === "trade.blixvip.com" && get) {
       const d = docOf(url.pathname);
@@ -433,12 +445,12 @@ async function apiKeyRequest(req, url, key, env) {
 // /trade-api for a signed-in member: their keys, made and revoked right here (the page's own script talks to
 // /api/v1/keys with the member's session), above the public page. Private to them: never cached, never indexed.
 const KEYS_SCRIPT = "(function(){var el=document.getElementById(\"keys\"),out=document.getElementById(\"newkey\"),btn=document.getElementById(\"mk\"),lab=document.getElementById(\"lab\");\nfunction esc(s){return String(s==null?\"\":s).replace(/[&<>\"]/g,function(c){return{\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\"}[c]})}\nfunction ago(t){if(!t)return \"never\";var m=Math.round((Date.now()-t)/60000);return m<1?\"just now\":m<60?m+\" min ago\":m<1440?Math.round(m/60)+\" h ago\":Math.round(m/1440)+\" d ago\"}\nfunction load(){fetch(\"/api/v1/keys\",{credentials:\"same-origin\"}).then(function(r){return r.json()}).then(function(j){if(!j.keys){el.innerHTML=\"<p class=note>\"+esc(j.error||\"Keys unavailable right now.\")+\"</p>\";return}\nif(!j.keys.length){el.innerHTML=\"<p class=note>No keys yet. Make one below; it is shown once.</p>\";return}\nel.innerHTML=\"<div class=table-wrap><table><thead><tr><th>Key</th><th>Label</th><th>Calls</th><th>Last used</th><th></th></tr></thead><tbody>\"+j.keys.map(function(k){return \"<tr><td><code>\"+esc(k.prefix)+\"\\u2026</code></td><td>\"+esc(k.label||\"\")+\"</td><td>\"+k.calls+\"</td><td>\"+ago(k.lastUsed)+\"</td><td><button class=\\\"btn small\\\" data-id=\\\"\"+k.id+\"\\\">Revoke</button></td></tr>\"}).join(\"\")+\"</tbody></table></div>\";\nel.querySelectorAll(\"button[data-id]\").forEach(function(b){b.onclick=function(){if(!confirm(\"Revoke this key? Bots using it stop at once.\"))return;fetch(\"/api/v1/keys/\"+b.getAttribute(\"data-id\"),{method:\"DELETE\",credentials:\"same-origin\"}).then(load)}})}).catch(function(){el.innerHTML=\"<p class=note>Keys unavailable right now.</p>\"})}\nbtn.onclick=function(){btn.disabled=true;fetch(\"/api/v1/keys\",{method:\"POST\",credentials:\"same-origin\",headers:{\"content-type\":\"application/json\"},body:JSON.stringify({label:lab.value})}).then(function(r){return r.json()}).then(function(j){btn.disabled=false;if(!j.key){out.innerHTML=\"<p class=note>\"+esc(j.error||\"Could not make a key.\")+\"</p>\";return}\nout.innerHTML=\"<div class=callout><p><b>Your new key, shown once.</b> Copy it now and keep it private: anyone holding it can build and send trades for wallets they control, on your account's fee rate.</p><div class=code data-lang=bash><pre><code>export BLIX_KEY=\\\"\"+esc(j.key)+\"\\\"</code></pre></div></div>\";lab.value=\"\";load()}).catch(function(){btn.disabled=false})};\nload()})();";
-async function tradeApiAccess(req, email) {
+export async function tradeApiAccess(req, email) {
   const p = PAGES["/trade-api"];
-  const panel = `<div class="callout"><p><b>Signed in as ${esc(email)}.</b> Your trade-API keys are below. A key is your account: it trades at your fee rate (1%, 0.8% with an invite) for any wallet you sign with. Keep it out of repositories and client-side code.</p></div>
+  const panel = `<div class="callout"><p><b>Signed in as ${esc(email)}.</b> Your trade-API keys are below. A key is your account: it trades at your fee rate (2%, 1.6% with an invite) for any wallet you sign with. Keep it out of repositories and client-side code.</p></div>
 <h2 id="your-keys">Your API keys</h2>
 <div id="keys"><p class="note">Loading your keys…</p></div>
-<p><input id="lab" maxlength="60" placeholder="Label (optional): my sniper bot" style="padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--paper-3);color:var(--ink);min-width:260px"> <button id="mk" class="btn primary" type="button">Create a key</button></p>
+<p style="display:flex;flex-wrap:wrap;gap:10px;align-items:center"><input id="lab" class="field" maxlength="60" placeholder="Label (optional): my sniper bot"> <button id="mk" class="btn primary" type="button">Create a key</button></p>
 <div id="newkey"></div>
 ${code(`export BLIX_KEY="blx_live_…"   # from the list above
 curl -s https://blixvip.com/api/v1/me -H "authorization: Bearer $BLIX_KEY"`, "bash")}
