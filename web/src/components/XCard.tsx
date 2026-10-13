@@ -6,6 +6,7 @@
 // reason. The icon says what the link is: a person for an account, a group for a community, X's mark for a post.
 import { cloneElement, useEffect, useRef, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
+import { Isolate } from "@/components/ui/isolate";
 import { api } from "@/lib/api";
 import { thumb } from "@/lib/thumb";
 import { cn } from "@/lib/utils";
@@ -285,11 +286,11 @@ export function XHover({ href, children }: { href: string; children: ReactElemen
   return (
     <>
       {trigger}
-      {pos && createPortal(
+      {pos && createPortal(<Isolate>
         <div role="tooltip" onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave}
           className="fixed z-50 w-[360px] max-w-[calc(100vw-20px)] animate-row-in overflow-hidden rounded-[16px] border border-rule-2 bg-paper-2 text-left shadow-sheet" style={pos}>
           <Body c={card} href={href} />
-        </div>, document.body)}
+        </div></Isolate>, document.body)}
     </>
   );
 }

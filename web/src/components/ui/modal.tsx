@@ -5,6 +5,7 @@
 // under it does not scroll, and focus goes back where it was when it closes.
 import { createContext, useContext, useEffect, useId, useRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Isolate } from "./isolate";
 
 const Ctx = createContext<{ open: boolean; close: () => void; titleId: string }>({ open: false, close: () => {}, titleId: "" });
 
@@ -15,7 +16,7 @@ export function Root({ open, onOpenChange, children }: { open: boolean; onOpenCh
 
 export function Portal({ children }: { children: ReactNode }) {
   const { open } = useContext(Ctx);
-  return open ? createPortal(children, document.body) : null;
+  return open ? createPortal(<Isolate>{children}</Isolate>, document.body) : null;   // events inside stay inside (ui/isolate.tsx)
 }
 
 export function Overlay({ className }: { className?: string }) {
