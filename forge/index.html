@@ -18,6 +18,7 @@
     <button class="iconbtn" id="undo" title="Undo (Ctrl+Z)">&#8630;</button>
     <button class="iconbtn" id="redo" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
     <div class="hsep"></div>
+    <button class="btn" id="layersToggle" title="Show the layers" aria-pressed="false">Layers</button>
     <span class="btn dragout" id="dragOut" draggable="true" title="Drag the finished picture out: onto your desktop, a chat, or any app that takes pictures">&#10021; Drag out</span>
     <button class="btn" id="copyBtn" title="Copy image (Ctrl+C)">Copy</button>
     <button class="btn" id="dlBtn" title="Download PNG (Ctrl+S)">Download</button>
@@ -26,7 +27,9 @@
 
   <div id="body">
     <nav id="rail">
-      <button class="tool" data-tool="looks" aria-pressed="true" title="Looks (1)">
+      <button class="tool" data-tool="bg" aria-pressed="true" title="Backgrounds (4)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 5 5 3-3 5 5"/><circle cx="15" cy="8" r="1.6"/></svg>Backgrounds</button>
+      <button class="tool" data-tool="looks" title="Looks (1)">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>Looks</button>
       <button class="tool" data-tool="find" title="Find pictures: web, Pinterest, ChatGPT (8)">
         <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>Find</button>
@@ -34,8 +37,6 @@
         <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M8 7.6L20 18M8 16.4L20 6"/></svg>Cut Out</button>
       <button class="tool" data-tool="aura" title="Aura (3)">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.4"/><path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.3 5.3l1.9 1.9M16.8 16.8l1.9 1.9M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9"/></svg>Aura</button>
-      <button class="tool" data-tool="bg" title="Background (4)">
-        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 5 5 3-3 5 5"/><circle cx="15" cy="8" r="1.6"/></svg>Backdrop</button>
       <button class="tool" data-tool="style" title="Style (5)">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3.6 9h16.8M3.6 15h16.8"/></svg>Style</button>
       <button class="tool" data-tool="text" title="Text (6)">
@@ -51,8 +52,8 @@
       <canvas id="view"></canvas>
       <div id="cursor"></div>
       <div id="drop">
-        <div class="big">Drop a photo here</div>
-        <div class="hint">or paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or drag one from Google, Pinterest or ChatGPT<br>hold <kbd>Shift</kbd> to drop it as the backdrop · the background comes off by itself</div>
+        <div class="big">Add your photo</div>
+        <div class="hint">Drop it here, paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or drag one in from Google, Pinterest or ChatGPT.<br>Hold <kbd>Shift</kbd> while dropping to use it as the background.</div>
         <button class="btn pri pick" id="openBtn">Choose file</button>
       </div>
       <div id="hud">

@@ -519,7 +519,8 @@ export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
       const local = LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase());
       return tradeApi.handle(req, res, new URL(req.url, "http://x"), { email: req.walletMember || req.member || (local ? "owner@localhost" : null) }).catch(failed(res));
     }
-    if (p.startsWith("/api/edge/") && req.edgeCall) return toAccountsHere(req, res);
+    // /api/edge/devs is the radar's (the public Top devs board, worker/site/devs.js): it goes on to the radar below.
+    if (p.startsWith("/api/edge/") && req.edgeCall && p !== "/api/edge/devs") return toAccountsHere(req, res);
     // What this process is keeping and how often it was enough, for checking by hand on this PC.
     if (p === "/__cache" && LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase())) return json(res, 200, JSON.stringify({ answers: cacheReport(), pictures: picStats, far: farStats }));
     if (p === "/forge" || p.startsWith("/forge/")) {

@@ -27,6 +27,8 @@ export const SITEMAP_URLS = [
   // lastmod is the page's own last content change (site/dates.json, kept by site/stamp.mjs), not the build date.
   ...PUBLIC_PATHS.map((p) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${DATES.pages[p]?.modified || PAGES[p].updated || UPDATED}</lastmod></url>`),
   `  <url><loc>${ORIGIN}/</loc><lastmod>${DATES.home.modified}</lastmod></url>`,
+  // The public Top devs board (site/devs.js): live, so its lastmod is today.
+  `  <url><loc>${ORIGIN}/devs</loc><lastmod>${new Date().toISOString().slice(0, 10)}</lastmod><changefreq>hourly</changefreq></url>`,
 ].join("\n");
 export const SITEMAP = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

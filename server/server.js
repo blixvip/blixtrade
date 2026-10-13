@@ -1482,6 +1482,9 @@ async function handleRequest(req, res) {
     // pump.fun's callouts are read only while someone wants them: a Hot list counting them keeps them coming.
     // Top devs (devboard.js): the wallets behind the window's best coins, with their coins.
     if (p === "/api/devs") return send(res, 200, await devBoard({ range: params.range }));
+    // The public board at blixvip.com/devs (worker/site/devs.js): the Worker's own read, with the edge key (webapp.js).
+    // Only what the page shows (the top 100, no per-dev coin lists): the whole board is ~650 KB, this ~60 KB.
+    if (p === "/api/edge/devs") { const b = await devBoard({ range: params.range }); return send(res, 200, { ...b, top: (b.top || []).slice(0, 100).map(({ coins, ...d }) => d) }); }
     // The Forge's Find panel (imgsearch.js): web and Pinterest picture search, and any picture fetched for the canvas.
     if (p === "/api/img/search") return send(res, 200, await imgSearch({ q: params.q, src: params.src, page: params.page, bm: params.bm }));
     if (p === "/api/img/fetch") {

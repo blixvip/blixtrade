@@ -115,7 +115,7 @@ export function findPanel(h) {
       sec('Make it with ChatGPT', ta,
         el('button', { class: 'btn pri wide', style: 'margin-top:8px', onclick: () => openChatGPT(ta.value.trim()) }, 'Open ChatGPT beside the editor'),
         el('div', { class: 'hint', style: 'margin-top:9px' },
-          'ChatGPT opens in its own window (it will not open inside another site). When the picture is made, drag it from that window onto the canvas, or right-click it, Copy image, and press Ctrl+V here. The background comes off by itself.'))];
+          'ChatGPT opens in its own window (it will not open inside another site). When the picture is made, drag it from that window onto the canvas, or right-click it, Copy image, and press Ctrl+V here. Then remove its background if you want the subject on its own.'))];
   }
 
   const input = el('input', { class: 'findq', type: 'search', placeholder: st.src === 'pinterest' ? 'Search Pinterest' : 'Search images', value: st.q, autocomplete: 'off' });

@@ -3,6 +3,7 @@
 // still missing, what happens once it is launched, and what people are posting about right now.
 // Launch pins the picture to IPFS and the vault signs the create from the signed-in person's Blix wallet
 // (POST /api/account/launch, server/accounts.js -> Blix Vault). Real SOL, always: there is no paper launch.
+import { ForgeWindow } from "./launch/ForgeWindow";
 import { SiteLogo } from "@/components/logos";
 import { LaunchPlans } from '@/components/LaunchPlans';
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -396,11 +397,20 @@ export function Launch() {
     sentToForge.current = url;
     w.postMessage({ type: "forge-load", dataUrl: url, name: d.name.trim() || "Coin" }, location.origin);
   };
-  const openForge = () => { setForge("open"); if (forgeReady.current) sendToForge(); };
+  // forgeUp: the editor inside has said it is up (its loading screen goes); forgeFrom: the point it opens out of.
+  const [forgeUp, setForgeUp] = useState(false);
+  const [forgeFrom, setForgeFrom] = useState<{ x: number; y: number } | null>(null);
+  const openForge = (from?: Element | null) => {
+    const r = from?.getBoundingClientRect();
+    if (r) setForgeFrom({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    setForge("open"); if (forgeReady.current) sendToForge();
+  };
+  // Heading for the button starts the editor loading out of sight, so it is up by the click.
+  const warmForge = () => setForge((f) => (f === "closed" ? "hidden" : f));
   useEffect(() => {
     const onMsg = async (e: MessageEvent) => {
       if (e.origin !== location.origin || e.source !== forgeFrame.current?.contentWindow || !e.data || typeof e.data.type !== "string") return;
-      if (e.data.type === "forge-ready") { forgeReady.current = true; sendToForge(); }
+      if (e.data.type === "forge-ready") { forgeReady.current = true; setForgeUp(true); sendToForge(); }
       if (e.data.type === "forge-picture" && typeof e.data.dataUrl === "string") {
         try {
           const b = await (await fetch(e.data.dataUrl)).blob();
@@ -414,12 +424,7 @@ export function Launch() {
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (forge !== "open") return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setForge("hidden"); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [forge]);
+  // Esc tucks the editor window away (ForgeWindow.tsx).
   const [cropping, setCropping] = useState(false);
   const makeSquare = async () => {
     if (!image || cropping) return;
@@ -601,7 +606,7 @@ export function Launch() {
                     <button type="button" onClick={() => choose(null)} className="text-muted underline-offset-2 hover:text-down hover:underline">Remove</button>
                   </div>
                 ) : <span className="text-center text-xs text-muted">Square, 500px+<br />PNG, JPG, GIF, WebP · up to 4 MB<br />or paste a picture here</span>}
-                <button type="button" onClick={openForge} title="Cut the subject out, add a glow, put it on one of 104 backgrounds, add text"
+                <button type="button" onClick={(e) => openForge(e.currentTarget)} onPointerEnter={warmForge} onFocus={warmForge} title="Cut the subject out, add a glow, put it on one of 104 backgrounds, add text"
                   className="mt-1 flex h-9 w-full items-center justify-center gap-2 rounded-control border border-rule-2 bg-paper-3 text-sm font-semibold text-ink transition-colors hover:border-muted hover:bg-paper-4">
                   <Icon.sliders className="size-4" />{image ? "Edit in the Forge" : "Make the art"}
                 </button>
@@ -800,16 +805,8 @@ export function Launch() {
       </div>
 
       {forge !== "closed" && (
-        <div className={cn("fixed inset-0 z-50 flex flex-col bg-paper", forge === "hidden" && "hidden")} role="dialog" aria-labelledby="forge-title">
-          <div className="flex h-11 shrink-0 items-center gap-3 border-b border-rule-2 px-4">
-            <span id="forge-title" className="text-sm font-semibold text-ink">The Forge</span>
-            <span className="truncate text-xs text-muted max-sm:hidden">Drop or paste a photo: the background comes off by itself. Pick a look or a Remilio background, add text, then “Use as coin picture”.</span>
-            <span className="grow" />
-            <a href="/forge/" target="_blank" rel="noopener" className="text-xs text-muted hover:text-ink">Open in its own tab</a>
-            <button type="button" onClick={() => setForge("hidden")} aria-label="Close the Forge" className="grid size-8 place-items-center rounded-full text-ink-2 hover:bg-white/[0.08] hover:text-ink"><Icon.close className="size-4" /></button>
-          </div>
-          <iframe ref={forgeFrame} src="/forge/?embed=1" aria-label="The Forge editor" className="min-h-0 w-full flex-1 border-0 bg-paper" allow="clipboard-write" />
-        </div>
+        <ForgeWindow shown={forge === "open"} onClose={() => setForge("hidden")} frameRef={forgeFrame} ready={forgeUp} origin={forgeFrom}
+          hint="Pick a background, add your photo, then Use as coin picture." />
       )}
       <Dialog open={asking} onOpenChange={setAsking} title={`Launch $${sym}?`}>
         <div className="flex items-center gap-3">

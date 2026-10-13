@@ -45,6 +45,7 @@ const MEMBER_READS = [
   // only, and what the /api docs promise an account. Following, labels and the owner's own list stay the owner's
   // (server.js answers a member with less on /api/wallets and /api/wallet/<address>).
   /^\/api\/wallets$/,
+  /^\/api\/devs$/,                 // Top devs: public at blixvip.com/devs too (worker/site/devs.js)
   new RegExp(`^/api/(wallet|wallet-page)/${MINT}$`),
   /^\/api\/banner$/,               // a coin's DexScreener banner for Discover's coin card (banner.js)
   new RegExp(`^/api/coin/${MINT}/(people|callouts|fomo)$`),

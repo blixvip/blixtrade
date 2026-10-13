@@ -13,7 +13,7 @@
   --dim2: oklch(50% 0 0);
   --sel: oklch(62% 0 0);         /* selected outline */
   --selbg: oklch(31.5% 0 0);     /* selected fill: paper-5 */
-  --rail: 58px;
+  --rail: 66px;
   --panelw: 300px;
   --dock: 228px;
   color-scheme: dark;
@@ -82,9 +82,9 @@ header {
   display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 0;
 }
 .tool {
-  width: 46px; padding: 7px 0 5px; border-radius: 4px; color: var(--dim2);
-  display: grid; justify-items: center; gap: 3px; font-size: 9px; font-weight: 500;
-  letter-spacing: .2px; text-transform: uppercase;
+  width: calc(var(--rail) - 8px); padding: 7px 0 5px; border-radius: 4px; color: var(--dim2);
+  display: grid; justify-items: center; gap: 3px; font-size: 8.5px; font-weight: 500;
+  letter-spacing: 0; text-transform: uppercase; white-space: nowrap;
 }
 .tool svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .tool:hover { color: var(--txt); background: var(--panel3); }
@@ -261,14 +261,17 @@ label.ck input { accent-color: #6d6d6d; }
 }
 #stage.paint #cursor { display: block; }
 
+/* The empty state: a card in the middle of the canvas, not a frame around it, so a background picked first shows. */
 #drop {
-  position: absolute; inset: 14px; border: 1px dashed #4a4a4a; border-radius: 6px;
-  display: grid; place-content: center; justify-items: center; gap: 9px; text-align: center;
-  color: var(--dim2); pointer-events: none;
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, calc(100% - 48px));
+  padding: 22px 22px 20px; border: 1px solid var(--line2); border-radius: 10px; background: color-mix(in oklch, var(--panel) 92%, transparent);
+  box-shadow: 0 18px 50px -20px #000c; backdrop-filter: blur(6px);
+  display: grid; justify-items: center; gap: 10px; text-align: center; line-height: 1.5;
+  color: var(--dim); pointer-events: none;
 }
-#drop.hot { border-color: #8a8a8a; background: #ffffff08; color: var(--dim); }
+#drop.hot { border-color: var(--sel); background: color-mix(in oklch, var(--panel2) 95%, transparent); }
 #drop.hide { display: none; }
-#drop .big { font-size: 14px; color: var(--txt); }
+#drop .big { font-size: 15px; font-weight: 600; color: var(--txt); }
 #drop kbd {
   background: var(--panel2); border: 1px solid var(--line2);
   border-radius: 3px; padding: 1px 4px; font: 500 11px ui-monospace, monospace;
@@ -379,3 +382,31 @@ label.ck input { accent-color: #6d6d6d; }
 .linkbtn:hover { color: var(--txt); text-decoration: underline; }
 .dragout { cursor: grab; user-select: none; }
 .dragout:active { cursor: grabbing; }
+
+/* ---- small windows (the Create page's editor window) ------------------------ */
+#body { position: relative; }
+#layersToggle { display: none; }
+#presetChips { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+@media (max-width: 1240px) {
+  :root { --panelw: 256px; --dock: 196px; }
+}
+@media (max-width: 1020px) {
+  #body { grid-template-columns: var(--rail) var(--panelw) 1fr; }
+  #layersToggle { display: inline-flex; }
+  #layers { position: absolute; right: 8px; top: 8px; bottom: 8px; width: 236px; z-index: 30; display: none;
+    border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 18px 44px -10px rgb(0 0 0 / .85); }
+  body.showLayers #layers { display: grid; }
+  #layersToggle[aria-pressed="true"] { background: var(--selbg); color: var(--txt); }
+}
+@media (max-width: 800px) {
+  :root { --panelw: 216px; --rail: 60px; }
+  .brand, #epBadge, .hsep { display: none; }
+  .dragout { display: none; }
+  #dims { display: none; }
+  .tool { font-size: 7.5px; }
+}
+header .btn { white-space: nowrap; }
+@media (max-width: 900px) {
+  #copyBtn, #dlBtn { display: none; }   /* both stay in the Export tab */
+  header .btn { padding-left: 10px; padding-right: 10px; }
+}

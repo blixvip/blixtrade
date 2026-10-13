@@ -25,6 +25,7 @@ import { useRole } from "@/lib/role";
 import { SLOW_MS, useNet, watchNet } from "@/lib/net";
 import { openTrackerWindow, useTracker, warmTracker } from "@/lib/wtrack";
 import { openTikTokWindow, useTikTokWindow } from "@/lib/tiktok-window";
+import { toggleQuickLaunch, useQuickLaunch } from "@/lib/quicklaunch";
 import { Hot } from "@/pages/Feed";
 
 const I = (d: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
@@ -239,7 +240,7 @@ const HOT_SOURCES: ("fomo" | "pump")[] = ["fomo", "pump"], NO_POSTS: never[] = [
 // screen"): it opens above its button with a short rise, is dragged by its top bar anywhere on the screen (kept
 // inside it, the place remembered), stays while pages change (a coin clicked opens with the panel still there),
 // and goes on its ×, on Escape, or on the button again.
-const FLOAT_W = 384, EDGE = 8, POS_KEY = "trending:pos";
+const FLOAT_W = 384, EDGE = 8, POS_KEY = "trending:pos", SIZE_KEY = "trending:size";
 function Trending() {
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -258,6 +259,19 @@ function Trending() {
 function Float({ title, anchor, onClose, children }: { title: string; anchor: RefObject<HTMLButtonElement | null>; onClose: () => void; children: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   const pos = useRef<{ x: number; y: number } | null>(null);
+  const sizing = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const resize = (w: number, h: number) => {
+    const el = box.current;
+    if (!el) return;
+    el.style.width = `${Math.min(innerWidth - EDGE * 2, Math.max(280, w))}px`;
+    el.style.height = `${Math.min(innerHeight - EDGE * 2, Math.max(220, h))}px`;
+    if (pos.current) move(pos.current.x, pos.current.y);
+  };
+  const saveSize = () => {
+    const el = box.current;
+    if (el) store.set(SIZE_KEY, { w: el.offsetWidth, h: el.offsetHeight });
+    if (pos.current) store.set(POS_KEY, pos.current);
+  };
   const keep = (x: number, y: number) => {
     const el = box.current, w = el?.offsetWidth || FLOAT_W, h = el?.offsetHeight || 600;
     return { x: Math.max(EDGE, Math.min(x, innerWidth - EDGE - w)), y: Math.max(EDGE, Math.min(y, innerHeight - EDGE - h)) };
@@ -267,11 +281,13 @@ function Float({ title, anchor, onClose, children }: { title: string; anchor: Re
   useEffect(() => {
     const el = box.current;
     if (!el) return;
+    const size = store.get<{ w: number; h: number } | null>(SIZE_KEY, null);
+    resize(size && Number.isFinite(size.w) ? size.w : FLOAT_W, size && Number.isFinite(size.h) ? size.h : el.offsetHeight);
     const saved = store.get<{ x: number; y: number } | null>(POS_KEY, null), r = anchor.current?.getBoundingClientRect();
     const start = saved ?? { x: r ? r.left : EDGE, y: r ? r.top - 6 - el.offsetHeight : innerHeight - EDGE - el.offsetHeight };
     move(start.x, start.y);
     el.animate([{ opacity: 0, transform: `translate3d(${Math.round(pos.current!.x)}px, ${Math.round(pos.current!.y + 14)}px, 0) scale(0.97)` }, { opacity: 1, transform: el.style.transform }], { duration: 220, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
-    const onResize = () => { if (pos.current) move(pos.current.x, pos.current.y); };
+    const onResize = () => resize(el.offsetWidth, el.offsetHeight);
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
     addEventListener("resize", onResize); document.addEventListener("keydown", esc);
     return () => { removeEventListener("resize", onResize); document.removeEventListener("keydown", esc); };
@@ -305,7 +321,7 @@ function Float({ title, anchor, onClose, children }: { title: string; anchor: Re
   };
   return createPortal(
     <div ref={box} role="dialog" aria-label={title} className="fixed top-0 left-0 z-50 flex max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-card border border-rule-2 bg-paper-2 shadow-raised will-change-transform" style={{ width: FLOAT_W }}>
-      <div onPointerDown={drag} className="flex h-9 shrink-0 cursor-grab items-center gap-2 border-b border-rule bg-paper-3/60 pr-1 pl-3 active:cursor-grabbing">
+      <div onPointerDown={drag} className="flex h-9 shrink-0 touch-none cursor-grab items-center gap-2 border-b border-rule bg-paper-3/60 pr-1 pl-3 active:cursor-grabbing">
         <span aria-hidden className="grid grid-cols-2 gap-[3px] text-muted"><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /><i className="size-[3px] rounded-full bg-current" /></span>
         <span className="flex items-center gap-1.5 text-sm font-semibold text-ink"><Ico.flame className="size-3.5 text-up" />{title}</span>
         <span className="ml-auto text-2xs text-muted">drag to move</span>
@@ -314,6 +330,19 @@ function Float({ title, anchor, onClose, children }: { title: string; anchor: Re
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin]">{children}</div>
+      <div className="flex h-6 shrink-0 items-center justify-end border-t border-rule bg-paper-3/60">
+        <button type="button" aria-label="Resize Trending panel" title="Drag to resize, use arrow keys, or double-click to reset"
+          className="grid h-6 w-7 touch-none cursor-nwse-resize place-items-center text-muted hover:bg-paper-4 hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-ink"
+          onPointerDown={e => { if (e.button !== 0 || !box.current) return; e.preventDefault(); sizing.current = { x: e.clientX, y: e.clientY, w: box.current.offsetWidth, h: box.current.offsetHeight }; e.currentTarget.setPointerCapture(e.pointerId); }}
+          onPointerMove={e => { const s = sizing.current; if (s) resize(s.w + e.clientX - s.x, s.h + e.clientY - s.y); }}
+          onPointerUp={e => { if (!sizing.current) return; sizing.current = null; saveSize(); e.currentTarget.releasePointerCapture(e.pointerId); }}
+          onPointerCancel={() => { sizing.current = null; saveSize(); }}
+          onLostPointerCapture={() => { if (sizing.current) { sizing.current = null; saveSize(); } }}
+          onDoubleClick={() => { resize(FLOAT_W, 600); saveSize(); }}
+          onKeyDown={e => { if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) || !box.current) return; e.preventDefault(); const step = e.shiftKey ? 40 : 10; resize(box.current.offsetWidth + (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0), box.current.offsetHeight + (e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0)); saveSize(); }}>
+          <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden><path d="m5 13 8-8m-3 8 3-3" /></svg>
+        </button>
+      </div>
     </div>, document.body);
 }
 
@@ -383,6 +412,7 @@ export function StatusBar() {
 
 function DesktopStatusBar() {
   const tiktokOpen = useTikTokWindow(s => s.open);
+  const launchOpen = useQuickLaunch((s) => s.open);
   const trackerOpen = useTracker(s => s.float);
   const tradesPerSec = usePulse((s) => s.live.tradesPerSec);
   const launchesPerMin = usePulse((s) => s.live.launchesPerMin);
@@ -397,10 +427,18 @@ function DesktopStatusBar() {
       <Connection />
       {owner && <Tip tip="Settings"><a href="#/settings" aria-label="Settings" className={item}><Icon.settings className="size-3.5" /></a></Tip>}
       <span className="my-2 w-px bg-rule" />
+      {/* Quick launch (components/QuickLaunch.tsx): put a coin on pump.fun from any page. */}
+      <Tip tip="Launch a coin from here, on any page">
+        <button type="button" aria-label="Quick launch" aria-expanded={launchOpen} aria-haspopup="dialog" onClick={toggleQuickLaunch}
+          className={cn(item, "font-semibold", launchOpen ? "bg-up/15 text-up" : "text-up hover:bg-up/10")}>
+          <Icon.launch className="size-3.5" /><span className="max-xl:sr-only">Launch</span>
+        </button>
+      </Tip>
+      <span className="my-2 w-px bg-rule" />
       <Watchlist />
       <Tip tip="Open your draggable wallet tracker"><button type="button" aria-label="Wallets" aria-expanded={trackerOpen} aria-haspopup="dialog" onPointerEnter={warmTracker} onFocus={warmTracker} onClick={openTrackerWindow} className={cn(item, trackerOpen && "bg-paper-4 text-ink")}><Icon.wallets className="size-3.5" /><span className="max-xl:sr-only">Wallets</span></button></Tip>
       <Pnl />
-      <Tip tip="Open your floating TikTok panel"><button type="button" aria-label="TikTok" aria-expanded={tiktokOpen} aria-haspopup="dialog" onClick={openTikTokWindow} className={cn(item, tiktokOpen && "bg-paper-4 text-ink")}><span aria-hidden>♪</span><span className="max-xl:sr-only">TikTok</span></button></Tip>
+      <Tip tip="Doom scroll in your floating TikTok panel"><button type="button" aria-label="Doom scroll" aria-expanded={tiktokOpen} aria-haspopup="dialog" onClick={openTikTokWindow} className={cn(item, "shrink-0 whitespace-nowrap", tiktokOpen && "bg-paper-4 text-ink")}><span aria-hidden>♪</span><span>Doom scroll</span></button></Tip>
       <Feed />
       {go("", "Pulse", <Icon.pulse className="size-3.5" />, "Every new pump.fun coin, live")}
       {go("coins", "Discover", <Ico.trend className="size-3.5" />, "The most traded coins right now")}

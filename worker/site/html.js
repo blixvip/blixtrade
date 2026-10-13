@@ -23,6 +23,7 @@ export const faq = (items) => `<div class="faq">${items.map(([q, a]) => `<sectio
 const plain = (html) => html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
 
 export const NAV = [
+  ["/devs", "Top devs"],
   ["/guides", "Guides"],
   ["/compare", "Compare"],
   ["/api", "API"],

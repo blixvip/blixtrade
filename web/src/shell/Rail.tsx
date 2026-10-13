@@ -357,7 +357,7 @@ export function BottomBar({ route }: { route: string }) {
         </a>
       ))}
       <ReplayLink />
-      <button onClick={openTikTokWindow} aria-label="TikTok" aria-haspopup="dialog" className="flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 py-2 text-2xs text-muted"><span aria-hidden className="text-lg leading-4.5">♪</span>TikTok</button>
+      <button onClick={openTikTokWindow} aria-label="Doom scroll" aria-haspopup="dialog" className="flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 whitespace-nowrap py-2 text-2xs text-muted"><span aria-hidden className="text-lg leading-4.5">♪</span>Doom scroll</button>
     </nav>
   );
 }

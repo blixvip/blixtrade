@@ -35,7 +35,7 @@ const doc = D.newDoc();
 const hist = new D.History(doc);
 const view = { zoom: 1, ox: 0, oy: 0, auto: true };
 const S = {
-  tool: 'looks',
+  tool: 'bg',   // opens on the backgrounds (the user, 2026-10-13: "it should start on the backgrounds page")
   look: null,
   paint: null,              // 'erase' | 'restore' | null
   brush: { radius: 60, hardness: 0.65 },
@@ -97,12 +97,20 @@ function remilioGrid(list, id = 'remGrid') {
 const remilioSample = () => S.remSample || (S.remSample = [...REMILIO].sort(() => Math.random() - 0.5).slice(0, 12));
 function remilioSec() {
   const search = el('input', {
-    class: 'remSearch', type: 'search', placeholder: `Search ${REMILIO.length} backgrounds…`, value: S.remQ || '', spellcheck: 'false',
+    class: 'remSearch', type: 'search', placeholder: "Search backgrounds", value: S.remQ || '', spellcheck: 'false',
     oninput: (e) => { S.remQ = e.target.value; const g = $('#remGrid'); if (g) g.replaceWith(remilioGrid(remilioList(S.remQ))); },
   });
   return sec('Remilio backgrounds',
     el('div', { class: 'row gap', style: 'margin-bottom:8px' }, search, el('button', { class: 'chip', onclick: shuffleRemilio, title: 'A random one' }, 'Shuffle')),
     remilioGrid(remilioList(S.remQ)));
+}
+
+// One button for taking the photo's background off, used by the Looks and Backgrounds tabs.
+function removeBgButton(l) {
+  return el('button', {
+    class: 'btn pri wide',
+    onclick: async () => { doc.selected = l.id; await cutout(S.cut.model); syncPanel(); },
+  }, 'Remove background');
 }
 
 const stage = $('#stage'), viewCv = $('#view'), vctx = viewCv.getContext('2d');
@@ -142,6 +150,7 @@ function resizeView() {
   viewCv._h = r.height;
   if (view.auto) fitView();
   invalidate();
+  const zl = document.getElementById('zoomLabel'); if (zl) zl.textContent = Math.round(view.zoom * 100) + '%';
 }
 
 function fitView() {
@@ -280,7 +289,9 @@ async function toCanvas(blob) {
 
 // `at`: where on the picture it lands (document coordinates: a drop point), else the middle. A picture added on top
 // of others comes in at half the frame, so it does not cover the work under it.
-async function addPhoto(blob, { name = 'Photo', autoCut = true, at = null } = {}) {
+// The photo goes in as it is: the background stays until Remove background is pressed (the user, 2026-10-13: "it
+// shouldn't automatically remove the background"). `autoCut` is kept in the signature for old callers and ignored.
+async function addPhoto(blob, { name = 'Photo', autoCut = false, at = null } = {}) {
   try {
     const c = await toCanvas(blob);
     const first = doc.layers.filter(x => x.kind === 'image').length === 0;
@@ -291,19 +302,7 @@ async function addPhoto(blob, { name = 'Photo', autoCut = true, at = null } = {}
     $('#drop').classList.add('hide');
     hist.push('add photo');
     paint();
-    // Land on a finished image, not on a to-do list: cut the subject out and
-    // put the signature look on it. Every bit of it is one click to change.
-    if (autoCut && first) {
-      await cutout(S.cut.model);
-      const live = D.getSelected(doc);
-      if (live && live.kind === 'image' && live.cut) {
-        applyLook(doc, live, LOOKS[0]);
-        S.look = LOOKS[0].id;
-        hist.push('look');
-      }
-      setTool('looks');
-      paint();
-    }
+    syncPanel();
   } catch (e) {
     toast('Could not read that image', true);
   }
@@ -885,6 +884,12 @@ async function saveToDisk() {
 }
 
 $('#copyBtn').onclick = copyOut;
+// In a small window (the Create page's editor window) the layers dock folds away behind this button.
+$('#layersToggle').addEventListener('click', () => {
+  const on = !document.body.classList.contains('showLayers');
+  document.body.classList.toggle('showLayers', on);
+  $('#layersToggle').setAttribute('aria-pressed', String(on));
+});
 // Drag out: the finished picture dragged onto the desktop (Chrome saves it as a file), into a chat or any page
 // that takes pictures. Rendered the moment the drag starts.
 $('#dragOut').addEventListener('dragstart', (e) => {
@@ -1006,15 +1011,21 @@ const PANELS = {
       return [sec('Start here',
         el('button', { class: 'btn pri wide', onclick: () => $('#file').click() }, 'Open a photo'),
         el('div', { class: 'hint', style: 'margin-top:9px' },
-          'Or drop one on the canvas, or paste with Ctrl+V. The background comes off by itself and you get a wall of finished looks to pick from.'))];
+          'Or drop one on the canvas, or paste it with Ctrl+V. Then remove its background here to try the looks on it.'))];
+    }
+    // A look is a glow around a cut-out subject: until the background is off there is nothing to preview it on.
+    if (!l.cut) {
+      return [sec('Looks',
+        el('div', { class: 'hint', style: 'margin-bottom:10px' }, 'Looks put a glow around the subject, so the background has to come off first. Your photo stays as it is until you press this.'),
+        removeBgButton(l))];
     }
     const aspect = doc.w / doc.h;
     const grid = el('div', { id: 'lookGrid' }, ...LOOKS.map(k => {
-      const tw = 104, th = Math.round(104 / aspect);
+      const tw = 168, th = Math.round(168 / aspect);   // drawn at about the size shown, so they are sharp
       // A look tile only depends on the subject's pixels and the frame shape —
       // not on where the layer currently sits, which is what used to make every
       // drag redraw all fifteen.
-      const c = tile(`look|${k.id}|${l.id}|${l.pixRev || 0}|${aspect.toFixed(3)}`, tw, th,
+      const c = tile(`look|${k.id}|${l.id}|${l.pixRev || 0}|${l.cut ? 1 : 0}|${aspect.toFixed(3)}`, tw, th,
         (cv) => drawLookThumb(cv.getContext('2d'), tw, l, k, aspect));
       return el('button', {
         class: 'lookc', title: k.name, 'aria-pressed': S.look === k.id,
@@ -1116,6 +1127,18 @@ const PANELS = {
   },
 
   bg() {
+    const ph = imageLayer();
+    const photoSec = ph && ph.kind === 'image'
+      ? sec('Your photo', ph.cut
+        ? el('div', { class: 'row gap' },
+          el('span', { class: 'hint', style: 'flex:1' }, 'Background removed.'),
+          el('button', { class: 'chip', onclick: () => { resetMask(ph); hist.push('reset mask'); paint(); } }, 'Put it back'))
+        : el('div', {},
+          el('div', { class: 'hint', style: 'margin-bottom:8px' }, 'Pick a background below. To put your subject on it, remove the photo\'s own background.'),
+          removeBgButton(ph)))
+      : sec('Your photo',
+        el('button', { class: 'btn pri wide', onclick: () => $('#file').click() }, 'Open a photo'),
+        el('div', { class: 'hint', style: 'margin-top:8px' }, 'Or drop or paste one on the canvas. Pick a background any time.'));
     const pals = el('div', { class: 'palrow' },
       el('button', {
         class: 'chip', 'aria-pressed': !S.bgPal,
@@ -1139,6 +1162,8 @@ const PANELS = {
     runThumbs();
 
     return [
+      photoSec,
+      remilioSec(),
       sec('Backdrop',
         el('div', { class: 'g3' },
           el('button', {
@@ -1166,7 +1191,6 @@ const PANELS = {
                 onclick: () => { doc.bg.blur = 0; doc.bg.pixel = 0; doc.bg.dim = 0; hist.push('bg reset'); paint(); },
               }, 'Reset'),
               el('span', { class: 'hint' }, 'Pixelate runs first, so blur softens the blocks.')))),
-      remilioSec(),
       sec('Presets', pals, el('div', { style: 'height:8px' }), grid,
         el('div', { class: 'hint', style: 'margin-top:8px' }, `${list.length} procedural backdrops — drawn at full export resolution, never upscaled.`)),
     ];
@@ -1396,7 +1420,8 @@ function tile(key, w, h, draw) {
   c = el('canvas', { width: w, height: h });
   tileCache.set(key, c);
   if (tileCache.size > 90) tileCache.delete(tileCache.keys().next().value);
-  thumbQueue.push(() => { try { draw(c); } catch { /* a preview is never worth a crash */ } });
+  // A preview that fails is dropped from the cache, so the next time the panel is drawn it is tried again.
+  thumbQueue.push(() => { try { draw(c); } catch { tileCache.delete(key); } });
   return c;
 }
 
@@ -1626,15 +1651,15 @@ function renderLayerProps() {
     }, ...D.BLEND_MODES.map(([v, n]) => el('option', { value: v, selected: l.blend === v }, n))),
     slider('Opacity', 0, 100, 1, () => l.opacity * 100, (v) => { l.opacity = v / 100; invalidate(); }, Math.round),
     el('div', { class: 'g4' },
-      el('button', { class: 'chip', title: 'Bring to front', onclick: () => { D.arrange(doc, l.id, Infinity) && hist.push('arrange'); paint(); } }, '⤒'),
-      el('button', { class: 'chip', title: 'Bring forward (Ctrl+])', onclick: () => { D.arrange(doc, l.id, 1) && hist.push('arrange'); paint(); } }, '↑'),
-      el('button', { class: 'chip', title: 'Send backward (Ctrl+[)', onclick: () => { D.arrange(doc, l.id, -1) && hist.push('arrange'); paint(); } }, '↓'),
-      el('button', { class: 'chip', title: 'Send to back', onclick: () => { D.arrange(doc, l.id, -Infinity) && hist.push('arrange'); paint(); } }, '⤓')),
+      el('button', { class: 'chip', title: 'Bring to front', onclick: () => { D.arrange(doc, l.id, Infinity) && hist.push('arrange'); paint(); } }, 'Front'),
+      el('button', { class: 'chip', title: 'Bring forward (Ctrl+])', onclick: () => { D.arrange(doc, l.id, 1) && hist.push('arrange'); paint(); } }, 'Up'),
+      el('button', { class: 'chip', title: 'Send backward (Ctrl+[)', onclick: () => { D.arrange(doc, l.id, -1) && hist.push('arrange'); paint(); } }, 'Down'),
+      el('button', { class: 'chip', title: 'Send to back', onclick: () => { D.arrange(doc, l.id, -Infinity) && hist.push('arrange'); paint(); } }, 'Back')),
     el('div', { class: 'g4' },
-      el('button', { class: 'chip', 'aria-pressed': l.locked, title: 'Lock position', onclick: () => { l.locked = !l.locked; hist.push('lock'); renderLayerBar(); } }, '🔒'),
-      el('button', { class: 'chip', title: 'Centre on canvas', onclick: () => { centerLayer(l); renderLayerBar(); } }, '⊕'),
-      el('button', { class: 'chip', title: 'Duplicate (Ctrl+D)', onclick: duplicate }, '⧉'),
-      el('button', { class: 'chip', title: 'Delete (Del)', onclick: () => { D.removeLayer(doc, l.id); hist.push('delete'); paint(); } }, '🗑')),
+      el('button', { class: 'chip', 'aria-pressed': l.locked, title: 'Lock position', onclick: () => { l.locked = !l.locked; hist.push('lock'); renderLayerBar(); } }, l.locked ? 'Locked' : 'Lock'),
+      el('button', { class: 'chip', title: 'Centre on canvas', onclick: () => { centerLayer(l); renderLayerBar(); } }, 'Centre'),
+      el('button', { class: 'chip', title: 'Duplicate (Ctrl+D)', onclick: duplicate }, 'Copy'),
+      el('button', { class: 'chip', title: 'Delete (Del)', onclick: () => { D.removeLayer(doc, l.id); hist.push('delete'); paint(); } }, 'Delete')),
   );
 }
 

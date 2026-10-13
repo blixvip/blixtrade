@@ -21,7 +21,7 @@
 //
 // The radar is asked for plain JSON: compressing for a browser on this PC is wasted work on the radar's thread.
 // A browser coming in over the tunnel gets Brotli or gzip from here, done off the main thread.
-import http from "node:http";
+import { createRadarReader } from './radar-read.js';
 import zlib from "node:zlib";
 
 const MINT = "[1-9A-HJ-NP-Za-km-z]{32,44}";
@@ -70,25 +70,7 @@ export const cacheStats = { asks: 0, fromRadar: 0, fresh: 0, keptSent: 0, keptWh
 // its way when the write landed may still describe the moment before it.
 export function wrote() { writes++; }
 
-const agent = new http.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 16 });
-function ask(port, url) {
-  return new Promise((resolve, reject) => {
-    const go = (again) => {
-      const out = http.request({ host: "127.0.0.1", port, path: url, method: "GET", agent,
-        headers: { host: `localhost:${port}`, accept: "application/json", "accept-encoding": "identity" } }, (r) => {
-        const parts = []; let n = 0;
-        r.on("data", (c) => { n += c.length; if (n > MAX_ONE * 2) return out.destroy(new Error("answer too large")); parts.push(c); });
-        r.on("end", () => resolve({ status: r.statusCode || 502, type: String(r.headers["content-type"] || "application/json"), body: Buffer.concat(parts) }));
-        r.on("error", reject);
-      });
-      out.setTimeout(30_000, () => out.destroy(Object.assign(new Error("the radar took too long"), { code: "ETIMEDOUT" })));
-      // A kept-alive connection the radar closed a moment ago fails the first write: ask once more on a new one.
-      out.on("error", (e) => (!again && out.reusedSocket && e.code === "ECONNRESET" ? go(true) : reject(e)));
-      out.end();
-    };
-    go(false);
-  });
-}
+const ask = createRadarReader({ maxBytes: MAX_ONE * 2 });
 
 function drop(e) { if (kept.get(e.url) === e) { kept.delete(e.url); bytes -= e.body?.length || 0; } }
 function trim() {
@@ -171,7 +153,7 @@ function fail(res, err) {
   if (res.destroyed || res.writableEnded) return;
   const down = err?.down || err?.code === "ECONNREFUSED";
   if (err?.got) { res.writeHead(err.got.status, { "content-type": err.got.type, "cache-control": "no-store" }); return res.end(err.got.body); }
-  res.writeHead(down ? 503 : 504, { "content-type": "application/json", "cache-control": "no-store" });
+  res.writeHead(down || err?.overloaded ? 503 : 504, { "content-type": "application/json", "cache-control": "no-store", "retry-after": "1" });
   res.end(JSON.stringify({ error: down ? "Blix is restarting. Back in a few seconds." : "Blix is busy. Trying again." }));
 }
 
@@ -191,7 +173,7 @@ export async function answer(req, res, port, cls, local, shape) {
   // A page that is just opening (or about to be) says it will take a copy up to so old at once (x-blix-kept, ms,
   // two minutes at most): it draws with it and asks again straight away. The radar is asked now, for that.
   const takes = Math.min(120_000, Number(req.headers["x-blix-kept"]) || 0);
-  if (has && !behind && age <= takes) { refresh(e, port); cacheStats.keptSent++; return send(req, res, e, local, Math.max(1, age), shape); }
+  if (has && !behind && age <= takes) { refresh(e, port).catch(() => {}); cacheStats.keptSent++; return send(req, res, e, local, Math.max(1, age), shape); }
   if (!has || behind || age >= MAX_KEPT_MS) {
     // Nothing to fall back on, or the reader just changed something: the radar's answer, however long it takes.
     cacheStats.waited++;

@@ -3,6 +3,7 @@
 // Access controls stay enforced here and on the server. Public reads may use
 // the edge cache; authenticated account data is never shared through that cache.
 import { PAGES, render } from "./site/pages.js";
+import { devsPage } from "./site/devs.js";
 import { PAGE_ALIASES } from "./site/clusters.js";
 import { SCRIPT, layout, code, esc, NAV } from "./site/html.js";
 import { ROBOTS, SITEMAP, SITEMAP_URLS, LLMS, INDEXNOW_KEY, PUBLIC_PATHS } from "./site/seo.js";
@@ -213,6 +214,9 @@ async function handle(req, env, ctx, prefix) {
       const email = await session(req, env).catch(() => null);
       if (email) return tradeApiAccess(req, email);
     }
+    // blixvip.com/devs: the Top devs board, public (site/devs.js).
+    const devs = await devsPage(req, env, url);
+    if (devs) return devs;
     const page = await site(req, env, url);
     if (page) return page;
     // blixvip.com/@<handle>: a member's page and invite link (site/handles.js). Names the site uses are never handles.
