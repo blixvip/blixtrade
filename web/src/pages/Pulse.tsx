@@ -13,7 +13,7 @@ import { PulseRow } from "./PulseRow";
 import { CTL, PulseSettings } from "./PulseSettings";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
-import { hideCoins, showHidden, unhideAll, useHidden } from "@/lib/hidden";
+import { clearColumn, clearedOut, showHidden, unhideAll, useHidden, type HiddenCol } from "@/lib/hidden";
 import { countFilters, FilterButton, fitsColumn, PulseFilters, resetColumn, useColFilters } from "./pulse/ColumnFilters";
 
 type Show = "all" | "noslop" | "rated" | "buy";
@@ -93,9 +93,12 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   const cf = useColFilters((s) => s.f[col as "new"] || {});
   const { mints: hiddenList, showing } = useHidden();
   const hidden = new Set(hiddenList);
+  // A coin that was already around when this column was last cleared stays out of it (lib/hidden.ts clearedOut):
+  // its creation for New Pairs and Final Stretch, its bonding for Migrated.
+  const out = (c: Coin) => clearedOut(cleared, col as HiddenCol, col === "migrated" && c.age != null ? Date.now() - c.age : c.born);
   // Normal view: hidden coins drop out. Hidden view: only the hidden ones, filters off, so each can be brought back.
-  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf, col as "new"))))));
-  const hideAll = () => { if (!mints.length) return; hideCoins(mints); toast(`${mints.length} coin${mints.length === 1 ? "" : "s"} hidden from ${title}. The eye button up top brings them back.`); };
+  const mints = usePulse(useShallow((s) => s.cols[col].filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && !out(s.coins[m]) && passes(s.coins[m], show, q, prefs) && (Boolean(q) || fitsColumn(s.coins[m], cf, col as "new"))))));
+  const hideAll = () => { if (!mints.length) return; clearColumn(col as HiddenCol, mints); toast(`${title} cleared: ${mints.length} coin${mints.length === 1 ? "" : "s"} hidden, and nothing older than now will show here again. The eye button up top brings them back.`); };
   // Rows show from the radar's board, or from the one this browser kept (lib/pulse.ts readSnapshot) until it answers.
   const loaded = usePulse((s) => s.loaded || s.restored);
   const scroller = useRef<HTMLDivElement>(null);
@@ -109,7 +112,7 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   if (paused && !frozen.current) frozen.current = mints;
   if (!paused) frozen.current = null;
   // The frozen rows still drop a coin the radar forgot or one hidden meanwhile (selector, so price ticks do not re-render the column).
-  const held = usePulse(useShallow((s) => (frozen.current ? frozen.current.filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m))) : NONE)));
+  const held = usePulse(useShallow((s) => (frozen.current ? frozen.current.filter((m) => s.coins[m] && (showing ? hidden.has(m) : !hidden.has(m) && !out(s.coins[m]))) : NONE)));
   const list = paused ? held : mints;
   const waiting = paused ? mints.filter((m) => !frozen.current!.includes(m)).length : 0;
   // Rows that just arrived fade and slide in; ones already seen (or mounted by scrolling) do not.
