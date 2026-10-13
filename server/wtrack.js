@@ -23,7 +23,8 @@
 import { db, logEvent } from "./db.js";
 import * as sol from "./solana.js";
 import * as wallets from "./wallets.js";
-import { onLiveTrade, onPoolLedger, feed as liveFeed } from "./livetrades.js";
+import { onLiveTrade, onPoolLedger, feed as liveFeed, live as liveStats } from "./livetrades.js";
+import * as images from "./images.js";
 import { handleOf } from "./fomo.js";
 import { pumpProfile } from "./walletpage.js";
 import { nameOf as coinName } from "./coinindex.js";
@@ -187,7 +188,13 @@ function backfillPics() {
 }
 
 // ---------- trades ----------
-const mcOf = (mint) => db.prepare("SELECT mcap FROM tokens WHERE mint = ?").get(mint)?.mcap ?? null;
+// The coin's cap for a chain-read trade: the indexed one, else the live feed's last reading of the curve or pool.
+const mcOf = (mint) => {
+  const kept = db.prepare("SELECT mcap FROM tokens WHERE mint = ?").get(mint)?.mcap;
+  if (kept > 0) return kept;
+  const s = liveStats.get(mint);
+  return s && s.mc > 0 ? s.mc * (liveFeed.solUsd || 150) * ((s.supply > 0 ? s.supply : 1e9) / 1e9) : null;
+};
 // One trade by a tracked wallet, from whichever path saw it first (the live feeds or the chain reader): kept once
 // (wallet, sig, mint), into wallets.js's ledger too when the live feed got there first, and pushed to every member
 // tracking the wallet.
@@ -195,8 +202,26 @@ function record({ wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src })
   const r = db.prepare("INSERT OR IGNORE INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src);
   if (!r.changes) return;
   if (src !== "chain" && !sig.startsWith("slot:")) {
+  // The same trade seen twice: the live feed hears it first (sometimes without its signature, under a slot key),
+  // the chain reader a second later with the signature. Same wallet, coin and side within six seconds for about
+  // the same SOL, one of them slot-keyed, is one trade: the first row keeps the feed, and gets the signature and
+  // the cap it lacked.
+  // (The user, 2026-10-12: "the numbers should be accurate".)
+  if (src !== "history") {
+    const twin = db.prepare("SELECT id, sig, sol, mc_usd FROM wt_feed WHERE wallet = ? AND mint = ? AND side = ? AND src != 'history' AND ABS(t - ?) <= 6000 ORDER BY ABS(t - ?) LIMIT 1").get(wallet, mint, side, t, t);
+    // Two real signatures are two trades (a bot buying the same size twice): only a slot-keyed row can be the twin.
+    if (twin && twin.sig !== sig && (twin.sig.startsWith("slot:") || sig.startsWith("slot:")) && (solAmt == null || twin.sol == null || Math.abs(twin.sol - solAmt) <= Math.max(0.002, 0.03 * Math.max(twin.sol, solAmt)))) {
+      try {
+        if (twin.sig.startsWith("slot:") && !sig.startsWith("slot:")) db.prepare("UPDATE wt_feed SET sig = ?, mc_usd = COALESCE(mc_usd, ?) WHERE id = ?").run(sig, mcUsd, twin.id);
+        else if (twin.mc_usd == null && mcUsd > 0) db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?").run(mcUsd, twin.id);
+      } catch {}
+      return;
+    }
+  }
     try {
       const w = db.prepare("INSERT OR IGNORE INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t, payer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(sig, wallet, mint, side, tokens, solAmt, usd, t);
+  // The coin's picture, fetched now if the radar has none yet (a coin minutes old): the row shows it on arrival.
+  if (src !== "history") { try { images.eager(mint); } catch {} }
       if (w.changes) db.prepare("UPDATE wallets SET last_trade = MAX(COALESCE(last_trade, 0), ?) WHERE address = ?").run(t, wallet);
     } catch {}
   }
