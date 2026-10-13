@@ -475,6 +475,19 @@ export function start(emitFn) {
   const sweep = () => { if (tracked.size) confirmSweep().catch(() => {}); };
   timers.push(setInterval(sweep, 10_000));
   for (const t of timers) t.unref?.();
+  // Rows kept before caps came from the fill: a week's worth get theirs once (whole-token reading, believable
+  // range), once the SOL price is known: done on the start-up placeholder they came out 46% high (2026-10-13).
+  const fixCaps = (tries = 0) => {
+    if (!liveFeed.solKnown) { if (tries < 20) { const t = setTimeout(() => fixCaps(tries + 1), 15_000); t.unref?.(); } return; }
+    try {
+      const upd = db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?");
+      for (const r of db.prepare("SELECT id, mint, sol, tokens, mc_usd FROM wt_feed WHERE t > ? AND sol > 0 AND tokens > 0 AND src != 'history'").all(now() - FEED_KEEP_DAYS * 86400_000)) {
+        const c = capFromFill(r.sol, r.tokens, liveStats.get(r.mint)?.supply, liveFeed.solUsd, r.mc_usd);
+        if (c && (r.mc_usd == null || Math.abs(Math.log(c / r.mc_usd)) > 0.03)) upd.run(c, r.id);
+      }
+    } catch (e) { logEvent("error", `wallet tracker caps: ${e.message}`); }
+  };
+  { const t = setTimeout(() => fixCaps(), 20_000); t.unref?.(); }
   // Rows kept before caps came from the fill: a week's worth get theirs once (whole-token reading, believable range).
   try {
     const upd = db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?");
