@@ -83,6 +83,7 @@ const cleanName = (s) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, 40
 const cleanEmoji = (s) => { const v = String(s ?? "").trim(); return v && [...v].length <= 2 ? v.slice(0, 8) : null; };
 const cleanColor = (s) => (COLORS.includes(String(s || "")) ? String(s) : null);
 const cleanGrp = (g) => (GROUPS.includes(Number(g)) ? Number(g) : 1);
+const cleanPic = (s) => { const v = String(s ?? "").trim(); return /^https:\/\/\S{8,300}$/.test(v) ? v : null; };
 const row = (who, address) => db.prepare("SELECT * FROM wt_wallets WHERE who = ? AND address = ?").get(who, address);
 
 export function list(who) {
@@ -104,8 +105,6 @@ export function add(who, { address, name, emoji, color, grp, pic } = {}) {
     db.prepare("INSERT INTO wt_wallets (who, address, name, emoji, color, grp, added, pic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(who, address, cleanName(name), cleanEmoji(emoji), cleanColor(color), cleanGrp(grp), now(), cleanPic(pic));
     reload(); if (cleanName(name) && !cleanPic(pic)) autoName(who, address);   // a named wallet still gets its picture
     // The shared chain reader follows it from now on (its stream and poll); what it already read shows at once.
-    try { wallets.addWallet(address, "", "tracker"); wallets.resyncFast(); } catch {}
-    seedHistory(address);
     if (!cleanName(name)) autoName(who, address);
   }
   return { ...row(who, address), name: row(who, address).name || short(address) };
@@ -162,26 +161,26 @@ export function importText(who, text) {
 
 export const exportList = (who) => db.prepare("SELECT address trackedWalletAddress, name, emoji, color, grp FROM wt_wallets WHERE who = ? ORDER BY added").all(who).map((r) => ({ ...r, groups: [`P${r.grp || 1}`] }));
 
+// The name and the picture, from its Fomo handle (name) and its pump.fun profile (name and picture), filled in
+// only where the member left them blank.
 async function autoName(who, address) {
   try {
     let name = handleOf(address);
-// The name and the picture, from its Fomo handle (name) and its pump.fun profile (name and picture), filled in
-// only where the member left them blank.
     const p = await pumpProfile(address);
     if (!name) name = p?.name || null;
     if (name && !row(who, address)?.name) db.prepare("UPDATE wt_wallets SET name = ? WHERE who = ? AND address = ? AND name IS NULL").run(cleanName(name), who, address);
-  } catch {}
-}
-
     const pic = cleanPic(p?.pic);
     if (pic) db.prepare("UPDATE wt_wallets SET pic = ? WHERE address = ? AND pic IS NULL").run(pic, address);
-// What the chain reader already knows of the wallet (the owner followed it, or another member did): into the feed.
-function seedHistory(address) {
+  } catch {}
+}
 // Wallets tracked before pictures were kept: one profile read each, spaced out, after a start.
 function backfillPics() {
   const rows = db.prepare("SELECT DISTINCT address FROM wt_wallets WHERE pic IS NULL LIMIT 100").all();
   rows.forEach((r, i) => { const t = setTimeout(() => autoName("", r.address), 3000 + i * 1500); t.unref?.(); });
 }
+
+// What the chain reader already knows of the wallet (the owner followed it, or another member did): into the feed.
+function seedHistory(address) {
   const rows = db.prepare("SELECT sig, mint, side, tokens, sol, usd, t FROM wallet_trades WHERE wallet = ? ORDER BY t DESC LIMIT 60").all(address);
   const ins = db.prepare("INSERT OR IGNORE INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'history')");
   for (const r of rows) ins.run(address, r.sig, r.mint, r.side, r.sol, r.usd, r.tokens, null, r.t);
@@ -199,9 +198,6 @@ const mcOf = (mint) => {
 // (wallet, sig, mint), into wallets.js's ledger too when the live feed got there first, and pushed to every member
 // tracking the wallet.
 function record({ wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src }) {
-  const r = db.prepare("INSERT OR IGNORE INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src);
-  if (!r.changes) return;
-  if (src !== "chain" && !sig.startsWith("slot:")) {
   // The same trade seen twice: the live feed hears it first (sometimes without its signature, under a slot key),
   // the chain reader a second later with the signature. Same wallet, coin and side within six seconds for about
   // the same SOL, one of them slot-keyed, is one trade: the first row keeps the feed, and gets the signature and
@@ -218,10 +214,13 @@ function record({ wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src })
       return;
     }
   }
-    try {
-      const w = db.prepare("INSERT OR IGNORE INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t, payer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(sig, wallet, mint, side, tokens, solAmt, usd, t);
+  const r = db.prepare("INSERT OR IGNORE INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src);
+  if (!r.changes) return;
   // The coin's picture, fetched now if the radar has none yet (a coin minutes old): the row shows it on arrival.
   if (src !== "history") { try { images.eager(mint); } catch {} }
+  if (src !== "chain" && !sig.startsWith("slot:")) {
+    try {
+      const w = db.prepare("INSERT OR IGNORE INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t, payer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(sig, wallet, mint, side, tokens, solAmt, usd, t);
       if (w.changes) db.prepare("UPDATE wallets SET last_trade = MAX(COALESCE(last_trade, 0), ?) WHERE address = ?").run(t, wallet);
     } catch {}
   }
