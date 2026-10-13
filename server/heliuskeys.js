@@ -61,6 +61,16 @@ export const dayUsed = url => creditsOf(st(url)) + (st(url).budget?.status().res
 export const monthUsed = url => { const s = st(url); return s.monthPct != null && s.monthPct >= 97; };
 export const keyFree = url => Boolean(url) && !dayUsed(url) && !monthUsed(url) && st(url).coolingUntil <= Date.now();
 export const activeUrl = () => keyUrls().find(keyFree) || '';
+// The open charts' price streams (chartstream.js: the trade, side and fast sockets) are measured by what price itself
+// has spent against the allowance earned so far, not by everything spent: background metric streams overspent the
+// early-day allowance and shut the charts' streams for hours, leaving open charts on polls 5-15 s behind (2026-10-12,
+// 03:38 UTC; key 2 had 826K credits left for the month). Price still never spends past what has been earned, metrics
+// are held to a quarter at admission, and each day's allowance comes from what is left of the month (dayBudget).
+const priceUsed = s => (s.budget?.status().byPriority?.price ?? s.priorities?.price ?? 0);
+export const priceDayUsed = url => { const s = st(url); return priceUsed(s) + (s.budget?.status().reserved || 0) >= paced(url); };
+export const priceKeyFree = url => Boolean(url) && !priceDayUsed(url) && !monthUsed(url) && st(url).coolingUntil <= Date.now();
+export const priceUrl = () => keyUrls().find(priceKeyFree) || '';
+export const allPriceSpent = () => anyKey() && !priceUrl();
 export const keyIndex = url => keyUrls().findIndex(u => key(u) === key(url)) + 1;
 export const anyKey = () => keyUrls().length > 0;
 export const allSpent = () => anyKey() && !activeUrl();

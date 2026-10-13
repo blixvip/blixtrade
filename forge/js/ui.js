@@ -8,6 +8,7 @@ import { TARGETS, renderTarget, renderAll, renderMaster, drawTargetThumb, conten
 import { FONTS, FONT_CATS, familyOf, loadFonts, TEXT_PRESETS, applyTextPreset } from './fonts.js';
 import { CURATED, recentColors, remember, imageColors, eyedrop, rgbHex } from './swatches.js';
 import { REMILIO } from './remilio.js';
+import { findPanel, picturesFromDrop, pictureFromText, dragHasPicture } from './find.js';
 
 // Inside Blix's Create coin page (an iframe with ?embed=1): the page sends its picture in, and "Use as coin
 // picture" sends the finished art back (see the end of this file). On its own at /forge/ it is the plain editor.
@@ -277,11 +278,15 @@ async function toCanvas(blob) {
   return c;
 }
 
-async function addPhoto(blob, { name = 'Photo', autoCut = true } = {}) {
+// `at`: where on the picture it lands (document coordinates: a drop point), else the middle. A picture added on top
+// of others comes in at half the frame, so it does not cover the work under it.
+async function addPhoto(blob, { name = 'Photo', autoCut = true, at = null } = {}) {
   try {
     const c = await toCanvas(blob);
     const first = doc.layers.filter(x => x.kind === 'image').length === 0;
     const l = D.addImageLayer(doc, c, { name });
+    if (!first) l.scale = Math.min(doc.w / c.width, doc.h / c.height) * 0.5;
+    if (at) { l.x = clamp(at.x, 0, doc.w); l.y = clamp(at.y, 0, doc.h); }
     resetMask(l);
     $('#drop').classList.add('hide');
     hist.push('add photo');
@@ -578,20 +583,46 @@ stage.addEventListener('dblclick', () => {
   if (l && l.kind === 'text') { setTool('text'); $('#textInput')?.focus(); }
 });
 
-// drag & drop
-['dragenter', 'dragover'].forEach(t => stage.addEventListener(t, (e) => {
+// drag & drop: anywhere in the editor. Files, or a picture dragged from another tab or window (Google Images,
+// Pinterest, ChatGPT) or from the Find panel. On the canvas it lands where it is dropped; anywhere else, in the
+// middle. Hold Shift (or have the Backdrop tab open) and it becomes the backdrop instead. Several files at once
+// are spread out from the drop point.
+let dragDepth = 0;
+const dropHint = () => $('#drop .big');
+document.addEventListener('dragenter', (e) => {
+  if (!dragHasPicture(e.dataTransfer)) return;
   e.preventDefault();
-  $('#drop').classList.remove('hide');
-  $('#drop').classList.add('hot');
-}));
-['dragleave', 'drop'].forEach(t => stage.addEventListener(t, (e) => {
+  if (dragDepth++ === 0) { $('#drop').classList.remove('hide'); $('#drop').classList.add('hot'); }
+});
+document.addEventListener('dragover', (e) => {
+  if (!dragHasPicture(e.dataTransfer)) return;
   e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  const asBg = e.shiftKey || S.tool === 'bg';
+  const b = dropHint(); if (b) b.textContent = asBg ? 'Drop to set the backdrop' : (stage.contains(e.target) ? 'Drop it right here' : 'Drop to add it');
+});
+const endFileDrag = () => {
+  dragDepth = 0;
   $('#drop').classList.remove('hot');
+  const b = dropHint(); if (b) b.textContent = 'Drop a photo here';
   if (doc.layers.length) $('#drop').classList.add('hide');
-}));
-stage.addEventListener('drop', (e) => {
-  const f = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
-  f.forEach((file, i) => addPhoto(file, { name: file.name.replace(/\.[^.]+$/, '').slice(0, 18) || 'Photo', autoCut: i === 0 }));
+};
+document.addEventListener('dragleave', (e) => { if (--dragDepth <= 0) endFileDrag(); });
+document.addEventListener('drop', async (e) => {
+  if (!dragHasPicture(e.dataTransfer)) return;
+  e.preventDefault();
+  const asBg = e.shiftKey || S.tool === 'bg', onStage = stage.contains(e.target);
+  const p = onStage ? pt(e) : null, at = p ? toDoc(p.x, p.y) : null;
+  endFileDrag();
+  let pics;
+  busy('Getting the picture…');
+  try { pics = await picturesFromDrop(e.dataTransfer); }
+  catch (err) { busy(null); toast(err.message || 'Could not get that picture', true); return; }
+  busy(null);
+  if (!pics.length) { toast('That was not a picture', true); return; }
+  if (asBg) { setBackdrop({ kind: 'image', img: await toCanvas(pics[0].blob) }, 'bg image'); toast('Backdrop set'); return; }
+  const step = doc.w * 0.12;
+  pics.forEach((x, i) => addPhoto(x.blob, { name: x.name, autoCut: i === 0, at: at ? { x: at.x + (i % 3) * step - (pics.length > 1 ? step : 0), y: at.y + Math.floor(i / 3) * step } : null }));
 });
 
 document.addEventListener('paste', async (e) => {
@@ -599,9 +630,18 @@ document.addEventListener('paste', async (e) => {
   for (const it of e.clipboardData?.items || []) {
     if (it.type.startsWith('image/')) {
       e.preventDefault();
-      addPhoto(it.getAsFile(), { name: 'Pasted' });
+      if (S.tool === 'bg') setBackdrop({ kind: 'image', img: await toCanvas(it.getAsFile()) }, 'bg image');
+      else addPhoto(it.getAsFile(), { name: 'Pasted' });
       return;
     }
+  }
+  // A picture's address (copied from Google, Pinterest or anywhere): fetched and added.
+  const text = e.clipboardData?.getData('text/plain');
+  if (text && /^(https?:\/\/\S+|data:image\/\S+)$/i.test(text.trim())) {
+    e.preventDefault();
+    busy('Getting the picture…');
+    try { const blob = await pictureFromText(text); busy(null); if (blob) addPhoto(blob, { name: 'Pasted' }); }
+    catch (err) { busy(null); toast(err.message || 'Could not get that picture', true); }
   }
 });
 
@@ -614,7 +654,7 @@ $('#openBtn').addEventListener('click', () => $('#file').click());
 // ---- keyboard ---------------------------------------------------------------
 let spaceDown = false;
 let nudgeT = null;
-const TOOLKEYS = { 1: 'looks', 2: 'cut', 3: 'aura', 4: 'bg', 5: 'style', 6: 'text', 7: 'export' };
+const TOOLKEYS = { 1: 'looks', 2: 'cut', 3: 'aura', 4: 'bg', 5: 'style', 6: 'text', 7: 'export', 8: 'find' };
 document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
   if (e.code === 'Space' && !typing) { spaceDown = true; stage.classList.add('pan'); e.preventDefault(); }
@@ -845,6 +885,20 @@ async function saveToDisk() {
 }
 
 $('#copyBtn').onclick = copyOut;
+// Drag out: the finished picture dragged onto the desktop (Chrome saves it as a file), into a chat or any page
+// that takes pictures. Rendered the moment the drag starts.
+$('#dragOut').addEventListener('dragstart', (e) => {
+  try {
+    const url = D.renderTo(doc, 1).toDataURL('image/png');
+    const name = `blix-${Date.now().toString(36)}.png`;
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('DownloadURL', `image/png:${name}:${url}`);
+    e.dataTransfer.setData('text/uri-list', url);
+    e.dataTransfer.setData('text/html', `<img src="${url}" alt="">`);
+    const ghost = new Image(); ghost.src = url; ghost.width = 96;
+    e.dataTransfer.setDragImage(ghost, 48, 48);
+  } catch { toast('Could not render the picture', true); }
+});
 $('#dlBtn').onclick = download;
 $('#undo').onclick = () => hist.undo() && paint();
 $('#redo').onclick = () => hist.redo() && paint();
@@ -940,6 +994,12 @@ function sec(title, ...kids) {
 }
 
 const PANELS = {
+  // Find: web and Pinterest pictures, and ChatGPT in a window beside (find.js).
+  find() {
+    return findPanel({ el, sec, toast, rerender: () => { if (S.tool === 'find') syncPanel(); },
+      add: (blob, name) => addPhoto(blob, { name, autoCut: !doc.layers.some(x => x.kind === 'image') }),
+      backdrop: async (blob) => { setBackdrop({ kind: 'image', img: await toCanvas(blob) }, 'bg image'); toast('Backdrop set'); } });
+  },
   looks() {
     const l = imageLayer();
     if (!l || l.kind !== 'image') {

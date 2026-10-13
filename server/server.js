@@ -89,6 +89,7 @@ import { runningAiStats } from "./running-ai.js";
 import { deskView, deskStats } from "./desk.js";
 import { feedHot, feedHotPosts } from "./feedhot.js";
 import { devBoard } from "./devboard.js";
+import { imgSearch, imgFetch } from "./imgsearch.js";
 import { pumpBoard } from "./pumpboard.js";
 import { walletPage, warmWalletPages } from "./walletpage.js";
 import { warmBoard } from "./feedwarm.js";
@@ -1481,6 +1482,13 @@ async function handleRequest(req, res) {
     // pump.fun's callouts are read only while someone wants them: a Hot list counting them keeps them coming.
     // Top devs (devboard.js): the wallets behind the window's best coins, with their coins.
     if (p === "/api/devs") return send(res, 200, await devBoard({ range: params.range }));
+    // The Forge's Find panel (imgsearch.js): web and Pinterest picture search, and any picture fetched for the canvas.
+    if (p === "/api/img/search") return send(res, 200, await imgSearch({ q: params.q, src: params.src, page: params.page, bm: params.bm }));
+    if (p === "/api/img/fetch") {
+      const pic = await imgFetch(params.u);
+      res.writeHead(200, { "content-type": pic.type, "content-length": pic.body.length, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" });
+      return res.end(pic.body);
+    }
     if (p === "/api/feed/hot/posts") return send(res, 200, feedHotPosts({ mint: params.mint, mints: params.mints, w: params.w, src: params.src }));
     if (p === "/api/feed/hot") { if (params.keep) { try { pumpFeed(); fomoFeed(); } catch {} } else if (/pump/.test(String(params.src || ""))) { try { pumpFeed(); } catch {} } return send(res, 200, feedHot(params)); }
     // The Feed's pictures for the page server to fetch ahead (feedstream.js feedPics); the coins' logos are fetched here.
@@ -2018,7 +2026,10 @@ server.listen(PORT, "127.0.0.1", () => {
     for (const tf of ["1h", "5m", "24h"]) {
       const c = memo.get(`discover:${tf}`);
       if (tf !== "1h" && !(c && Date.now() - c.t < 5 * MIN)) continue;
-      const d = tf === "1h" ? cached("discover:1h", 1500, () => discoverLists("1h")) : c.v;
+      // A copy up to a minute old: this only names the coins whose faces are kept read, and it runs on every Pulse
+      // poll (fomoboard.js liveTick). With 1.5 s it rebuilt the whole Discover lists (sparks, holders, window stats)
+      // over and over: seconds of CPU per half minute on the VM (2026-10-12 profile).
+      const d = tf === "1h" ? cached("discover:1h", 60_000, () => discoverLists("1h")) : c.v;
       for (const t of Object.values(d?.tabs || {})) for (const r of t.rows) out.push(r.mint);
     }
     return out;

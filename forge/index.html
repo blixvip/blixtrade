@@ -18,6 +18,7 @@
     <button class="iconbtn" id="undo" title="Undo (Ctrl+Z)">&#8630;</button>
     <button class="iconbtn" id="redo" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
     <div class="hsep"></div>
+    <span class="btn dragout" id="dragOut" draggable="true" title="Drag the finished picture out: onto your desktop, a chat, or any app that takes pictures">&#10021; Drag out</span>
     <button class="btn" id="copyBtn" title="Copy image (Ctrl+C)">Copy</button>
     <button class="btn" id="dlBtn" title="Download PNG (Ctrl+S)">Download</button>
     <button class="btn pri" id="useBtn" title="Set this as the coin's picture" hidden>Use as coin picture</button>
@@ -27,6 +28,8 @@
     <nav id="rail">
       <button class="tool" data-tool="looks" aria-pressed="true" title="Looks (1)">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>Looks</button>
+      <button class="tool" data-tool="find" title="Find pictures: web, Pinterest, ChatGPT (8)">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>Find</button>
       <button class="tool" data-tool="cut" title="Cut out (2)">
         <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M8 7.6L20 18M8 16.4L20 6"/></svg>Cut Out</button>
       <button class="tool" data-tool="aura" title="Aura (3)">
@@ -49,7 +52,7 @@
       <div id="cursor"></div>
       <div id="drop">
         <div class="big">Drop a photo here</div>
-        <div class="hint">or paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd><br>the background comes off by itself, then you pick a look</div>
+        <div class="hint">or paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or drag one from Google, Pinterest or ChatGPT<br>hold <kbd>Shift</kbd> to drop it as the backdrop · the background comes off by itself</div>
         <button class="btn pri pick" id="openBtn">Choose file</button>
       </div>
       <div id="hud">

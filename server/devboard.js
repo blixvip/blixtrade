@@ -10,6 +10,8 @@ import { feesOf } from "./coinfees.js";
 import { rowHolders } from "./holders.js";
 import { pumpProfile } from "./walletpage.js";
 import { solPrice } from "./wallets.js";
+import { createDevIdentityLookup } from './dev-identity.js';
+const knownIdentity = createDevIdentityLookup(db);
 
 const HOUR = 3600e3, DAY = 24 * HOUR;
 const RANGES = { "24h": DAY, "7d": 7 * DAY, "30d": 30 * DAY };
@@ -110,6 +112,8 @@ async function build(range) {
   // build (a few at a time, kept for hours) and show on the next.
   let asked = 0;
   for (const d of top) {
+    const known = knownIdentity(d.wallet);
+    if (known) { Object.assign(d, known); continue; }
     const p = profiles.get(d.wallet);
     if (p?.p) Object.assign(d, { name: p.p.name, pic: p.p.pic, bio: p.p.bio, x: p.p.x, followers: p.p.followers });
     if ((!p || now() - p.t > PROFILE_MS) && asked < PROFILES_PER_BUILD) {

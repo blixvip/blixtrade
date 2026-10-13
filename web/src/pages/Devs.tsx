@@ -60,17 +60,19 @@ function CoinLine({ c, now }: { c: DevCoin; now: number }) {
 function Row({ d, open, onOpen }: { d: Dev; open: boolean; onOpen: () => void }) {
   const now = useNow();
   const name = d.name || shortAddr(d.wallet);
+  const identity = d as Dev & { handle?: string; identitySource?: string };
+  const profileHref = identity.identitySource === 'fomo' && identity.handle ? `#/trader/${encodeURIComponent(identity.handle)}` : `#/trader/${d.wallet}`;
   const best = d.best;
   return (
     <div className={cn("border-t border-rule", open && "bg-paper-3/30")}>
       <div className={cn(GRID, "px-3 py-2.5")}>
         <span className={cn("num text-right text-md", d.rank <= 3 ? "font-bold text-ink" : "text-muted")}>{d.rank}</span>
         <span className="flex min-w-0 items-center gap-2.5">
-          <a href={`#/trader/${d.wallet}`} className="shrink-0"><Avatar src={d.pic} name={name} size={32} /></a>
+          <a href={profileHref} className="shrink-0" aria-label={`View ${name}`}><Avatar src={d.pic} name={name} identity={d.wallet} size={34} /></a>
           <span className="min-w-0">
-            <a href={`#/trader/${d.wallet}`} className="block truncate text-md font-semibold text-ink hover:text-accent">{name}</a>
+            <a href={profileHref} className="block truncate text-md font-semibold text-ink hover:text-accent">{name}</a>
             <span className="flex items-center gap-1.5 text-xs text-muted">
-              <a href={`#/trader/${d.wallet}`} className="font-outlier hover:text-ink" title={`${d.wallet} · the wallet's page`}>{shortAddr(d.wallet)}</a>
+              <a href={`#/trader/${d.wallet}`} className="font-outlier hover:text-ink" title={`${d.wallet} · the wallet's page`}>{d.name ? shortAddr(d.wallet) : 'Unlabelled wallet'}</a>
               {d.x && <a href={`https://x.com/${d.x.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="hover:text-ink" title={`@${d.x.replace(/^@/, "")} on X`}><Icon.x className="size-3" /></a>}
               {d.serial && <Tip tip={`${d.launches} launches in the window: a serial deployer`}><i className="rounded-chip bg-warn/15 px-1 text-[0.6rem] font-bold not-italic text-warn">SERIAL</i></Tip>}
             </span>

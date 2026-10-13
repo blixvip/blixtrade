@@ -75,10 +75,13 @@ async function here(body) {
     throw e;
   }
 }
-export function inFomo(body, url = "https://fomo.family/leaderboard", { pri = 1, timeoutMs = 115e3 } = {}) {
+export function inFomo(body, url = "https://fomo.family/leaderboard", { pri = 1, timeoutMs = 115e3, inTab = false } = {}) {
   // Fomo answers the server's own Node fetch with 430 "unauthorized" (2026-10-08, lists and board too), yet the same
   // token works from the headless browser's fomo.family tab: there, read through the tab.
-  if (fomoTokenKnown()) return hasAside() ? here(body) : inFomoTab(body, { pri, timeoutMs });
+  // `inTab`: never the Node fetch, even on the PC. Since 2026-10-12 Fomo answers 430 to /hodlers from Node on the
+  // PC too (the same token answers 200 from a fomo.family tab), so the holder reads (Pulse faces, coin pages) go
+  // through Aside's signed-in tab.
+  if (fomoTokenKnown() && !(inTab && hasAside())) return hasAside() ? here(body) : inFomoTab(body, { pri, timeoutMs });
   // A fomo.family tab that is already open and working is used as is (only read from; nothing in it changes),
   // because a fresh Aside tab sometimes never starts Fomo's sign-in layer ("No global PrivyClient instance").
   // Otherwise a new tab opens for this call and closes with it.
@@ -153,7 +156,7 @@ console.log(JSON.stringify({ fomoboard: 1, via: "tab", ...res }));
   return r.value;
 }
 // The coin reads: in the browser with the relayed token on the server; through Aside's signed-in tab on the PC.
-const coinRead = (body, opts) => (!hasAside() && fomoTokenKnown() ? inFomoTab(body, opts) : inFomo(body, undefined, opts));
+const coinRead = (body, opts) => (!hasAside() && fomoTokenKnown() ? inFomoTab(body, opts) : inFomo(body, undefined, { ...opts, inTab: true }));
 
 // One Aside call at a time (Fomo should see one reader, and Aside jams when it is driven from several
 // places at once), highest priority first: 0 = a page someone is looking at, 1 = background (the daily
@@ -588,15 +591,29 @@ export const setDiscoverMints = (fn) => { discoverMints = fn; };
 // One coin's last reading, for rows that carry it ([count, faces]), or null when there is none in the last 10 min.
 // After a restart the map is empty: the coin's stored reading (fomo_coin, written by every read) fills it, so the
 // list does not lose its faces for the minutes the background reads take to come round again.
+// The stored row's summary per coin, re-read at most every 10 s: parsing each coin's whole stored Fomo record
+// (holders, theses, swaps) to pick out three faces, on every Pulse poll and every Discover build, was seconds of CPU
+// per half minute on the VM and multi-second stalls for every chart push and number (2026-10-12 profile).
+const storedKnown = new Map();   // mint -> { at, t, n, faces }
 let knownRow = null;
+function storedSummary(mint) {
+  let s = storedKnown.get(mint);
+  if (s && now() - s.at <= 10_000) return s;
+  knownRow ??= db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
+  const row = knownRow.get(mint), data = safeJson(row?.data, null);
+  s = { at: now(), t: data ? data.ht || row?.t || 0 : 0, n: 0, faces: [] };
+  if (data) [s.n, s.faces] = holderSummary(data);
+  storedKnown.set(mint, s);
+  if (storedKnown.size > 4000) for (const [m, v] of storedKnown) if (now() - v.at > 60_000) storedKnown.delete(m);
+  return s;
+}
 export function knownOf(mint) {
   const key = knownKey({ address: mint, networkId: SOL_NETWORK });
   let k = known.get(key);
   if (!k || now() - k.t >= 10 * 60_000) {
     try {
-      knownRow ??= db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
-      const row = knownRow.get(mint), data = safeJson(row?.data, null), t = data?.ht || row?.t || 0;
-      if (data && now() - t < 10 * 60_000) { const [n, faces] = holderSummary(data); k = { n, faces, t }; known.set(key, k); }
+      const s = storedSummary(mint);
+      if (s.t && now() - s.t < 10 * 60_000) { k = { n: s.n, faces: s.faces, t: s.t }; known.set(key, k); }
     } catch {}
   }
   return k && now() - k.t < 10 * 60_000 ? [k.n, k.faces] : null;
@@ -665,16 +682,14 @@ if (!process.env.RADAR_DATA) setInterval(liveTick, LIVE_MS).unref();
 // GET /api/fomo/known: the Pulse rows' faces, { mint: [count, [[handle, pic, value], ...]] } for coins with people.
 export function pulseKnown(tokens = "") {
   notePulseSeen();
-  const requested = parseKnownTokens(tokens), get = db.prepare("SELECT data, t FROM fomo_coin WHERE mint = ?");
+  const requested = parseKnownTokens(tokens);
   for (const token of requested) {
     const key = knownKey(token);
     knownWanted.set(key, { ...token, seen: now() });
     // Reuse coin-page/relay readings immediately, including a confirmed zero.
     if (token.networkId === SOL_NETWORK) {
-      const row = get.get(token.address), data = safeJson(row?.data, null), t = data?.ht || row?.t || 0;
-      if (data && now() - t < COIN_TTL && t > (known.get(key)?.t || 0)) {
-        const [n, faces] = holderSummary(data); known.set(key, { n, faces, t });
-      }
+      const s = storedSummary(token.address);
+      if (s.t && now() - s.t < COIN_TTL && s.t > (known.get(key)?.t || 0)) known.set(key, { n: s.n, faces: s.faces, t: s.t });
     }
   }
   while (knownWanted.size > 1000) knownWanted.delete(knownWanted.keys().next().value);

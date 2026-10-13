@@ -9,7 +9,7 @@ import { previewHandlers } from "@/components/PicPreview";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
-import { ageStr, ageTone, compact, pct, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
+import { ageStr, ageTone, compact, pct, postTone, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
@@ -37,6 +37,15 @@ const POOL: Record<string, [dot: string, name: string]> = {
 // Market cap reads by size: small is cool, mid is gold, large is green.
 const capTone = (n: number | null | undefined) => n == null ? "text-muted" : n < 30_000 ? "text-info" : n < 150_000 ? "text-warn" : "text-up";
 
+// When the coin's tweet went out, read from the post's id (an X id carries its own time: id >> 22, plus X's epoch),
+// so no lookup is needed. Shown beside the X icon, coloured like Axiom: green new, yellow a few hours, red old
+// (lib/format.ts postTone). Only for a link to a post, not to a profile or community. (The user, 2026-10-13.)
+const tweetTime = (href: string) => { const m = /\/status(?:es)?\/(\d{15,20})/.exec(href); return m ? Number(BigInt(m[1]) >> 22n) + 1288834974657 : null; };
+function TweetAge({ href }: { href: string }) {
+  const now = useNow(), t = tweetTime(href);
+  if (!t || t > now + 60_000) return null;
+  return <span className={cn("num -ml-1 text-xs font-semibold", postTone(now - t))} title={`Tweeted ${new Date(t).toLocaleString()}`}>{ageStr(Math.max(0, now - t))}</span>;
+}
 function Age({ born }: { born: number }) {
   const now = useNow();
   return <span className={cn("num text-lg font-medium", ageTone(now - born))}>{ageStr(now - born)}</span>;
@@ -207,6 +216,7 @@ function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: num
             <span className="flex items-center gap-2.5">
               {/* No launchpad link here: the badge on the picture already says where it launched (user, 2026-10-11). */}
               {safeHref(xUrl(t.x)) && <XHover href={safeHref(xUrl(t.x))!}><a href={safeHref(xUrl(t.x))!} target="_blank" rel="noopener noreferrer nofollow" aria-label={`${xKindLabel(xKind(safeHref(xUrl(t.x))!))} (set by the creator, unverified)`} className="text-ink-2 transition-colors duration-100 hover:text-ink [&_svg]:size-3.5"><XLinkIcon href={safeHref(xUrl(t.x))!} /></a></XHover>}
+              {safeHref(xUrl(t.x)) && <TweetAge href={safeHref(xUrl(t.x))!} />}
               <IconLink href={t.web} icon={<Icon.web />} label="Website (set by the creator, unverified)" />
               <IconLink href={t.tg} icon={<Icon.tg />} label="Telegram" />
               <IconLink href={t.tiktok} icon={<Icon.tiktok />} label="TikTok" />

@@ -49,6 +49,7 @@ const MEMBER_READS = [
   /^\/api\/banner$/,               // a coin's DexScreener banner for Discover's coin card (banner.js)
   new RegExp(`^/api/coin/${MINT}/(people|callouts|fomo)$`),
   /^\/api\/launch\/clone$/,       // the Create coin page: a coin's details and picture by contract address, to start from (launchtools.js)
+  /^\/api\/img\/(search|fetch)$/,   // the Forge's Find panel: web and Pinterest picture search, a picture fetched for the canvas (imgsearch.js)
 ];
 export function memberMay(method, pathname) {
   if (method === "GET" && /^\/api\/account\/(me|google|txs|rewards|autoclaim|referral|handle)$/.test(pathname)) return true;

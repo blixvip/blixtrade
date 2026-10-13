@@ -15,7 +15,7 @@ import { settings } from "./settings.js";
 import { pumpLogs } from "./livetrades.js";
 import { swapLogs } from "./pumpswap.js";
 import { noteSlot } from "./feedlag.js";
-import { activeUrl, noteBytes, rpcStreamAllowed, loadUsage, saveUsage, allSpent, anyKey, bytesToday, keyIndex, keyUrls } from "./heliuskeys.js";
+import { priceUrl, noteBytes, rpcStreamAllowed, loadUsage, saveUsage, allPriceSpent as allSpent, anyKey, bytesToday, keyIndex, keyUrls } from "./heliuskeys.js";
 
 const MAX_COINS = 12;           // charts open at once that get their own subscription
 const IDLE_MS = 15_000;         // a chart not asked for in this long is unsubscribed
@@ -38,7 +38,7 @@ let ws = null, nextId = 1, retry = null, backoff = 1000, urlInUse = "";
 
 // The key in use: the first of the configured Helius keys with room left today and this month (heliuskeys.js).
 // When it changes, the 5-second tick below (and count) move every socket to the new one.
-const url = () => activeUrl();
+const url = () => priceUrl();   // a key with room for the charts' price streams (heliuskeys.js)
 export const chartWsUrl = url;
 
 // Bytes received for the open charts, counted against the key's daily budget (fastlane.js's socket reports

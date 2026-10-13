@@ -1,0 +1,47 @@
+.tt-panel { position: fixed; z-index: 45; display: flex; flex-direction: column; overflow: hidden; color: var(--color-ink); background: var(--color-paper-2); border: 1px solid var(--color-rule-2); border-radius: 14px; box-shadow: 0 18px 60px #0009; outline: none; animation: tip-in 180ms ease-out; font-size: 13px; }
+.tt-panel button, .tt-panel a { transition: background-color 150ms, color 150ms; }
+.tt-panel button { cursor: pointer; }
+.tt-panel button:hover, .tt-panel a:hover { background: var(--color-paper-4); color: var(--color-ink); }
+.tt-panel button:focus-visible, .tt-panel a:focus-visible, .tt-panel textarea:focus-visible, .tt-panel input:focus-visible { outline: 2px solid var(--color-ink); outline-offset: -2px; }
+.tt-panel button:disabled { opacity: .35; cursor: default; }
+.tt-header { height: 48px; flex-shrink: 0; display: flex; align-items: center; padding: 0 8px; gap: 2px; border-bottom: 1px solid var(--color-rule); }
+.tt-header > button:not(.tt-grab) { height: 32px; width: 32px; border-radius: 6px; color: var(--color-muted); font-size: 20px; }
+.tt-grab { display: flex; align-items: center; gap: 10px; flex: 1; height: 100%; min-width: 0; text-align: left; cursor: grab !important; touch-action: none; user-select: none; }
+.tt-mark { font-size: 25px; line-height: 1; color: var(--color-ink); text-shadow: -1px -1px #25f4ee, 1px 1px #fe2c55; }
+.tt-grip { color: var(--color-muted); margin-left: auto; padding-right: 8px; }
+.tt-panel[data-moving=true] { user-select: none; }
+.tt-panel[data-moving=true] iframe { pointer-events: none; }
+.tt-panel[data-moving=true] .tt-grab { cursor: grabbing !important; }
+.tt-toolbar, .tt-footer { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 8px; padding: 8px 12px; font-size: 11px; color: var(--color-muted); }
+.tt-toolbar { border-bottom: 1px solid var(--color-rule); }
+.tt-toolbar button { color: var(--color-ink); border: 1px solid var(--color-rule-2); border-radius: 6px; padding: 4px 8px; }
+.tt-editor { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+.tt-editor h2 { font-size: 19px; font-weight: 650; letter-spacing: -.03em; margin-bottom: 8px; }
+.tt-editor p { color: var(--color-muted); line-height: 1.6; margin-bottom: 16px; }
+.tt-editor label { display: block; font-size: 12px; margin-bottom: 8px; }
+.tt-editor textarea { display: block; width: 100%; resize: vertical; max-height: 160px; min-height: 88px; background: var(--color-paper); border: 1px solid var(--color-rule-2); padding: 10px; border-radius: 8px; }
+.tt-editor .tt-error { color: var(--color-down); margin-top: 8px; font-size: 12px; }
+.tt-add { background: var(--color-ink); color: var(--color-paper); width: 100%; border-radius: 8px; padding: 10px; font-weight: 650; margin: 12px 0 16px; }
+.tt-editor .tt-explainer { font-size: 11px; }
+.tt-queue { display: flex; flex-direction: column; gap: 4px; }
+.tt-queue li { display: flex; border-bottom: 1px solid var(--color-rule); }
+.tt-queue button { padding: 10px; text-align: left; border-radius: 6px; }
+.tt-queue button:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-queue span { color: var(--color-muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.tt-stage { flex: 1; min-height: 0; display: flex; background: #000; }
+.tt-player { flex: 1; min-width: 0; position: relative; }
+.tt-player iframe { width: 100%; height: 100%; border: 0; }
+.tt-player-note { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 12px; border-radius: 8px; background: var(--color-paper-2); border: 1px solid var(--color-rule-2); font-size: 12px; pointer-events: none; }
+.tt-player-error { display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
+.tt-player-error span { color: var(--color-muted); }
+.tt-player-error > div { display: flex; gap: 12px; }
+.tt-player-error button, .tt-player-error a { padding: 6px; border: 1px solid var(--color-rule-2); border-radius: 6px; }
+.tt-scroll { display: flex; flex-direction: column; align-items: center; justify-content: space-between; width: 38px; flex-shrink: 0; padding: 8px 0; background: var(--color-paper-2); touch-action: none; user-select: none; }
+.tt-scroll button { width: 34px; height: 40px; font-size: 21px; border-radius: 6px; }
+.tt-scroll span { writing-mode: vertical-rl; color: var(--color-muted); font-size: 10px; letter-spacing: .04em; }
+.tt-footer { border-top: 1px solid var(--color-rule); padding-right: 6px; }
+.tt-footer label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.tt-footer input { accent-color: var(--color-ink); }
+.tt-footer a { margin-left: auto; padding: 4px; border-radius: 4px; }
+.tt-resize { touch-action: none; cursor: nwse-resize !important; height: 28px; width: 24px; font-size: 17px; }
+@media (prefers-reduced-motion: reduce) { .tt-panel { animation: none; } .tt-panel * { transition: none; } }

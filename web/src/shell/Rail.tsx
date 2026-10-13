@@ -1,4 +1,5 @@
 import { openTrackerWindow } from "@/lib/wtrack";
+import { openTikTokWindow } from "@/lib/tiktok-window";
 import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 import { pageHref } from "@/lib/route";
 import { openExchange, openLauncher, warmExchange, warmLauncher } from "@/lib/modals";
@@ -356,6 +357,7 @@ export function BottomBar({ route }: { route: string }) {
         </a>
       ))}
       <ReplayLink />
+      <button onClick={openTikTokWindow} aria-label="TikTok" aria-haspopup="dialog" className="flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 py-2 text-2xs text-muted"><span aria-hidden className="text-lg leading-4.5">♪</span>TikTok</button>
     </nav>
   );
 }

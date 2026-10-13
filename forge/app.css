@@ -357,3 +357,25 @@ label.ck input { accent-color: #6d6d6d; }
 #layerProps select { padding: 4px 6px; font-size: 11.5px; }
 #layerProps .g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
 #layerProps .chip { padding: 4px 0; text-align: center; font-size: 11px; }
+
+/* ---- Find panel (find.js) ------------------------------------------------- */
+.findtabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.findtabs .chip { flex: 1; justify-content: center; }
+.findbar { display: flex; gap: 6px; }
+.findq, .findprompt { flex: 1; min-width: 0; background: var(--panel2); color: var(--txt); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; font: inherit; outline: none; }
+.findq:focus, .findprompt:focus { border-color: var(--sel); }
+.findprompt { width: 100%; resize: vertical; box-sizing: border-box; }
+.findrecent { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.findgrid { columns: 2; column-gap: 6px; }
+.findcell { position: relative; break-inside: avoid; margin-bottom: 6px; border-radius: 8px; overflow: hidden; background: var(--panel2); cursor: grab; border: 1px solid var(--line); }
+.findcell:hover { border-color: var(--sel); }
+.findcell img { display: block; width: 100%; height: auto; min-height: 40px; }
+.findacts { position: absolute; left: 4px; right: 4px; bottom: 4px; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+.findcell:hover .findacts { opacity: 1; }
+.findact { flex: 1; background: oklch(12% 0 0 / .82); color: var(--txt); border: 0; border-radius: 6px; padding: 4px 0; font: 600 11px/1.2 inherit; cursor: pointer; }
+.findact:hover { background: oklch(30% 0 0 / .95); }
+.hint.err { color: oklch(72% 0.17 25); }
+.linkbtn { background: none; border: 0; color: var(--dim); padding: 6px 0 0; font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.linkbtn:hover { color: var(--txt); text-decoration: underline; }
+.dragout { cursor: grab; user-select: none; }
+.dragout:active { cursor: grabbing; }

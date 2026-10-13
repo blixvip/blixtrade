@@ -4,6 +4,7 @@
 // Launch pins the picture to IPFS and the vault signs the create from the signed-in person's Blix wallet
 // (POST /api/account/launch, server/accounts.js -> Blix Vault). Real SOL, always: there is no paper launch.
 import { SiteLogo } from "@/components/logos";
+import { LaunchPlans } from '@/components/LaunchPlans';
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import { PumpLogo, SolanaLogo } from "@/components/brand";
@@ -284,6 +285,7 @@ export function Launch() {
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState(false);
   const [custom, setCustom] = useState(!BUYS.includes(loadDraft().sol));
+  const [customPlan, setCustomPlan] = useState(false);
   // The custom amount as typed ("0", "0.", "0.0" are on the way to 0.05 and must stay in the box).
   const [customText, setCustomText] = useState(() => { const s = loadDraft().sol; return s && !BUYS.includes(s) ? String(s) : ""; });
   const [busy, setBusy] = useState<string | null>(null);
@@ -493,9 +495,10 @@ export function Launch() {
 
   const c = curveAfter(d.sol || 0);
   // Which plan the switches amount to right now, and what each plan would cost, so the choice is made on numbers.
-  const plan: PlanKey = PLANS.find(([, , , p]) => p.sol === (d.sol || 0) && p.fee === d.fee)?.[0] ?? "custom";
+  const plan: PlanKey = customPlan ? 'custom' : PLANS.find(([, , , p]) => p.sol === (d.sol || 0) && p.fee === d.fee)?.[0] ?? "custom";
   const planCost = (sol: number, fee: FeeKey) => RENT_SOL + FEE_SOL[fee] + sol + (sol > 0 ? BUY_ATA_SOL + BUY_VAULT_SOL + (sol * TRADE_FEE_PCT) / 100 : 0);
   const pickPlan = (k: PlanKey) => {
+    setCustomPlan(k === 'custom');
     const p = PLANS.find(([key]) => key === k)?.[3];
     if (!p) return;
     setD((o) => { const n = { ...o, sol: p.sol, fee: p.fee }; saveDraft(n); return n; });
@@ -555,23 +558,10 @@ export function Launch() {
         {/* the form */}
         <div className="flex flex-col gap-4">
           {/* the plan: one click sets the first buy and fee below; touching either makes it Custom */}
-          <div className="rounded-card border border-rule bg-paper-2 p-4 max-sm:p-3">
-            <div className="mb-3 flex items-baseline justify-between gap-3 max-sm:flex-col max-sm:gap-0.5"><h2 className="text-lg leading-tight font-semibold whitespace-nowrap text-ink">Launch plan</h2><span className="text-sm text-muted">Every figure is live from the switches below.</span></div>
-            <div role="radiogroup" aria-label="Launch plan" className="grid gap-2 sm:grid-cols-3">
-              {[...PLANS.map(([k, label, why, p]) => ({ k, label, why, cost: planCost(p.sol, p.fee), hold: p.sol > 0 ? curveAfter(p.sol).ownPct : 0 })),
-                { k: "custom" as const, label: "Custom", why: "Whatever you set below: first buy, slippage, address ending, priority fee.", cost: total, hold: c.ownPct }].map((o) => (
-                <button key={o.k} type="button" role="radio" aria-checked={plan === o.k} onClick={() => o.k !== "custom" && pickPlan(o.k)}
-                  className={cn("flex flex-col gap-1 rounded-control border px-3.5 py-3 text-left transition-colors", plan === o.k ? "border-up bg-up/8" : "border-rule-2 bg-paper hover:border-muted", o.k === "custom" && plan !== "custom" && "cursor-default")}>
-                  <span className="flex items-baseline justify-between gap-2"><b className="text-md font-semibold text-ink">{o.label}</b>
-                    <b className="num text-md font-semibold text-ink">{fmt(o.cost, 4)} SOL{solUsd ? <span className="ml-1 font-normal text-muted">{usd(o.cost * solUsd)}</span> : null}</b></span>
-                  <span className="num text-xs text-ink-2">You hold {o.hold ? `${o.hold.toFixed(2)}%` : "0%"} · {o.hold ? "fees + upside" : "fees only"}</span>
-                  <span className="text-xs leading-snug text-muted">{o.why}</span>
-                </button>
-              ))}
-            </div>
-            <p className="mt-2.5 text-xs text-muted">Both plans show on Pulse's New pairs the moment the coin is made. Creator fees go to your Blix wallet either way; switch on Auto-claim under Creator rewards so they come in on their own.</p>
-          </div>
-
+          <LaunchPlans selected={plan} solUsd={solUsd} onSelect={pickPlan} options={[
+            ...PLANS.map(([key, , , p]) => ({ key, total: planCost(p.sol, p.fee), hold: p.sol > 0 ? curveAfter(p.sol).ownPct : 0, buy: p.sol })),
+            { key: 'custom', total, hold: c.ownPct, buy: d.sol || 0 },
+          ]} />
           {/* start from a coin that exists: paste its address, everything fills in */}
           <form onSubmit={(e) => { e.preventDefault(); clone(); }} className="flex flex-wrap items-center gap-2 rounded-card border border-rule bg-paper-2 px-4 py-3 max-sm:px-3">
             <span className="flex items-center gap-1.5 text-sm font-medium text-ink-2"><Icon.copy className="size-3.5" />Clone a coin</span>

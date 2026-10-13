@@ -6,6 +6,7 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { loadedPics, noteFace, thumb } from "@/lib/thumb";
+import { avatarColor } from '@shared/avatar-colors.js';
 
 export type Range = "24h" | "7d" | "30d" | "all-time";
 export const RANGES: [Range, string][] = [["24h", "24H"], ["7d", "7D"], ["30d", "30D"], ["all-time", "ALL"]];
@@ -36,13 +37,12 @@ export const copy = (text: string, what = "Wallet") => { navigator.clipboard?.wr
 // shows a row of blank grey circles.
 const hueOf = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h % 360; };
 // Fomo's own picture for a trader who never set one: its "eyes" on a blue disc (fomo.family does the same).
-const FOMO_BLUES = ["#4356ff", "#73ccff"];
-export const fomoBlue = (key?: string | null) => FOMO_BLUES[[...(key || "")].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % FOMO_BLUES.length];
+export const fomoBlue = (key?: string | null) => avatarColor(key || 'anonymous');
 export const FomoEyes = ({ id, className }: { id?: string | null; className?: string }) => (
   <span aria-hidden className={cn("absolute inset-0 grid place-items-center", className)} style={{ background: fomoBlue(id) }}><img src="brand/fomo-eyes.png" alt="" draggable={false} className="size-[70%]" /></span>
 );
 
-export function Avatar({ src, name, size = 40, rank, className }: { src?: string | null; name?: string | null; size?: number; rank?: number | null; className?: string }) {
+export function Avatar({ src, name, identity, size = 40, rank, className }: { src?: string | null; name?: string | null; identity?: string; size?: number; rank?: number | null; className?: string }) {
   const url = thumb(src, size);
   const [shown, setShown] = useState<string | null>(() => (url && loadedPics.has(url) ? src! : null));   // the src that has loaded
   const [waited, setWaited] = useState(false);   // it had to load: fade it in
@@ -53,7 +53,7 @@ export function Avatar({ src, name, size = 40, rank, className }: { src?: string
   const loaded = () => { if (url) loadedPics.add(url); setShown(src!); };
   return (
     <span className={cn("relative inline-block shrink-0 overflow-hidden rounded-full bg-paper-4 ring-1 ring-edge", className)} style={{ width: size, height: size }}>
-      {(!src || broken === src) && <FomoEyes id={name} />}
+      {(!src || broken === src) && <FomoEyes id={identity || name || src} />}
       {initial && src && broken !== src && shown !== src && (
         <span className="absolute inset-0 grid place-items-center font-display font-semibold text-white/90 select-none" aria-hidden
           style={{ fontSize: Math.round(size * 0.44), background: `linear-gradient(145deg, oklch(62% 0.14 ${hue}), oklch(42% 0.12 ${(hue + 40) % 360}))` }}>{initial}</span>

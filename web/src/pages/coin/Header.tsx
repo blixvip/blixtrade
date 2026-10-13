@@ -34,7 +34,10 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
   const traded = useTradeMc(t.mint, false); // the visible chart owns the dedicated stream
   // The shared live mark also prices holdings and wallet PnL. Chart snapshots are the initial fallback.
   const chartMc = useChartMc((s) => s[t.mint]);
-  const mc = c?.mcUsd ?? chartMc ?? traded ?? (graduated ? t.mcap : L?.mcap ?? t.mcap) ?? null;
+  // The chart's own newest close first: it moves on every pushed trade, the polled figure (c.mcUsd) only every 3 s
+  // and not at all while the tab is hidden (lib/coin.ts usePoll pauses), which left the header and the tab's title
+  // seconds behind the chart and frozen in a background tab (the user, 2026-10-12: $48.45K header, $47.34K chart).
+  const mc = chartMc ?? traded ?? c?.mcUsd ?? (graduated ? t.mcap : L?.mcap ?? t.mcap) ?? null;
   // The tab title follows the same live figure: "$52.21K CATE | Blix", market cap first so it reads in a narrow tab.
   const mcTab = mc != null ? usdP(mc) : null;
   useEffect(() => { document.title = `${mcTab ? `${mcTab} ` : ""}${t.symbol || "Coin"} | Blix`; }, [mcTab, t.symbol]);

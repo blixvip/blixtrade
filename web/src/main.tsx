@@ -19,6 +19,7 @@ import { OWNER_ONLY, useRole, useRoleKnown } from "@/lib/role";
 import { loadExchange, loadLauncher, useExchange, useLauncher, useWelcome } from "@/lib/modals";
 import { useMe, useUi } from "@/lib/ui";
 import { loadTracker, useTracker } from "@/lib/wtrack";
+import { useTikTokWindow } from "@/lib/tiktok-window";
 import "@/lib/update";   // the "new version" bar after a deploy
 
 // A page loaded on demand. If its file cannot be fetched (the app was rebuilt while this tab was open, or the radar
@@ -100,6 +101,7 @@ const XTracker = page(() => import("@/pages/XTracker"), (m) => m.XTracker);
 const Tracker = page(() => import("@/pages/Tracker"), (m) => m.Tracker);
 // The wallet tracker's floating window (components/WalletTracker.tsx): its code loads only once it is opened.
 const TrackerWindow = lazy(() => load(loadTracker).then((m) => ({ default: m.TrackerWindow })));
+const TikTokPanel = lazy(() => load(() => import("@/components/TikTokPanel")).then(m => ({ default: m.TikTokPanel })));
 const Coin = page(() => import("@/pages/Coin"), (m) => m.Coin);
 const Trader = page(() => import("@/pages/Trader"), (m) => m.Trader);
 const Profile = page(() => import("@/pages/Profile"), (m) => m.Profile);
@@ -187,6 +189,7 @@ function App() {
   const focusFeed = useUi(s => s.feedFocus) && route === 'feed';
   // One tracker window stays mounted across pages, floating or docked beside the content.
   const trackerFloat = useTracker((s) => s.float);
+  const tiktokOpen = useTikTokWindow(s => s.open);
   // Google sign-in may land on any page. Start onboarding once the missing wallet is known.
   useEffect(() => { if (needsWallet) location.replace("#/account"); }, [needsWallet]);
   useEffect(() => {
@@ -232,6 +235,7 @@ function App() {
       <ShellGuard name="toasts"><Toaster /></ShellGuard>
       <ShellGuard name="netnotice"><NetNotice /></ShellGuard>
       <ShellGuard name="picpreview"><PicPreview /></ShellGuard>
+      {tiktokOpen && <ShellGuard name="tiktok"><Suspense fallback={null}><TikTokPanel /></Suspense></ShellGuard>}
     </TooltipProvider>
   );
 }

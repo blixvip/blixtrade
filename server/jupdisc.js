@@ -11,9 +11,9 @@ const WIN = { "5m": "stats5m", "1h": "stats1h", "24h": "stats24h" };
 const now = () => Date.now();
 export const jupStats = { calls: 0, errors: 0, limited: 0, last: 0, mints: 0 };
 
-async function get(path) {
+async function get(path, priority = false) {
   try {
-    const value = await jupiterGet(`/tokens/v2${path}`, { cacheMs: 5000 });
+    const value = await jupiterGet(`/tokens/v2${path}`, { cacheMs: 5000, priority });
     jupStats.calls++; jupStats.last = now();
     return value;
   } catch (e) { if (e.status === 429) jupStats.limited++; else jupStats.errors++; return null; }
@@ -53,7 +53,13 @@ export function want(mints) {
 // Every window at once (the coin page's About card: 5m, 1h, 6h, 24h change, buys and sells, volumes, traders), from
 // the last answer under 10 minutes old; asks for the coin when it is not on hand. null until Jupiter has answered.
 const WINS = [["5m", "stats5m"], ["1h", "stats1h"], ["6h", "stats6h"], ["24h", "stats24h"]];
+// Coins whose page has its About card open (asked in the last 15 s): their read is interactive. As a background
+// read it sat behind the shared limiter's 40% background share, which Pulse's prices fill, and the card showed
+// "Loading stats" for the life of the page (2026-10-12). One search every 12 s at most, for up to 100 coins.
+const pageAsk = new Map();   // mint -> last asked by a coin page
 export function windows(mint) {
+  pageAsk.set(mint, now());
+  if (pageAsk.size > 200) for (const [m, t] of pageAsk) if (now() - t > 60_000) pageAsk.delete(m);
   want([mint]);
   const c = cache.get(mint);
   if (!c || now() - c.t > 10 * 60_000) return null;
@@ -86,10 +92,13 @@ let busy = false;
 async function refresh() {
   if (busy) return;
   for (const [m, t] of wanted) if (now() - t > 15_000) wanted.delete(m);
-  const due = [...wanted.keys()].filter((m) => now() - (cache.get(m)?.t || 0) > 25_000).slice(0, 100);
+  const onPage = (m) => now() - (pageAsk.get(m) || 0) < 15_000;
+  // Open pages first, then the rest; an open page's coin is re-read every 12 s (the others every 25 s).
+  const due = [...wanted.keys()].filter((m) => now() - (cache.get(m)?.t || 0) > (onPage(m) ? 10_000 : 25_000))
+    .sort((a, b) => onPage(b) - onPage(a)).slice(0, 100);
   if (!due.length) return;
   busy = true;
-  try { keep(await get(`/search?query=${due.join(",")}`)); } finally { busy = false; }
+  try { keep(await get(`/search?query=${due.join(",")}`, due.some(onPage))); } finally { busy = false; }
 }
 
 // ---------- most traded ----------
