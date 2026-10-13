@@ -130,7 +130,7 @@ const HEAD = (title, extra = "") => `<!doctype html>
 <link rel="icon" href="/_pub/icon.svg?v=eye2" type="image/svg+xml">
 <link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
 <style>@font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>`;
-const send = (html, status = 200, extra = {}) => new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "same-origin", "x-robots-tag": "noindex", ...extra } });
+const send = (html, status = 200, extra = {}) => new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "same-origin", "cross-origin-opener-policy": "same-origin", "x-robots-tag": "noindex", ...extra } });
 
 const page = (title, body, status = 200) => send(`${HEAD(title)}
 <style>
@@ -201,7 +201,7 @@ h1{font-size:40px;line-height:1.05;letter-spacing:-.035em;font-weight:700}
 @media (max-width:480px){h1{font-size:34px}}
 @media (prefers-reduced-motion:reduce){.form{animation:none}}`;
 
-const signIn = (kind, err = "") => {
+const signIn = (kind, err = "", next = "") => {
   const start = kind !== "login";
   const title = start ? "Start trading" : "Log in";
   return send(`${HEAD(title)}
@@ -210,7 +210,7 @@ const signIn = (kind, err = "") => {
 <h1>${start ? "Start trading" : "Welcome back"}</h1>
 <p class="lead">${start ? "Sign in with Google to get started." : "Sign in with Google to get back to your desk."}</p>
 ${err ? `<div class="err" role="alert">${esc(err)}</div>` : ""}
-<a class="g" href="/auth/google?from=${start ? "start" : "login"}">${GOOGLE_G}Continue with Google</a>
+<a class="g" href="/auth/google?from=${start ? "start" : "login"}${next ? `&next=${encodeURIComponent(next)}` : ""}">${GOOGLE_G}Continue with Google</a>
 <div class="alt">${start ? `Already have an account? <a href="/login">Log in</a>` : `New here? <a href="/start">Create an account</a>`}</div>
 </main>
 </body></html>`, err ? 400 : 200);
@@ -224,6 +224,11 @@ const go = (to, ...cookies) => {
 // `prefix`: "/trade" when reached as blixvip.com/trade/... (index.js), "" on trade.blixvip.com.
 const callbackUrl = (url, prefix = "") => `${url.origin}${prefix}/auth/google/callback`;
 const clearState = `${STATE}=; Path=/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+// A terminal route someone may be sent to after signing in: /app, or /app#/<route>. Anything else is dropped.
+const safeNext = (s) => (/^\/app(#\/[a-z0-9-]+)?$/i.test(String(s || "")) ? String(s) : "");
+const nextOf = (state) => { try { return safeNext(decodeURIComponent(/\.next=([^.]+)/.exec(state)?.[1] || "")); } catch { return ""; } };
+// Where a sign-in lands: the wallet flow's account page, else the route asked for, else the terminal.
+const landing = (state) => (state.endsWith(".wallet") ? "/app#/account" : nextOf(state) || "/app");
 const ERRORS = {
   denied: "You cancelled the Google sign-in. Try again whenever you're ready.",
   busy: "Too many tries. Wait a minute and try again.",
@@ -302,12 +307,15 @@ export async function waitlist(req, env, url, { limited, defer, prefix = "", cal
   }
 
   if (p === "/start" || p === "/login") {
+    // `next`: where in the terminal to land after signing in (a page's "open the terminal" link, or /app itself
+    // sending a stranger here). Only the terminal's own routes are accepted.
+    const next = safeNext(url.searchParams.get("next"));
     // Signed in already: a member straight to /app (two redirects and a D1 read fewer than through /waiting); a
     // paused account to /waiting, which says so (/app would send it back here).
-    if (await session(req, env)) return go((await memberOf(req, env)) ? "/app" : "/waiting");
+    if (await session(req, env)) return go((await memberOf(req, env)) ? next || "/app" : "/waiting");
     const e = url.searchParams.get("e");
     // Only the site's own wording: free text from the address would let anyone put words on this page.
-    return signIn(p.slice(1), e ? ERRORS[e] || ERRORS.failed : "");
+    return signIn(p.slice(1), e ? ERRORS[e] || ERRORS.failed : "", next);
   }
 
   const back = (kind, e) => go(`/${kind === "login" ? "login" : "start"}?e=${encodeURIComponent(e)}`, clearState);
@@ -317,7 +325,9 @@ export async function waitlist(req, env, url, { limited, defer, prefix = "", cal
   if (p === "/auth/google") {
     const from = url.searchParams.get("from") === "login" ? "login" : "start";
     if (limited) return back(from, "busy");
-    const state = `${b64u(crypto.getRandomValues(new Uint8Array(18)))}.${from}${url.searchParams.get("wallet") === "1" ? ".wallet" : ""}`;
+    // The state carries where to land afterwards (`.next=`, URL-encoded so it holds no dots) before the kind suffixes.
+    const next = safeNext(url.searchParams.get("next"));
+    const state = `${b64u(crypto.getRandomValues(new Uint8Array(18)))}${next ? `.next=${encodeURIComponent(next)}` : ""}.${from}${url.searchParams.get("wallet") === "1" ? ".wallet" : ""}`;
     const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: callbackUrl(url, callbackPrefix), response_type: "code", scope: "openid email profile", state, prompt: "select_account", ...(state.endsWith(".wallet") ? { max_age: "0" } : {}) });
     return go(`https://accounts.google.com/o/oauth2/v2/auth?${q}`, `${STATE}=${state}.${await sign(state, `oauth:${sessionKey(env)}`)}; Path=/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
   }
@@ -351,7 +361,7 @@ export async function waitlist(req, env, url, { limited, defer, prefix = "", cal
     try { await env.DB.prepare("UPDATE accounts SET logins = logins + 1, last_seen = ?, name = ?, picture = ?, google_sub = CASE WHEN google_sub LIKE 'session:%' THEN ? ELSE google_sub END, country = COALESCE(country, ?), city = COALESCE(city, ?), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'member' END WHERE email = ?").bind(now, g.name ?? null, g.picture ?? null, g.sub, info.country ?? null, info.city ?? null, had.email).run(); } catch {}
     members.delete(had.email);
     record(env, defer, info, "login", { path: p, email: had.email });
-    return go(had.status === "blocked" ? "/waiting" : state.endsWith(".wallet") ? "/app#/account" : "/app", await sessionCookie(had.email, env), clearState, ...(had.status !== "blocked" && had.email.toLowerCase() === g.email.toLowerCase() ? [await walletCookie(g, env)] : []));
+    return go(had.status === "blocked" ? "/waiting" : landing(state), await sessionCookie(had.email, env), clearState, ...(had.status !== "blocked" && had.email.toLowerCase() === g.email.toLowerCase() ? [await walletCookie(g, env)] : []));
   }
   // Whose invite link (blixvip.com/<handle>, site/handles.js) they came through, if any: credited on the server
   // (which owns invites), so it counts even while D1 refuses writes.
@@ -370,7 +380,7 @@ export async function waitlist(req, env, url, { limited, defer, prefix = "", cal
   // everyone who signed up during an outage got in but never showed up anywhere.
   if (dbDown) await holdSignup(env, g, info, now);
   record(env, defer, info, dbDown ? "login" : "signup", { path: p, email: g.email });
-  return go(state.endsWith(".wallet") ? "/app#/account" : "/app", await sessionCookie(g.email, env), clearState, await walletCookie(g, env));
+  return go(landing(state), await sessionCookie(g.email, env), clearState, await walletCookie(g, env));
 }
 
 // ---------- Kai's dashboard ----------

@@ -10,6 +10,7 @@ import { EDITORIAL_PAGES } from "./editorial.js";
 import { COMPETITOR_GUIDES } from "./competitor-guides.js";
 import { LEARNING_PAGES } from "./learning.js";
 import { TOPIC_CLUSTERS, PAGE_ALIASES } from "./clusters.js";
+import { applySeo } from "./seo-overrides.js";
 // The keyword pages (pump.fun, AI, trading, developers, competitors, creating coins, guides, /tools): pages-*.js,
 // built on pagekit.js. Listed last so a page there replaces an earlier one at the same path.
 import { PUMP_PAGES } from "./pages-pump.js";
@@ -638,6 +639,8 @@ const guides = {
 <h2>How these guides are maintained</h2><p>BLIX publishes its own product documentation. Read <a href="/about">about BLIX and its editorial standards</a>. Sources and limitations accompany the guides; dates describe content updates, not guaranteed real-time verification. Join the <a href="https://discord.gg/3VWHBP6paA" target="_blank" rel="noopener noreferrer">BLIX Discord</a> to discuss the guides.</p>`,
 };
 export const PAGES = Object.fromEntries([...entries, guides, ...KEYWORD_PAGES].filter(p => !PAGE_ALIASES[p.path]).map((p) => [p.path, p]));
+// Titles and descriptions sized for the search result (site/seo-overrides.js), before the cards copy them.
+applySeo(PAGES);
 // A page whose body is a function of the registry (the /tools hub lists every page) is rendered once it exists.
 for (const p of Object.values(PAGES)) if (typeof p.body === "function") p.body = p.body(PAGES);
 // Registry owns both routing and related cards: adding a page cannot orphan it

@@ -8,13 +8,14 @@
 // Processed means a transaction may still be dropped by a fork: the chart's periodic full reload from
 // candles.js re-reads the stored history, and failed transactions are never counted (see pumpLogs).
 import fs from "node:fs";
+import { canStream, focusCoin } from './coin-screen.js';
 import path from "node:path";
 import { DATA, db } from "./db.js";
 import { settings } from "./settings.js";
 import { pumpLogs } from "./livetrades.js";
 import { swapLogs } from "./pumpswap.js";
 import { noteSlot } from "./feedlag.js";
-import { activeUrl, noteBytes, loadUsage, saveUsage, allSpent, anyKey, bytesToday, keyIndex, keyUrls } from "./heliuskeys.js";
+import { activeUrl, noteBytes, rpcStreamAllowed, loadUsage, saveUsage, allSpent, anyKey, bytesToday, keyIndex, keyUrls } from "./heliuskeys.js";
 
 const MAX_COINS = 12;           // charts open at once that get their own subscription
 const IDLE_MS = 15_000;         // a chart not asked for in this long is unsubscribed
@@ -42,19 +43,19 @@ export const chartWsUrl = url;
 
 // Bytes received for the open charts, counted against the key's daily budget (fastlane.js's socket reports
 // here too). `on`: the URL the bytes arrived on; the key in use when not given.
-export function count(bytes, on = urlInUse || url()) {
-  noteBytes(on, bytes);
+export function count(bytes, on = urlInUse || url(), priority = 'price') {
+  noteBytes(on, bytes, priority);
   chartStream.day = day(); chartStream.bytesToday = bytesToday();
   if (allSpent()) {
     if (!chartStream.overBudget) {
-      chartStream.overBudget = true; chartStream.error = `daily budget used${keyUrls().length > 1 ? " on every key" : ""}; charts fall back to the market feed until midnight UTC`;
-      close(); side.close(); fast.close();
+      chartStream.overBudget = true; chartStream.error = "Helius pacing paused; market feeds continue; paid streams resume as credits become available";
+      close(); side.close(); fast.close(); analytics.close();
     }
     return;
   }
   chartStream.overBudget = false;
   // The key just ran out for the day and another has room: start over on it right away.
-  if (ws && url() !== urlInUse) { chartStream.error = `key ${keyIndex(urlInUse)} used its day; moving to key ${keyIndex(url())}`; close(); connect(); }
+  if (ws && url() !== urlInUse) { chartStream.error = `key ${keyIndex(urlInUse)} resting; moving to key ${keyIndex(url())}`; close(); connect(); }
 }
 
 function send(o) { try { ws?.readyState === 1 && ws.send(JSON.stringify({ jsonrpc: "2.0", ...o })); } catch {} }
@@ -101,6 +102,7 @@ function subscribeExtra(key) {
 // delivers in order, and that flood put every open chart 5-15 s behind (2026-10-06).
 export function streamSub(key, method, params, fn, own = false) {
   if (!url() || chartStream.overBudget) return null;
+  if (method === "programSubscribe") return analytics.sub(key, method, params, fn);
   if (method !== "logsSubscribe" || !own) return sideSub(key, method, params, fn);
   if (extra.has(key)) return () => stopSub(key);
   extra.set(key, { method, params, unsub: method.replace("Subscribe", "Unsubscribe"), fn, sid: null });
@@ -179,6 +181,7 @@ function later() {
 // them: on one socket Helius delivers in order, and a busy connection's backlog delays everything on it.
 function mux(tag) {
   const m = { ws: null, nextId: 1, asked: new Map(), byId: new Map(), subs: new Map(), retry: null, backoff: 1000, url: "" };
+  const endpoint = () => tag === 'analytics' ? keyUrls().find(rpcStreamAllowed) || '' : url();
   const send = (o) => { try { m.ws?.readyState === 1 && m.ws.send(JSON.stringify({ jsonrpc: "2.0", ...o })); } catch {} };
   const ask = (key) => {
     const x = m.subs.get(key);
@@ -206,21 +209,23 @@ function mux(tag) {
     if (old) { old.onopen = old.onmessage = old.onclose = old.onerror = null; try { old.close(); } catch {} }
   };
   const later = () => {
-    if (m.retry || !url() || chartStream.overBudget || !m.subs.size) return;
+    if (m.retry || !endpoint() || chartStream.overBudget || !m.subs.size) return;
     m.retry = setTimeout(m.connect, m.backoff);
     m.backoff = Math.min(m.backoff * 2, 30_000);
   };
   m.connect = () => {
     clearTimeout(m.retry); m.retry = null;
-    if (m.ws || !url() || chartStream.overBudget) return;
-    m.url = url();
+    if (m.ws || !endpoint() || chartStream.overBudget || !m.subs.size) return;
+    m.url = endpoint();
     let sock;
     try { m.ws = sock = new WebSocket(m.url); } catch { return later(); }
     sock.onopen = () => { if (m.ws !== sock) return; m.backoff = 1000; for (const k of m.subs.keys()) ask(k); };
     sock.onmessage = (msg) => {
       if (m.ws !== sock) return;
       const text = typeof msg.data === "string" ? msg.data : Buffer.from(msg.data).toString();
-      count(Buffer.byteLength(text), m.url);
+      count(Buffer.byteLength(text), m.url, tag === 'analytics' ? 'metrics' : 'price');
+      if (m.ws !== sock) return;
+      if (endpoint() !== m.url) { m.close(); m.connect(); return; }
       let d; try { d = JSON.parse(text); } catch { return; }
       if (d.method && d.params && m.byId.has(d.params.subscription)) {
         chartStream.msgs++;
@@ -239,18 +244,21 @@ function mux(tag) {
   };
   // Settings changed (or were cleared), or nothing is subscribed: let the socket go.
   m.tidy = () => {
-    if (m.ws && url() !== m.url) { m.close(); m.connect(); }
-    if ((!url() || !m.subs.size) && m.ws) m.close();
+    const next = endpoint();
+    if (m.ws && (next !== m.url || !m.subs.size || chartStream.overBudget)) m.close();
+    if (!m.ws && next && m.subs.size && !chartStream.overBudget && !m.retry) m.connect();
   };
   return m;
 }
-const side = mux("side"), fast = mux("fast");
+const side = mux("side"), fast = mux("fast"), analytics = mux("analytics");
 const sideSub = side.sub;
 // The open charts' price accounts (fastpx.js): their own socket.
 export const fastSub = (key, method, params, fn) => (!url() || chartStream.overBudget ? null : fast.sub(key, method, params, fn));
 
 // A chart asked for this coin's candles: keep (or start) its stream.
 export function focusChart(mint) {
+  focusCoin(mint);
+  if (!canStream(mint)) { focus.delete(mint); unsubscribe(mint); return; }
   if (!url()) return;
   if (!focus.has(mint) && focus.size >= MAX_COINS) {
     const oldest = [...focus].sort((a, b) => a[1] - b[1])[0][0];
@@ -263,24 +271,26 @@ export function focusChart(mint) {
 export function startChartStream() {
   loadUsage();
   chartStream.bytesToday = bytesToday(); chartStream.overBudget = allSpent(); chartStream.keys = keyUrls().length;
-  if (chartStream.overBudget) chartStream.error = "daily budget used; charts fall back to the market feed until midnight UTC";
-  setInterval(saveUsage, 15_000).unref?.();
+  if (chartStream.overBudget) chartStream.error = "Helius pacing paused; market feeds continue; paid streams resume as credits become available";
+  setInterval(saveUsage, 1000).unref?.();
   chartStream.on = anyKey();
   setInterval(() => {
     chartStream.on = anyKey(); chartStream.keys = keyUrls().length;
-    // Midnight UTC (or a key resting for the month): the budgets reset and a spent key may be back.
+    // Earned allowance, cooldown expiry or a confirmed monthly reset can release a key.
     if (chartStream.overBudget && !allSpent()) { chartStream.overBudget = false; chartStream.error = null; }
     chartStream.bytesToday = bytesToday();
     if (!ws) chartStream.key = keyIndex(url());
     // What the side and fast sockets hold (the Health page: bytes with no chart open come from these).
     chartStream.side = { n: side.subs.size, on: Boolean(side.ws), keys: [...side.subs.keys()].slice(0, 12) };
     chartStream.fast = { n: fast.subs.size, on: Boolean(fast.ws), keys: [...fast.subs.keys()].slice(0, 12) };
+    chartStream.analytics = { n: analytics.subs.size, on: Boolean(analytics.ws), keys: [...analytics.subs.keys()].slice(0, 12) };
     chartStream.extra = { n: extra.size, keys: [...extra.keys()].slice(0, 12) };
     // The key in use changed (Settings, a key's day used up, a key back after midnight): start over on the new one.
     if (ws && url() !== urlInUse) { close(); connect(); }
     if (!url() && ws) close();
-    side.tidy(); fast.tidy();
-    for (const [m, t] of focus) if (now() - t > IDLE_MS) { focus.delete(m); unsubscribe(m); }
+    side.tidy(); fast.tidy(); analytics.tidy();
+    for (const [m, t] of focus) if (now() - t > IDLE_MS || !canStream(m)) { focus.delete(m); unsubscribe(m); }
+    if (!ws && (focus.size || extra.size) && url() && !chartStream.overBudget && !retry) connect();
     // Nothing open: let the socket go, so an idle radar streams nothing.
     if (!focus.size && !extra.size && ws) close();
   }, 5000).unref?.();

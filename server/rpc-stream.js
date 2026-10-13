@@ -41,9 +41,7 @@ export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStat
     if (!admit(endpoint)) { fail('RPC shared budget resting', 15_000); return; }
     try { socket = ws = new WebSocketImpl(endpoint); }
     catch { fail("RPC connection failed"); return; }
-    let subscribed = false, admitAt = 0, admitOk = true;
-    // The budget check once a second, not on every message (a busy program's logs: 100 a second).
-    const admitted = () => { const t = Date.now(); if (t - admitAt > 1000) { admitAt = t; admitOk = admit(endpoint); } return admitOk; };
+    let subscribed = false;
     watch(10_000, "RPC subscription timed out");
     ws.onopen = () => {
       if (socket !== ws) return;
@@ -52,10 +50,13 @@ export function startRpcStream({ url, request, WebSocketImpl = WebSocket, onStat
     };
     ws.onmessage = (message) => {
       if (socket !== ws) return;
-      meter(endpoint, typeof message.data === "string" ? message.data.length : Buffer.byteLength(String(message.data)));
-      if (!admitted()) { fail('RPC shared budget resting', 15_000); return; }
+      const raw = message.data;
+      const text = typeof raw === 'string' ? raw : Buffer.from(raw).toString();
+      meter(endpoint, typeof raw === 'string' ? Buffer.byteLength(raw) : raw.byteLength);
+      // Meter and check every message: a busy stream can spend its remaining grant within one second.
+      if (!admit(endpoint)) { fail('RPC shared budget resting', 15_000); return; }
       let data;
-      try { data = JSON.parse(message.data); } catch { return; }
+      try { data = JSON.parse(text); } catch { return; }
       if (!data || typeof data !== "object") return;
       if (data.id === 1) {
         if (data.error || data.result == null) { fail("RPC provider rejected the subscription"); return; }

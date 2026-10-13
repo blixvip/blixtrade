@@ -4,7 +4,7 @@
 // the edge cache; authenticated account data is never shared through that cache.
 import { PAGES, render } from "./site/pages.js";
 import { PAGE_ALIASES } from "./site/clusters.js";
-import { SCRIPT, layout, code, esc } from "./site/html.js";
+import { SCRIPT, layout, code, esc, NAV } from "./site/html.js";
 import { ROBOTS, SITEMAP, SITEMAP_URLS, LLMS, INDEXNOW_KEY, PUBLIC_PATHS } from "./site/seo.js";
 import LANDING from "./site/landing.html";
 import { waitlist, memberOf, memberProfile, session } from "./site/waitlist.js";
@@ -237,10 +237,12 @@ async function handle(req, env, ctx, prefix) {
       if (await overLimitExact(env, `write:${sensitive ? 'sensitive' : 'normal'}:${member}`, sensitive ? 5 : 30)) return securityError(429, 'Too many requests. Try again in a minute.');
     }
     const owner = Boolean(member) && String(env.OWNER_EMAILS || "").toLowerCase().split(/[\s,]+/).includes(member);
-    // Someone not signed in never sees the terminal: /app sends them to sign up, any other page address that is
-    // not one of the site's own is a plain "not found".
-    if (isPageView(req, url) && !member) {
-      if (/^\/app(\/|$)/.test(url.pathname)) return Response.redirect(`${url.origin}/start`, 302);
+    // Someone not signed in never sees the terminal: /app sends them to sign up (and on to where they were going,
+    // once signed in: site/waitlist.js `next`), and any other address that is not one of the site's own is a plain
+    // "not found". Whatever the client sent as Accept: a crawler without one used to fall through to the server's
+    // 401, so retired and mistyped addresses never left the index (site audit, 2026-10-12).
+    if (!member && (isPageView(req, url) || ((req.method === "GET" || req.method === "HEAD") && !proxiedPath(url.pathname)))) {
+      if (/^\/app(\/|$)/.test(url.pathname)) return Response.redirect(`${url.origin}/start?next=${encodeURIComponent(url.pathname)}`, 302);
       return notFound();
     }
     // A member's page (and their /api/me pings): the member cookie for the direct line goes with it, so the page's
@@ -509,9 +511,12 @@ async function site(req, env, url) {
     // no-cache, not max-age: the same address shows the terminal once someone has signed in (serve()), and a
     // browser that kept the landing for ten minutes showed it again right after sign-in. The ETag keeps reloads cheap.
     const headers = {
-      "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", etag: landing.etag,
+      // The browser revalidates every time (max-age=0 with the ETag: a 304 after sign-in, never the stale landing) while
+      // the edge may keep it ten minutes (s-maxage) for visitors without a session cookie: the Cloudflare cache rule
+      // for the marketing pages bypasses on the blix_wait cookie, so a member at "/" still gets the terminal.
+      "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=0, s-maxage=600, stale-while-revalidate=86400", etag: landing.etag,
       // Sent with the first bytes (and as a 103 Early Hint where the zone has those on): the font and the big picture.
-      link: "</_pub/fonts/inter-tight.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
+      link: `</_pub/fonts/inter-tight.woff2>; rel=preload; as=font; type=font/woff2; crossorigin, </_pub/home/laptop.avif>; rel=preload; as=image; type=image/avif; imagesrcset="/_pub/home/laptop-800.avif 800w, /_pub/home/laptop.avif 1448w"; imagesizes="(max-width: 860px) 100vw, 680px"`,
       "content-security-policy": landing.csp, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin",
     };
     if (req.headers.get("if-none-match") === landing.etag) return new Response(null, { status: 304, headers });
@@ -553,13 +558,32 @@ async function site(req, env, url) {
   return null;
 }
 
-const notFound = () => new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Page not found · BLIX</title><meta name="robots" content="noindex">
-<link rel="icon" href="/_pub/icon.svg?v=eye" type="image/svg+xml">
-<style>*{box-sizing:border-box;margin:0}body{min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:radial-gradient(ellipse 70% 55% at 50% 0%,rgba(176,182,194,.14),transparent 70%),#050608;color:#f4f6fa;font:16px/1.5 system-ui,sans-serif;text-align:center}
-img{width:72px;margin-bottom:18px}h1{font-size:30px;letter-spacing:-.03em;margin-bottom:8px}p{color:#8a92a3;margin-bottom:26px}
-a{display:inline-block;padding:13px 24px;border-radius:999px;background:#f2f3f5;color:#0a0b0d;font-weight:600;text-decoration:none}</style>
-<div><img src="/_pub/home/bx-logo.webp" alt=""><h1>Page not found</h1><p>That page doesn't exist. Head back to BLIX.</p><a href="/">Back to BLIX</a></div>`,
-  { status: 404, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com", "x-robots-tag": "noindex" } });
+// Paths the Worker passes on to the server or the asset store for everyone (reads of the public JSON API, pictures,
+// the terminal's files): never a page, so never a 404 from the page router.
+const proxiedPath = (p) => /^\/(api|img|assets|brand|cdn-cgi|auth|_pub|__)(\/|$)/.test(p) || /\.(m?js|css|png|jpe?g|webp|avif|gif|svg|ico|woff2?|json|txt|xml|map|webmanifest)$/i.test(p);
+// A real page for an address that does not exist: the site's header and navigation, and the way to each section.
+const NOT_FOUND = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Page not found · BLIX</title><meta name="robots" content="noindex">
+<link rel="icon" href="/_pub/icon.svg?v=eye3" type="image/svg+xml"><link rel="icon" href="/_pub/icon-96.png?v=eye3" sizes="96x96" type="image/png">
+<style>*{box-sizing:border-box;margin:0}html{color-scheme:dark}body{min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(ellipse 70% 45% at 50% 0%,rgba(176,182,194,.12),transparent 70%),#050608;color:#f4f6fa;font:16px/1.55 "Inter Tight",system-ui,sans-serif}
+a{color:#d9dce2;text-decoration:none}a:focus-visible{outline:2px solid #f4f6fa;outline-offset:3px;border-radius:6px}
+.skip{position:absolute;left:-999px;top:8px;background:#f4f6fa;color:#050608;padding:10px 14px;border-radius:999px;font-weight:600}.skip:focus{left:8px}
+header{position:sticky;top:0;background:rgba(5,6,8,.95);border-bottom:1px solid #202329}.top{max-width:1280px;margin:0 auto;padding:0 20px;min-height:72px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;min-height:44px}.brand img{display:block}
+nav.main{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}nav.main a{display:inline-flex;align-items:center;min-height:32px;padding:6px 10px;border-radius:6px;font-size:.875rem;color:#c5c9d1;white-space:nowrap}nav.main a:hover{color:#f4f6fa;background:#171a20}
+.cta{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:999px;background:#f4f6fa;color:#050608;font-weight:600;white-space:nowrap}
+main{flex:1;max-width:760px;width:100%;margin:0 auto;padding:64px 20px 80px;text-align:center}
+img.mark{width:72px;height:72px;margin-bottom:18px}h1{font-size:34px;letter-spacing:-.03em;margin-bottom:8px}main>p{color:#aeb4bf;margin-bottom:28px}
+.links{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;text-align:left}.links a{display:block;padding:14px 16px;border:1px solid #202329;border-radius:10px;background:#0c0e12;min-height:44px}.links b{display:block;color:#f4f6fa;margin-bottom:2px}.links span{font-size:.85rem;color:#aeb4bf}
+footer{border-top:1px solid #202329;padding:22px 20px;text-align:center;font-size:.85rem;color:#aeb4bf}footer a{display:inline-flex;align-items:center;min-height:44px;padding:0 8px;color:#c5c9d1}
+@media(max-width:640px){.top{padding:10px 16px}main{padding:44px 16px 60px}h1{font-size:28px}}</style></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<header><div class="top"><a class="brand" href="/" aria-label="BLIX home"><img src="/_pub/home/eye-logo.webp" width="44" height="44" alt=""><img src="/_pub/home/blix-logo.webp" width="64" height="44" alt="BLIX"></a>
+<nav class="main" aria-label="Site">${NAV.map(([href, label]) => `<a href="${href}">${label}</a>`).join("")}</nav><a class="cta" href="/start">Create account</a></div></header>
+<main id="main"><img class="mark" src="/_pub/home/bx-logo.webp" width="72" height="72" alt=""><h1>Page not found</h1><p>There is no page at this address. It may have moved, or the link was mistyped.</p>
+<div class="links"><a href="/"><b>BLIX home</b><span>The AI memecoin terminal for Solana</span></a><a href="/guides"><b>Guides</b><span>Research, wallets, risk, trading</span></a><a href="/tools"><b>Everything BLIX does</b><span>Every page, grouped by job</span></a><a href="/compare"><b>Compare terminals</b><span>Axiom, Fomo, Photon, GMGN, BullX</span></a><a href="/api"><b>API and MCP</b><span>The data and the connector</span></a><a href="/start"><b>Create an account</b><span>Sign in with Google, free</span></a></div></main>
+<footer><a href="/about">About BLIX</a><a href="/start">Create account</a><a href="/login">Log in</a><a href="https://discord.gg/3VWHBP6paA" rel="noopener noreferrer">Discord</a></footer></body></html>`;
+const notFound = () => new Response(NOT_FOUND,
+  { status: 404, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "x-robots-tag": "noindex" } });
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const offline = () => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="20"><title>Blix</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1117;color:#e6e8ef;font:15px system-ui,sans-serif;text-align:center}h1{font-size:18px;margin:0 0 6px}p{color:#8b90a0;margin:0}a{color:#7aa2ff}</style>

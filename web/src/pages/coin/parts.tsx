@@ -57,12 +57,12 @@ export function Tags({ x }: { x: WalletTags }) {
   );
 }
 
-// A wallet: short address (opens Solscan) and its role on this coin.
+// A wallet: short address (opens the wallet's own Blix page: holdings, trades, PnL) and its role on this coin.
 export function Who({ wallet, x }: { wallet: string | null; x: WalletTags }) {
   if (!wallet) return <span className="text-muted">not named by the feed</span>;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <a href={`https://solscan.io/account/${wallet}`} target="_blank" rel="noreferrer" title={wallet}
+      <a href={`#/trader/${wallet}`} title={`${wallet} · open this wallet's page`}
         className="font-outlier text-xs text-ink-2 hover:text-accent">{shortAddr(wallet)}</a>
       <Tags x={x} />
     </span>

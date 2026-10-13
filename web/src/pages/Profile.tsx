@@ -5,6 +5,7 @@ import { SiteLogo } from "@/components/logos";
 import { useCallback, useEffect, useState } from "react";
 import { ago, CoinImg, Empty, Page, Problem, td, tdR, th, thR } from "@/components/page";
 import { FollowButton } from "@/components/follow";
+import { TrackWalletButton } from "@/components/TrackWalletButton";
 import { Segmented } from "@/components/ui/segmented";
 import { shortAddr } from "@/lib/format";
 import { useRouteArg } from "@/lib/route";
@@ -80,7 +81,7 @@ export function UserView({ username, onMine }: { username: string; onMine?: bool
     <div className={cn("mx-auto flex w-full max-w-[1700px] flex-col gap-3", !onMine && "p-3 max-md:pb-6")}>
       <ProfileHero p={p} onEdit={() => setEditing(true)} tabs={setTab}
         onCounts={(followers) => setD({ ...d, profile: { ...p, followers } })}
-        actions={p.isMe && !onMine ? <a href="#/account" className="flex h-8 items-center rounded-full border border-rule-2 px-3.5 text-md font-semibold text-ink-2 hover:text-ink">Wallet</a> : null} />
+        actions={p.isMe && !onMine ? <a href="#/account" className="flex h-8 items-center rounded-full border border-rule-2 px-3.5 text-md font-semibold text-ink-2 hover:text-ink">Wallet</a> : !p.isMe && p.address ? <TrackWalletButton address={p.address} name={p.display || p.username} /> : null} />
       {p.isMe && <EditProfile key={String(editing)} p={p} open={editing} onOpenChange={setEditing} onSaved={(np) => { setD({ ...d, profile: np }); if (np.username !== username) location.hash = userHref(np.username); }} />}
       <Segmented label="Profile section" value={tab} options={tabs} onChange={setTab} />
       {tab === "holdings" && (hidden ? <Private /> : <HoldingsTable d={d} />)}

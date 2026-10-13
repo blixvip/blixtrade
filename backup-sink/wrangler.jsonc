@@ -1,0 +1,12 @@
+// The off-box backup sink (worker.js): its own Worker, apart from the site's (worker/), so deploying one never
+// touches the other. Deploy from this folder: npx wrangler deploy. The secret: npx wrangler secret put SINK_KEY.
+{
+  "name": "blix-backup-sink",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "blix-backups" }],
+  // Alerts (POST /alert) go only to the owner's verified Email Routing address.
+  "send_email": [{ "name": "ALERT", "destination_address": "kaiguy432@gmail.com" }],
+  "vars": { "ALERT_TO": "kaiguy432@gmail.com" }
+}

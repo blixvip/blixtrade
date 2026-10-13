@@ -5,6 +5,7 @@
 // transaction replaces them. pump.fun curve and PumpSwap trades are decoded from their logs instead (no
 // transaction fetch), so their transactions are skipped here.
 import { onCoinLogs, streamSub } from "./chartstream.js";
+import { canStream } from './coin-screen.js';
 import { fetchSwap } from "./txtrade.js";
 import { addTape, tapeGap } from "./coin.js";
 import { feed, sigGate } from "./livetrades.js";
@@ -74,11 +75,12 @@ onCoinLogs(handle);
 // subscribed too while its chart is open (candles.js calls this), on the same per-coin socket and budget.
 const poolSubs = new Map();   // mint -> { stop, t }
 export function watchPoolLogs(mint, pool) {
+  if (!canStream(mint)) return;
   const w = poolSubs.get(mint);
   if (w) { w.t = Date.now(); return; }
   const stop = streamSub(`pool:${mint}`, "logsSubscribe", [{ mentions: [pool] }, { commitment: "processed" }], (res) => handle(mint, res?.value));
   if (stop) poolSubs.set(mint, { stop, t: Date.now() });
 }
 setInterval(() => {
-  for (const [m, w] of poolSubs) if (Date.now() - w.t > 20_000) { try { w.stop(); } catch {} poolSubs.delete(m); }
+  for (const [m, w] of poolSubs) if (Date.now() - w.t > 20_000 || !canStream(m)) { try { w.stop(); } catch {} poolSubs.delete(m); }
 }, 5_000).unref?.();

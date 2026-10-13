@@ -6,17 +6,19 @@
 // profits move with the coin's live market cap; new theses slide in once.
 // Shown as cards (2026-10-10 redesign): a summary strip on top, each card leads with the multiple since the call,
 // then the call/now/position chips, the thesis folded to five lines and its updates folded to the latest.
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { usdK, usdSigned, usePoll } from "@/lib/coin";
 import { ageStr } from "@/lib/format";
 import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
+import { useMe } from "@/lib/ui";
+import { Button } from "@/components/ui/button";
 import { thumb } from "@/lib/thumb";
 import { SiteLogo } from "@/components/logos";
 import { movePosition, useArrivals, useMcNow } from "@/components/postLive";
 import { Avatar, traderHref } from "../traders/parts";
 import type { CoinFomo } from "./FomoTabs";
-import { Empty } from "./parts";
+import { CIcon, Empty } from "./parts";
 
 interface Callout {
   id: string; posted: number | null; t: number | null; likes: number; replies: number; views?: number;
@@ -45,6 +47,7 @@ const sinceCall = (x: Post, mcNow: number | null) => {
 const compact = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
 export function AllTheses({ mint, f }: { mint: string; f: CoinFomo | null }) {
+  const account = useMe((s) => s.me?.address || s.me?.email || "guest");
   const [sort, setSort] = useState<"top" | "new">("top");
   const [src, setSrc] = useState<"all" | "pump" | "fomo">("all");
   const now = useNow();
@@ -94,12 +97,80 @@ export function AllTheses({ mint, f }: { mint: string; f: CoinFomo | null }) {
         </div>
         {fomoNote && <span className="text-sm text-muted">{fomoNote}</span>}
       </div>
+      <CalloutDraft key={`${account}:${mint}`} storageKey={`blix:callout:${account}:${mint}`} mint={mint} />
       {all.length ? (
         <div className="grid grid-cols-1 items-start gap-2.5 px-3 pb-3 2xl:grid-cols-2">
           {all.map((x) => <Card key={x.id} x={x} now={now} mcNow={mcNow} fresh={fresh.has(x.id)} />)}
         </div>
       ) : waiting ? <Ghost />
         : <Empty title="No theses yet" text="A thesis is why a trader bought, posted with their trade on pump.fun or Fomo. New ones show up here by themselves." />}
+    </div>
+  );
+}
+
+function CalloutDraft({ mint, storageKey }: { mint: string; storageKey: string }) {
+  const [draft, setDraft] = useState(() => {
+    try { return sessionStorage.getItem(storageKey) || ""; } catch { return ""; }
+  });
+  const [destination, setDestination] = useState<"pump" | "fomo" | "both">(() => {
+    try {
+      const saved = sessionStorage.getItem(`${storageKey}:destination`);
+      return saved === "fomo" || saved === "both" ? saved : "pump";
+    } catch { return "pump"; }
+  });
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const editVersion = useRef(0);
+  const destinations = [
+    { id: "pump", name: "Pump.fun", href: `https://pump.fun/coin/${encodeURIComponent(mint)}` },
+    { id: "fomo", name: "FOMO", href: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` },
+  ].filter((site) => destination === "both" || site.id === destination);
+  const destinationNames = destinations.map((site) => site.name).join(" and ");
+  async function copy() {
+    const version = ++editVersion.current;
+    setStatus("copying");
+    try { await navigator.clipboard.writeText(draft); if (version === editVersion.current) setStatus("copied"); }
+    catch { if (version === editVersion.current) setStatus("error"); }
+  }
+  return (
+    <div className="mx-3 mb-3 rounded-card border border-rule bg-paper-2/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label htmlFor="callout-draft" className="text-sm font-semibold text-ink">Write a thesis</label>
+        <fieldset aria-label="Post destination" className="inline-flex gap-0.5 rounded-full bg-paper-3 p-0.5">
+          {([["pump", "Pump.fun"], ["fomo", "FOMO"], ["both", "Both"]] as const).map(([value, label]) => (
+            <label key={value} className="cursor-pointer">
+              <input type="radio" name="thesis-destination" value={value} checked={destination === value}
+                className="peer sr-only" onChange={() => {
+                  setDestination(value);
+                  try { sessionStorage.setItem(`${storageKey}:destination`, value); } catch { /* Selection works without storage. */ }
+                }} />
+              <span className="flex min-h-8 items-center rounded-full px-3 text-sm font-semibold text-muted transition-colors hover:text-ink peer-checked:bg-paper-4 peer-checked:text-ink peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent">{label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+      <p id="callout-help" className="mt-2 text-sm text-muted">Copy your draft, then paste and publish on {destinationNames}.</p>
+      <textarea id="callout-draft" aria-describedby="callout-help" rows={3} value={draft}
+        placeholder="What’s your take on this coin?"
+        onChange={(e) => {
+          const value = e.target.value;
+          editVersion.current++;
+          setDraft(value); setStatus("idle");
+          try { if (value) sessionStorage.setItem(storageKey, value); else sessionStorage.removeItem(storageKey); } catch { /* Typing still works without storage. */ }
+        }}
+        className="mt-2 block min-h-24 w-full resize-y rounded-control border border-rule-2 bg-paper px-3 py-2 text-md text-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button type="button" size="lg" className="min-h-9 rounded-full" disabled={!draft.trim() || status === "copying"} onClick={copy}>
+          {status === "copying" ? "Copying…" : status === "copied" ? "Copied" : "Copy draft"}
+        </Button>
+        {destinations.map((site) => <a key={site.id} href={site.href} target="_blank" rel="noopener noreferrer"
+          className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-rule-2 bg-paper-3 px-3 text-sm font-semibold text-ink transition-colors hover:bg-paper-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          Open {site.name}<CIcon.external className="size-3.5" />
+        </a>)}
+      </div>
+      {destination !== "pump" && <p className="mt-2 text-sm text-muted">FOMO theses attach to an eligible trade in your FOMO account.</p>}
+      <p role="status" className={cn("mt-2 text-sm", status === "error" ? "text-down" : "text-muted")}>
+        {status === "error" ? "Couldn’t copy. Select the text and copy it manually." : status === "copied" ? `Copied. Open ${destinationNames} to paste and publish.` : "Draft only · nothing posted yet"}
+      </p>
     </div>
   );
 }

@@ -431,7 +431,8 @@ ${table(["If you left Photon for", "Pick", "Why"], [
     ["A social feed on your phone", "Fomo", "Traders' buys, sells and theses; fees covered"],
     ["An API or an agent", "BLIX", "Included with the account"],
   ])}
-${BLIX_ADDS}
+<h2 id="blix">The Photon habit, in BLIX</h2>
+<p>Photon users mostly want two things from an alternative: the Memescope layout and the speed. BLIX's Pulse is the same three columns (new, about to bond, migrated) with a live AI rating and the holder ledger on each row; the trade is one click with a per-trade priority fee. What Photon never offered is here too: a deep read with a grade and a plan, a rug check in one number, a coin launcher, and an API and MCP connector with the account. 2% a trade, 1.6% with an invite, wallet exportable.</p>
 ${F.pulse("The Memescope equivalent")}
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Photon, Axiom Trade, GMGN or Fomo")}${RISK}`,
@@ -579,6 +580,8 @@ const axiomFomo = vs({
   lede: `Axiom and Fomo are different answers to the same market. Axiom is a desktop-first terminal built for speed: the Pulse, filters, exportable keys, Hyperliquid perps, 1% a trade less cashback. Fomo is a phone-first social app: a feed of what traders are buying, one-tap trades on three chains with network fees covered, about 0.5% a trade. BLIX sits between them with what neither has: an AI read and a rug check on every coin, Fomo's traders' activity from the chain, and an open API.`,
   body: `${START("Try BLIX")}
 ${compare(["axiom", "fomo", "blix"])}
+<h2 id="decides">What decides it</h2>
+<p>Where you trade from. Axiom assumes a desk: a wide screen, three Pulse columns, keyboard shortcuts, a priority fee you tune per trade. Fomo assumes a pocket: a feed you scroll, a trade you make with a thumb, fees you never think about because the app covers them. The second question is whether you want to see other people's trades at all. Fomo's whole product is that feed; Axiom shows wallets you choose to follow and leaves the rest out. If the answer to both is "desk, my own research", it is Axiom; "phone, what everyone is buying", it is Fomo.</p>
 <h2 id="pick">Which for what</h2>
 ${table(["You want", "Axiom", "Fomo", "BLIX"], [
     ["Fastest execution with your keys", "Yes", "Fast, in the app", "One click, Jupiter routes"],
@@ -588,7 +591,8 @@ ${table(["You want", "Axiom", "Fomo", "BLIX"], [
     ["A read on every coin", "No", "No", "AI rating, deep reads, picks"],
     ["Data you can build on", "No", "No", "API and MCP connector with the account"],
   ])}
-${BLIX_ADDS}
+<h2 id="blix">Where BLIX sits between them</h2>
+<p>BLIX shows Axiom's three-column Pulse with an AI rating on every row, and puts Fomo's leaderboard traders on the chart and in the holder list with their faces, read from the chain rather than from an app. It is a browser terminal (desk or phone), charges 2% a trade (1.6% with an invite), makes you a wallet you can export, and includes an API and MCP connector. See <a href="/compare">BLIX compared</a> for the full table.</p>
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Axiom Trade or Fomo")}${RISK}`,
   faq: [
@@ -606,6 +610,8 @@ const axiomBullx = vs({
   lede: `This comparison has a short answer as of ${CHECKED}: Axiom is trading and BullX is not. BullX suspended trading on its app on June 1, 2026, keeping withdrawals open and publishing no relaunch date. Before that, BullX's edge was chains (Solana, Ethereum, Base, BNB, Tron, Blast) and Telegram-linked wallets; Axiom's was speed, the Pulse, exportable keys and Hyperliquid perps at 1% less cashback. BLIX adds an AI read on every coin and an open API to the Solana side.`,
   body: `${START("Try BLIX")}
 ${compare(["axiom", "bullx", "blix"])}
+<h2 id="decides">The only question that matters today</h2>
+<p>Do you still have money on BullX? If so, the comparison is moot until it is withdrawn: BullX's withdrawals are open and its trading is not, so the funds should move to a wallet you control before anything else. After that, the choice is between the terminals that are live. Axiom is the closest to what BullX Neo was on Solana (fast lists, holder filters, keys you keep); BullX's other chains have no equivalent on Axiom, which is where GMGN and nio.trade come in. For the record, here is what each was built around.</p>
 <h2 id="then">What each was known for</h2>
 ${table(["", "Axiom", "BullX / BullX Neo"], [
     ["Chains", "Solana, Hyperliquid perps", "Solana, Ethereum, Base, BNB, Tron, Blast"],
@@ -614,7 +620,8 @@ ${table(["", "Axiom", "BullX / BullX Neo"], [
     ["Discovery", "Pulse with holder, dev and bundle filters", "Pump Vision and multi-chain lists"],
     ["Status", "Live", "Trading suspended since June 1, 2026"],
   ], "cmp")}
-${BLIX_ADDS}
+<h2 id="blix">If you are rebuilding a BullX routine</h2>
+<p>BullX's Pump Vision was three columns of pump.fun coins; BLIX's Pulse is the same three, each row carrying the holder ledger (dev, snipers, bundles) and an AI call, with the chart one click away and the trade on it. The take profit, stop loss and trailing stop BullX positions carried are set once in BLIX and run for you. Fee: 2% a trade, 1.6% with an invite, your wallet exportable. The <a href="/compare/bullx-alternative">BullX alternative</a> page walks through the move step by step.</p>
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Axiom Trade or BullX")}${RISK}`,
   faq: [
@@ -632,6 +639,8 @@ const axiomPhoton = vs({
   lede: `Axiom and Photon are the two terminals people pick for speed on Solana. Photon came first, with Memescope, a sniper and wallets generated in the app, at about 1% (0.75% by some reviews, 1% with the sniper). Axiom answered with the Pulse, cashback that nets the fee down to 0.75–0.95%, non-custodial keys through Turnkey and Hyperliquid perps. Neither has an AI, an API or a launcher; BLIX has all three at the same fee, on the same kind of Pulse.`,
   body: `${START("Try BLIX")}
 ${compare(["axiom", "photon", "blix"])}
+<h2 id="decides">What decides it</h2>
+<p>Three things, in order. Custody: Axiom's wallets are Turnkey wallets with an exportable key, Photon's is generated in the app, and if "can I take my key elsewhere" matters to you, Axiom wins before anything else is compared. Perps: only Axiom has them (Hyperliquid, in the same app). The sniper: Photon's is the better-known one for buying launches in their first seconds, Axiom's is aimed at migrations. Speed itself is close enough that your RPC and your priority fee decide more than the app does.</p>
 <h2 id="pick">Which for what</h2>
 ${table(["You want", "Axiom", "Photon", "BLIX"], [
     ["Keys you can export", "Yes (Turnkey)", "App-generated wallet", "Yes, or withdraw"],
@@ -642,7 +651,8 @@ ${table(["You want", "Axiom", "Photon", "BLIX"], [
     ["API / MCP", "No", "No", "With every account"],
     ["Launcher", "No", "No", "pump.fun in one screen"],
   ])}
-${BLIX_ADDS}
+<h2 id="blix">What neither of them has</h2>
+<p>A read on the coin before the click. Both fast terminals show you numbers; BLIX also grades every coin as it trades (liquidity, holders, bundles, the dev's history), writes a deep read on the strongest with a thesis and a plan, and keeps a public record of its calls. Speed is the same one-click, priority-fee trade; the difference is what you know when you make it. 2% a trade, 1.6% with an invite, wallet exportable, API and MCP connector included. <a href="/photon-alternative">Photon alternatives</a> has the longer list.</p>
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Axiom Trade or Photon")}${RISK}`,
   faq: [
@@ -660,6 +670,8 @@ const axiomGmgn = vs({
   lede: `Axiom is Solana-first and built for speed: the Pulse, cashback tiers, Turnkey keys, Hyperliquid perps. GMGN is multi-chain (Solana, Ethereum, Base, BNB, Tron and more) and built around wallets: copy trading, smart-money tags, KOL wallets, and an OpenAPI with a key by application. Both charge about 1%. BLIX is Solana-only like Axiom, finds smart money from the chain like GMGN tries to, and adds what neither has: an AI read on every coin and an API and MCP connector with every account.`,
   body: `${START("Try BLIX")}
 ${compare(["axiom", "gmgn", "blix"])}
+<h2 id="decides">What decides it</h2>
+<p>Whether your trading starts from a coin or from a wallet. Axiom starts from the coin: the Pulse, its filters, the chart, the trade. GMGN starts from the wallet: smart-money tags, KOL wallets, copy trading that mirrors a chosen wallet's buys across Solana, Ethereum, Base, BNB and Tron. If you trade one chain fast with your own ideas, Axiom; if you follow wallets across chains and want the app to copy them, GMGN. GMGN is also the only one of the two with a documented API, which matters if any of this is going into a bot.</p>
 <h2 id="pick">Which for what</h2>
 ${table(["You want", "Axiom", "GMGN", "BLIX"], [
     ["Other chains", "No (perps on Hyperliquid)", "Yes", "No"],
@@ -669,7 +681,8 @@ ${table(["You want", "Axiom", "GMGN", "BLIX"], [
     ["Fee", "About 0.75–0.95% net", "About 1%", "2%, 1.6% with an invite"],
     ["AI", "No", "No written reads", "Rating, deep reads, picks, narratives"],
   ])}
-${BLIX_ADDS}
+<h2 id="blix">Where BLIX differs from both</h2>
+<p>BLIX finds smart money itself, from the early buyers of coins that ran, and follows those wallets for you: their buys arrive as signals with the wallet's record beside them, and nothing is mirrored automatically. The API and MCP connector come with the account and never take a private key, where GMGN's trading API wants your key configured for its requests. Solana only, 2% a trade, 1.6% with an invite. <a href="/gmgn-trading-api">GMGN's trading API beside BLIX's</a> covers the bot side.</p>
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Axiom Trade or GMGN")}${RISK}`,
   faq: [
@@ -686,7 +699,10 @@ const fomoBullx = vs({
   lede: `As of ${CHECKED} only one of these is trading. BullX suspended trading on June 1, 2026 (withdrawals open, no relaunch date). Fomo is live: a social trading app with a feed of traders' buys, sells and theses, one-tap trades on Solana, Base and BNB with network fees covered, about 0.5% on spot. BLIX adds the read neither has (an AI rating and a rug check on every coin) and shows Fomo's traders' activity from the chain.`,
   body: `${START("Try BLIX")}
 ${compare(["fomo", "bullx", "blix"])}
-${BLIX_ADDS}
+<h2 id="decides">What decides it</h2>
+<p>Nothing, for now: one of the two is not trading. BullX suspended trading on June 1, 2026 with withdrawals open, so a BullX user's first move is to withdraw, and the second is to decide whether a phone-first social app is what they want next. Fomo covers Solana, Base and BNB with the network fee paid for you and about 0.5% on spot; what it does not cover is Ethereum, Tron and Blast, BullX's other chains, and it has no desktop terminal layout. If the routine you are replacing was a multi-chain terminal, GMGN is the closer fit; if it was "see what people are buying and buy it", Fomo is.</p>
+<h2 id="blix">Fomo's traders without the Fomo app</h2>
+<p>BLIX reads Fomo's leaderboard from the chain: the traders' faces sit on charts and in holder lists, their big buys, sells and theses run in one live feed, and the Top traders board merges them with pump.fun's. It is a desktop-style terminal in the browser, Solana only, 2% a trade (1.6% with an invite), with an AI read on every coin and an API with the account.</p>
 ${F.feed("Fomo's traders, in BLIX's feed")}
 ${COMPARE_MORE}
 ${NOT_AFFILIATED("Fomo or BullX")}${RISK}`,

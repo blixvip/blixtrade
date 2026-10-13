@@ -11,6 +11,8 @@ import fs from "node:fs";
 const db = new DatabaseSync(workerData.file);
 db.exec("PRAGMA busy_timeout = 0; PRAGMA journal_size_limit = 67108864;");
 const limit = workerData.maxWalBytes ?? 256 * 1024 * 1024;
+const startedAt = performance.now();
+const startupGraceMs = workerData.startupGraceMs ?? 120_000;
 const stats = { runs: 0, pages: 0, busy: 0, maxMs: 0, lastMs: 0, walBytes: 0, truncated: 0, lastError: null };
 setInterval(() => {
   const t0 = performance.now();
@@ -22,7 +24,7 @@ setInterval(() => {
     // when that PASSIVE was quick (the disk is keeping up, little left to copy) and never in the first two minutes
     // after a start, when the radar restores its state in big writes and the log it inherited is still being folded
     // (every restart brought a burst of "database is locked" on the main thread, 2026-10-11).
-    const passiveMs = performance.now() - t0, young = performance.now() < 120_000;
+    const passiveMs = performance.now() - t0, young = performance.now() - startedAt < startupGraceMs;
     if (stats.walBytes > limit && !r?.busy && r?.log === r?.checkpointed && passiveMs < 250 && !young) {
       // busy_timeout=0: a reader holding a snapshot makes this return busy; retry next pass.
       const cut = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").all()[0];

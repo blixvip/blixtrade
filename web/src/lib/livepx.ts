@@ -1,39 +1,26 @@
-import { useSyncExternalStore } from "react";
-
-// Every coin's market cap from its latest trade, for the whole app: the stream's "px" events (every coin that
-// traded in the last 100 ms, curve and pool alike), "mig" (Jupiter-priced pools) and the Pulse live rows.
-// Components follow one coin each, so a price move re-renders only the numbers showing that coin.
-const px = new Map<string, number>();
-const subs = new Map<string, Set<() => void>>();
-
-// `weak`: the Pulse rows ("live"), whose market cap is worked out apart from the trade price ("px", "mig") and can
-// sit a few percent off it: a coin getting both flipped between the two ($9.8K, $10.3K, $9.8K...) on every page.
-// A weak figure only counts for a coin no trade price has come for in the last 30 s.
-const strongAt = new Map<string, number>();
-const canonicalAt = new Map<string, number>();
-export function setPx(u: [mint: string, mc: number][], weak = false, canonical = false) {
-  if (px.size > 30_000) { px.clear(); strongAt.clear(); canonicalAt.clear(); }
-  const now = Date.now();
-  for (const [m, mc] of u) {
-    if (!(mc > 0)) continue;
-    if (canonical) canonicalAt.set(m, now);
-    else if (now - (canonicalAt.get(m) ?? 0) < 10_000) continue;
-    if (weak) { if (now - (strongAt.get(m) ?? 0) < 30_000) continue; } else strongAt.set(m, now);
-    if (px.get(m) === mc) continue;
-    px.set(m, mc);
-    subs.get(m)?.forEach((fn) => fn());
-  }
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { createLivePrices } from './live-prices';
+export type { LivePrice } from './live-prices';
+const prices = createLivePrices();
+const replayPrices = createLivePrices();
+export const setPx = prices.set;
+export const setReplayPx = replayPrices.set;
+export const clearReplayPx = replayPrices.clear;
+export function useLivePrice(mint: string | null | undefined) {
+  return useSyncExternalStore(useCallback((fn: () => void) => mint ? prices.subscribe(mint, fn) : () => {}, [mint]), () => mint ? prices.get(mint) : undefined);
 }
-
-const none = () => () => {};
-export function useLiveMc(mint: string | null | undefined): number | undefined {
-  return useSyncExternalStore(
-    mint ? (fn) => {
-      let set = subs.get(mint);
-      if (!set) subs.set(mint, (set = new Set()));
-      set.add(fn);
-      return () => { set!.delete(fn); if (!set!.size) subs.delete(mint); };
-    } : none,
-    () => (mint ? px.get(mint) : undefined),
-  );
+export function useLiveMc(mint: string | null | undefined) {
+  const live = useLivePrice(mint);
+  const replay = useSyncExternalStore(useCallback((fn: () => void) => mint ? replayPrices.subscribe(mint, fn) : () => {}, [mint]), () => mint ? replayPrices.get(mint) : undefined);
+  return replay?.mc ?? live?.mc;
+}
+// Only subscribe to this wallet's coins; notify once per complete price batch.
+export function useLivePrices(mints: string[]) {
+  const key = [...new Set(mints)].sort().join(',');
+  const ids = useMemo(() => key ? key.split(',') : [], [key]);
+  const revision = useSyncExternalStore(useCallback((fn: () => void) => {
+    const stops = ids.map(mint => prices.subscribe(mint, fn));
+    return () => stops.forEach(stop => stop());
+  }, [ids]), () => ids.reduce((max, mint) => Math.max(max, prices.get(mint)?.revision ?? 0), 0));
+  return useMemo(() => Object.fromEntries(ids.map(mint => [mint, prices.get(mint)])), [ids, revision]);
 }

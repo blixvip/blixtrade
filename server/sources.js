@@ -2,6 +2,7 @@
 
 import * as health from "./health.js";
 import { settings } from "./settings.js";
+import { jupiterGet } from "./jupiter.js";
 
 // Simple per-host throttle so we stay under each API's rate limit.
 const gates = new Map();
@@ -103,15 +104,11 @@ function geckoPools(res) {
 }
 // Jupiter's newest tokens (lite-api tokens/v2/recent): the 30 whose first pool was created most recently, on any
 // launchpad or DEX (pump.fun, Meteora DBC and DAMM, Bags, LaunchLab, memefun, plain pools). About 30 seconds of
-// launches at a busy hour, so it is asked every 25 s. Keyless and shared with trade quotes and Blix Vault's swaps
-// (jupdisc.js): one call per 25 s, and 15 s of silence after a 429.
-let jupRecentCooling = 0;
+// launches at a busy hour. Discovery shares the authenticated quota and yields to trade quotes.
 export async function jupRecent() {
-  if (Date.now() < jupRecentCooling) return [];
-  const r = await fetch("https://lite-api.jup.ag/tokens/v2/recent", { headers: { accept: "application/json" }, signal: AbortSignal.timeout(8000) });
-  if (r.status === 429) { jupRecentCooling = Date.now() + 15_000; return []; }   // the list spans under a minute: a longer silence loses coins
-  if (!r.ok) throw new Error(`lite-api.jup.ag ${r.status}`);
-  const list = await r.json();
+  let list;
+  try { list = await jupiterGet('/tokens/v2/recent', { cacheMs: 20_000 }); }
+  catch (e) { if (e.status === 429) return []; throw e; }
   return (Array.isArray(list) ? list : []).filter((t) => t?.id && t.id !== "So11111111111111111111111111111111111111112").map((t) => ({
     mint: t.id, symbol: t.symbol || null, name: t.name || null, image: t.icon || null, creator: t.dev || null,
     launchpad: t.launchpad || null, poolAt: Date.parse(t.firstPool?.createdAt || "") || null, source: "jup-recent",

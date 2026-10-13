@@ -14,10 +14,11 @@ import * as sol from "./solana.js";
 import * as src from "./sources.js";
 import { solPrice } from "./wallets.js";
 import { pumpBoard, PERIODS } from "./pumpboard.js";
-import { heliusFetch, activeUrl } from "./heliuskeys.js";
+import { heliusFetch, activeUrl, keyUrls, noteBytes } from "./heliuskeys.js";
 
 const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TOKEN_2022 = "TokenzQdBNbLqP5VYzRBRT44hA3hGMSiYqt6vHu4x5Xm";
-const FRESH_MS = 45_000, KEEP = 300, TX_READ = 30;
+const FRESH_MS = 45_000, KEEP = 300, TX_READ = 30, ENH_READ = 60;
+const WSOL = "So11111111111111111111111111111111111111112", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCdTS8nfrY1";
 const PUMP = { origin: "https://pump.fun", referer: "https://pump.fun/", "user-agent": "Mozilla/5.0" };
 const now = () => Date.now();
 const pages = new Map();   // wallet -> { data, t, building }
@@ -50,9 +51,7 @@ async function batch(calls) {
   for (let i = 0; http && i < calls.length; i += 6) {
     const part = calls.slice(i, i + 6);
     let got = null;
-    for (let tries = 0; tries < 3 && !got; tries++) {
-      try { got = await heliusBatch(http, part); } catch (e) { if (e.code !== "HELIUS_BUDGET") break; await sleep(800); }
-    }
+    try { got = await heliusBatch(http, part); } catch { /* paced out or down: the radar's own RPC below */ }
     if (!got) break;
     got.forEach((v, k) => { out[i + k] = v; });
     if (i + 6 < calls.length) await sleep(750);
@@ -63,9 +62,27 @@ async function batch(calls) {
 }
 const keyed = () => Boolean(activeUrl());
 
+// The three holdings reads straight to the Helius RPC with the key, outside the day's pacing (a wallet page is
+// someone waiting; three credits), noted against the budget; the paced batch (and the radar's RPC) if that fails.
+async function directBatch(calls) {
+  const url = activeUrl() || keyUrls()[0];
+  if (!url) return null;
+  try {
+    const r = await fetch(url.replace(/^ws/i, "http"), { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify(calls.map(([method, params], id) => ({ jsonrpc: "2.0", id, method, params }))) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!Array.isArray(j)) return null;
+    noteBytes(url, calls.length * 50_000, "metrics");
+    const out = new Array(calls.length).fill(null);
+    for (const x of j) if (x && x.id != null) out[x.id] = x.error ? null : x.result;
+    return out;
+  } catch { return null; }
+}
 async function holdings(address) {
   const opt = { encoding: "jsonParsed", commitment: "confirmed" };
-  const [lamports, a, b] = await batch([["getBalance", [address, { commitment: "confirmed" }]], ["getTokenAccountsByOwner", [address, { programId: TOKEN }, opt]], ["getTokenAccountsByOwner", [address, { programId: TOKEN_2022 }, opt]]]);
+  const reads = [["getBalance", [address, { commitment: "confirmed" }]], ["getTokenAccountsByOwner", [address, { programId: TOKEN }, opt]], ["getTokenAccountsByOwner", [address, { programId: TOKEN_2022 }, opt]]];
+  const [lamports, a, b] = (await directBatch(reads)) || await batch([["getBalance", [address, { commitment: "confirmed" }]], ["getTokenAccountsByOwner", [address, { programId: TOKEN }, opt]], ["getTokenAccountsByOwner", [address, { programId: TOKEN_2022 }, opt]]]);
   const amounts = new Map();
   let wrapped = 0;
   for (const acc of [...(a?.value || []), ...(b?.value || [])]) {
@@ -96,7 +113,59 @@ async function priced(mints) {
   return out;
 }
 
+// The wallet's latest swaps in ONE call: Helius's parsed transactions (type SWAP, newest first), instead of a
+// signature list and a transaction read each (31 calls that crawled through a rate-limited public RPC whenever
+// Helius's pacing had the day's RPC allowance spent: a cold page took 42 s on 2026-10-13). 100 credits a call,
+// noted against the key's budget. null when there is no key or the call fails: the old path then.
+async function enhancedSwaps(address, solUsd) {
+  const url = activeUrl() || keyUrls()[0];
+  let key = null;
+  try { key = url ? new URL(url.replace(/^ws/i, "http")).searchParams.get("api-key") : null; } catch {}
+  if (!key) return null;
+  let list;
+  try {
+    const r = await fetch(`https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${key}&type=SWAP&limit=${ENH_READ}`, { signal: AbortSignal.timeout(12_000) });
+    if (!r.ok) return null;
+    list = await r.json();
+    noteBytes(url, 100 * 50_000, "metrics");   // the call's 100 credits, in the budget's own unit (50 KB a credit)
+  } catch { return null; }
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const x of list) {
+    if (!x || x.transactionError) continue;
+    const s = parseEnhanced(x, address);
+    if (s) out.push({ ...s, sig: x.signature, usd: s.usd ?? s.sol * solUsd });
+  }
+  return { list: out.sort((a, b) => b.t - a.t), oldest: list.length ? (list[list.length - 1].timestamp || 0) * 1000 : null };
+}
+// One parsed transaction as a swap for `wallet` (the same reading as solana.js parseSwaps, from Helius's transfer
+// lists): the one coin the wallet's balance moved in, against SOL (native or wrapped) or a dollar coin the other way.
+function parseEnhanced(x, wallet) {
+  let solMoved = 0, stable = 0;
+  const tokens = new Map();
+  for (const t of x.tokenTransfers || []) {
+    const sign = t.toUserAccount === wallet ? 1 : t.fromUserAccount === wallet ? -1 : 0;
+    if (!sign) continue;
+    const v = (Number(t.tokenAmount) || 0) * sign;
+    if (t.mint === WSOL) solMoved += v; else if (t.mint === USDC || t.mint === USDT) stable += v; else tokens.set(t.mint, (tokens.get(t.mint) || 0) + v);
+  }
+  for (const n of x.nativeTransfers || []) {
+    const sign = n.toUserAccount === wallet ? 1 : n.fromUserAccount === wallet ? -1 : 0;
+    if (sign) solMoved += (sign * (Number(n.amount) || 0)) / 1e9;
+  }
+  const moved = [...tokens].filter(([, d]) => Math.abs(d) > 0);
+  if (moved.length !== 1) return null;
+  const [mint, d] = moved[0], side = d > 0 ? "buy" : "sell";
+  const quoteSol = Math.abs(solMoved) > 0.0005 ? Math.abs(solMoved) : 0, quoteUsd = Math.abs(stable) > 0.01 ? Math.abs(stable) : 0;
+  if (!quoteSol && !quoteUsd) return null;
+  if (side === "buy" && solMoved > 0.0005 && !quoteUsd) return null;
+  if (side === "sell" && solMoved < -0.0005 && !quoteUsd) return null;
+  return { mint, side, tokens: Math.abs(d), sol: quoteSol, usd: quoteUsd || null, t: (x.timestamp || 0) * 1000 };
+}
+
 async function swaps(address, solUsd) {
+  const fast = await enhancedSwaps(address, solUsd);
+  if (fast) return fast;
   const n = keyed() ? TX_READ : 10;
   const [sigs] = await batch([["getSignaturesForAddress", [address, { limit: n }]]]);
   const ok = (sigs || []).filter((s) => !s.err).slice(0, n);
@@ -120,9 +189,25 @@ async function ranks(address) {
   return res;
 }
 
-async function build(address) {
+// `onPartial(page)`: called as soon as the wallet's SOL and holdings are priced (one batched read, well under a
+// second), with the page as far as it goes then (no trades, costs, best trades or ranks yet; `partial: true`), so an
+// opened page shows what the wallet holds at once while the slower reads (its transactions, pump.fun's profile and
+// boards) finish behind it.
+async function build(address, onPartial = null) {
   const solUsd = await solPrice();
-  const [who, held, trades, board] = await Promise.all([pumpProfile(address), holdings(address), swaps(address, solUsd), ranks(address)]);
+  const heldP = holdings(address);
+  const whoP = pumpProfile(address), tradesP = swaps(address, solUsd), boardP = ranks(address);
+  if (onPartial) {
+    heldP.then(async (held) => {
+      const info = await priced([...held.amounts.keys()]);
+      const positions = [...held.amounts].map(([mint, amt]) => { const i = info.get(mint) || {}; return { mint, symbol: i.symbol || null, name: i.name || null, img: i.img || null, amount: amt, price: i.price ?? null, value: i.price != null ? amt * i.price : null, mcap: i.mcap ?? null, change24: i.change24 ?? null, cost: null, entry: null, since: null }; })
+        .sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).slice(0, 200);
+      const tokensUsd = positions.reduce((s, p) => s + (p.value ?? 0), 0);
+      onPartial({ wallet: address, name: null, pic: null, bio: null, x: null, followers: null, following: null, joined: null, solUsd, sol: held.sol, value: (held.sol ?? 0) * solUsd + tokensUsd, tokensUsd,
+        positions, best: [], recent: [], readSince: null, volume: 0, tradesRead: 0, ranks: {}, partial: true });
+    }).catch(() => {});
+  }
+  const [who, held, trades, board] = await Promise.all([whoP, heldP, tradesP, boardP]);
   const mints = [...new Set([...held.amounts.keys(), ...trades.list.map((s) => s.mint)])];
   const info = await priced(mints);
   // What the trades Blix read say about each coin: bought and sold, in dollars and tokens.
@@ -161,9 +246,15 @@ async function build(address) {
 }
 
 function rebuild(address) {
-  const e = pages.get(address) || { data: null, t: 0, building: null };
+  const e = pages.get(address) || { data: null, t: 0, building: null, partial: null };
   pages.set(address, e);
-  if (!e.building) e.building = build(address).then((d) => { e.data = d; e.t = now(); return d; }).finally(() => { e.building = null; });
+  if (!e.building) {
+    // The first build of a page: its holdings are shown the moment they are read (partial), the rest when it is done.
+    let gotPartial;
+    e.partial = e.data ? null : new Promise((res) => { gotPartial = res; });
+    e.building = build(address, e.data ? null : (d) => { if (!e.data) { e.data = d; e.t = now(); } gotPartial?.(d); }).then((d) => { e.data = d; e.t = now(); return d; })
+      .finally(() => { e.building = null; e.partial = null; gotPartial?.(null); });
+  }
   if (pages.size > KEEP) for (const [k, v] of pages) { if (!v.building && k !== address) { pages.delete(k); break; } }
   return e.building;
 }
@@ -176,8 +267,10 @@ export async function walletPage(address, { fresh = false } = {}) {
     if (fresh || now() - e.t > FRESH_MS) rebuild(address).catch(() => {});
     return { ...e.data, read: e.t, updating: Boolean(pages.get(address)?.building) };
   }
-  const d = await rebuild(address);
-  return { ...d, read: pages.get(address)?.t ?? now(), updating: false };
+  // Nothing built yet: answer with the holdings as soon as they are read (the page polls for the rest), else the whole page.
+  const built = rebuild(address), p = pages.get(address);
+  const d = await (p?.partial ? Promise.race([built, p.partial.then((x) => x || built)]) : built);
+  return { ...d, read: pages.get(address)?.t ?? now(), updating: Boolean(pages.get(address)?.building) };
 }
 
 // Warm the pages of the wallets on a board (the top few), so opening one from the leaderboard is instant.

@@ -1,15 +1,17 @@
 import { toast, txToast } from "@/components/ui/toast";
 import { post } from "./api";
 import { loadPaperWallet, paperLocked, USDC_MINT, useTrade, type Cur } from "./mode";
+import { activePreset, feesFor } from "./presets";
 import { loadMe, useMe } from "./ui";
-import { store } from "./utils";
 import { walletAction } from "./wallet-action";
 
 // One buy or sell from any button. The Paper switch decides whose money it is: on, fake SOL from the
 // paper wallet (the caller's own paper request); off, real SOL from the signed-in person's Blix wallet.
 // Either way the transaction is shown from the moment it is sent until it settles.
 // A buy is sized in SOL (`sol`) or in USDC (`usdc`); a sell is paid in SOL or, with `to: "USDC"`, in USDC.
-export interface Order { side: "buy" | "sell"; mint: string; symbol: string; sol?: number; usdc?: number; to?: Cur; pct?: number; slippageBps?: number }
+// Slippage, priority fee and tip not given come from the picked trade preset (lib/presets.ts); `priorityFeeSol`
+// null = the wallet service's live estimate.
+export interface Order { side: "buy" | "sell"; mint: string; symbol: string; sol?: number; usdc?: number; to?: Cur; pct?: number; slippageBps?: number; priorityFeeSol?: number | null; tipSol?: number }
 // What a buy spends, for its toasts: "0.25 SOL" or "25 USDC".
 const spend = (o: Order) => (o.usdc != null ? `${o.usdc} USDC` : `${o.sol} SOL`);
 
@@ -56,8 +58,10 @@ async function execute(o: Order, paper: () => Promise<unknown>, waited = false):
     } else if (o.side === "buy" && me.wallet && (o.sol || 0) > me.wallet.sol) { txToast(`Buy ${name}`, undefined, { mint: o.mint, symbol: o.symbol }).fail("Not enough SOL", `This buy needs ${o.sol} SOL and the wallet has ${me.wallet.sol.toFixed(4)}. Deposit to add more.`); return false; }
     if (!agreed && !confirm("Paper is off: this spends REAL SOL from your Blix wallet.\n\nAfter this, buy and sell buttons trade at once without asking again until you reload.")) return false;
     agreed = true;
-    const slippageBps = o.slippageBps ?? store.get<number | undefined>("trade:slip", undefined);
-    return walletAction(o.side, { mint: o.mint, ...(o.side === "buy" ? (o.usdc != null ? { usdc: o.usdc } : { sol: o.sol }) : { pct: o.pct, ...(o.to === "USDC" ? { to: "USDC" } : {}) }), slippageBps }, {
+    const preset = activePreset(), fees = feesFor(preset);
+    const slippageBps = o.slippageBps ?? preset.slip;
+    const priorityFeeSol = o.priorityFeeSol !== undefined ? o.priorityFeeSol : fees.priorityFeeSol, tipSol = o.tipSol ?? fees.tipSol;
+    return walletAction(o.side, { mint: o.mint, ...(o.side === "buy" ? (o.usdc != null ? { usdc: o.usdc } : { sol: o.sol }) : { pct: o.pct, ...(o.to === "USDC" ? { to: "USDC" } : {}) }), slippageBps, ...(priorityFeeSol != null ? { priorityFeeSol } : {}), tipSol }, {
       pending: `${o.side === "buy" ? "Buying" : "Selling"} ${name}`,
       confirmed: `${o.side === "buy" ? "Bought" : "Sold"} ${name}`,
       failed: `${o.side === "buy" ? "Buy" : "Sell"} failed`, detail: size, mint: o.mint, symbol: o.symbol,

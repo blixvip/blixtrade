@@ -8,22 +8,43 @@
 import { getJson } from "./sources.js";
 import * as health from "./health.js";
 import { settings } from "./settings.js";
+import { DATA } from "./db.js";
+import fs from "node:fs";
+import path from "node:path";
 
 // A CoinGecko Demo key (settings.coingeckoKey, free: 100 calls a minute, 10,000 credits a month) moves the pages'
 // calls to CoinGecko's on-chain API, which serves the same GeckoTerminal paths from its own allowance, so the
-// chart's history no longer waits behind discovery or GeckoTerminal's ~6-a-minute cap on this address. At most
-// KEYED_DAY calls a day (about 300 keeps the month inside 10,000); past that, the keyless way for the rest of the day.
-const KEYED_DAY = 300;
-const keyed = { day: "", n: 0 };
-export const keyedStats = () => ({ on: Boolean(String(settings.coingeckoKey || "").trim()), today: keyed.day === new Date().toISOString().slice(0, 10) ? keyed.n : 0, cap: KEYED_DAY });
-function keyedUrl(url) {
+// chart's history no longer waits behind discovery or GeckoTerminal's ~6-a-minute cap on this address.
+// Only charts ("high") and pool trades ("normal") use it: pictures ("low", tokens/multi every 30 s) never do;
+// they were the bulk of the keyed calls. The count lives in data/coingecko-usage.json, so a restart does not
+// start it over (it did: 49 restarts on 2026-10-11 spent most of October's credits by the 12th). A day gets
+// at most KEYED_DAY calls and no more than the month's remaining credits spread over its remaining days, so
+// the key stops short of CoinGecko's hard cap instead of hitting it; past the day's share, the keyless way.
+const MONTH_CREDITS = 10_000, MONTH_KEEP = 9_500, KEYED_DAY = 300;
+const LEDGER = path.join(DATA, "coingecko-usage.json");
+const ledger = { month: "", used: 0, day: "", n: 0 };
+try { Object.assign(ledger, JSON.parse(fs.readFileSync(LEDGER, "utf8"))); } catch {}
+const utcDay = () => new Date().toISOString().slice(0, 10);
+function roll() {
+  const day = utcDay(), month = day.slice(0, 7);
+  if (ledger.month !== month) { ledger.month = month; ledger.used = 0; }
+  if (ledger.day !== day) { ledger.day = day; ledger.n = 0; }
+}
+// Today's share of the key: KEYED_DAY, or less when the month's remaining credits would not cover that every day.
+function dayCap() {
+  roll();
+  const d = new Date();
+  const daysLeft = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate() - d.getUTCDate() + 1;
+  return Math.max(0, Math.min(KEYED_DAY, Math.floor((MONTH_KEEP - ledger.used) / daysLeft)));
+}
+function save() { try { fs.writeFileSync(LEDGER, JSON.stringify(ledger)); } catch {} }
+export const keyedStats = () => { roll(); return { on: Boolean(String(settings.coingeckoKey || "").trim()), today: ledger.n, cap: dayCap(), month: ledger.used, monthCredits: MONTH_CREDITS }; };
+function keyedUrl(url, rank) {
   const key = String(settings.coingeckoKey || "").trim();
-  if (!key || !url.startsWith("https://api.geckoterminal.com/api/v2/")) return null;
-  const day = new Date().toISOString().slice(0, 10);
-  if (keyed.day !== day) { keyed.day = day; keyed.n = 0; }
-  if (keyed.n >= KEYED_DAY) return null;
+  if (!key || rank === "low" || !url.startsWith("https://api.geckoterminal.com/api/v2/")) return null;
+  if (ledger.n >= dayCap()) return null;
   if (Date.now() - ((health.part("coingecko") || {}).lastFail || 0) < QUIET) return null;
-  keyed.n++;
+  ledger.n++; ledger.used++; save();
   return { url: url.replace("https://api.geckoterminal.com/api/v2/", "https://api.coingecko.com/api/v3/onchain/"), key };
 }
 
@@ -42,7 +63,7 @@ export function gtReady(rank = "normal") {
 }
 
 export async function gtGet(url, { timeout = 10_000, rank = "normal", keyed = true } = {}) {
-  const k = keyed ? keyedUrl(url) : null;
+  const k = keyed ? keyedUrl(url, rank) : null;
   if (k) {
     gtStats.calls++; gtStats.keyed = (gtStats.keyed || 0) + 1;
     try { return await getJson(k.url, { timeout, lane: "keyed", headers: { "x-cg-demo-api-key": k.key } }); }

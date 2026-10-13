@@ -1,4 +1,5 @@
 import { heliusFetch as fetch } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // Holders: a live ledger for every pump.fun coin, built from the trade feed and nothing else.
 // Every TradeEvent says who traded, how many tokens and in which block, so for a coin whose first
 // trade the radar saw it knows, this second: who holds what (holders, top-10 share), what the dev
@@ -251,7 +252,7 @@ async function seedOne() {
   let pick = null;
   for (const [m, at] of wantSeed) {
     const b = books.get(m);
-    if (!b || t - at > SEED_WANT_MS || (!b.reseed && (b.seeded || !isPartial(b))) || (b.seedFail || 0) >= 2 || t < (b.seedAfter || 0)) { wantSeed.delete(m); continue; }
+    if (!b || !canEnrich(m) || t - at > SEED_WANT_MS || (!b.reseed && (b.seeded || !isPartial(b))) || (b.seedFail || 0) >= 2 || t < (b.seedAfter || 0)) { wantSeed.delete(m); continue; }
     // An open coin page (reseedWanted) goes before the board: its holders are being looked at right now.
     if (!pick || (Boolean(b.reseed) !== Boolean(pick.reseed) ? b.reseed : b.trades > pick.trades)) pick = b;
   }

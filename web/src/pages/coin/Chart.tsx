@@ -18,7 +18,7 @@ import { useMe } from "@/lib/ui";
 import { api, apiAged } from "@/lib/api";
 import { usdP } from "@/lib/coin";
 import { earlyBars, onLevel } from "@/lib/jupEarly";
-import { clearChartMc, setChartMc } from "@/lib/chartMc";
+import { clearChartMc, setChartMc, markChartPrice } from "@/lib/chartMc";
 import { onCoinTrade, onFomoBar, pushCoinMc, usePulse } from "@/lib/pulse";
 import { pickStart, replaying, replayNow, useReplay } from "@/lib/replay";
 import { CHART_BG, geckoRes, mountGecko, unmountGecko } from "@/lib/gecko";
@@ -518,6 +518,7 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
         s.current.byTime?.set(x.time, x);
         put(x);
         last = x; liveAt = Date.now();
+        markChartPrice(mint, x.close, liveAt);
         pushCoinMc(mint, x.close);   // the header's market cap follows the bar
         if (box.current) { box.current.dataset.last = String(x.time); box.current.dataset.close = String(x.close); box.current.dataset.live = "1"; }
         setMeta((m) => (m.live && m.last?.time === x.time && m.last.close === x.close ? m : { ...m, tf, source: "Fomo", live: true, empty: false, last: x }));
@@ -711,6 +712,7 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
           : { ...last, high: Math.max(last.high, mc), low: Math.min(last.low, mc), close: mc, value: (last.value || 0) + (v || 0) };
         if (time === last.time && rows.length && rows[rows.length - 1].time === time) rows[rows.length - 1] = row; else rows.push(row);
         put(row); s.current.byTime?.set(row.time, row); last = row; liveAt = Date.now();
+        markChartPrice(mint, mc, ms);
         pushCoinMc(mint, row.close);
         if (box.current) Object.assign(box.current.dataset, { last: String(row.time), close: String(row.close), pushed: String(Date.now()), live: "1" });
         metaRow = row;
@@ -884,6 +886,7 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
         last = { time, open: last.close, high: Math.max(last.close, mc), low: Math.min(last.close, mc), close: mc, value: v };
       } else last = { ...last, high: Math.max(last.high, mc), low: Math.min(last.low, mc), close: mc, value: (last.value || 0) + v };
       put(last);
+      markChartPrice(mint, mc, ms);
       s.current.byTime?.set(last.time, last);
       if (box.current) { box.current.dataset.last = String(last.time); box.current.dataset.close = String(last.close); box.current.dataset.pushed = String(Date.now()); }
       // The figures over the chart follow at most once a frame.

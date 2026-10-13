@@ -1,4 +1,5 @@
 import { heliusFetch as fetch } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // The developer's share of a coin, from the chain, for coins where neither Jupiter's audit nor RugCheck says it
 // (Jupiter names the dev wallet for most coins but leaves devBalancePercentage out for some). One
 // getTokenAccountsByOwner on the public RPC per coin, at most one every 3 s, kept 5 minutes; asked only for
@@ -17,7 +18,7 @@ const now = () => Date.now();
 export function devShare(mint, wallet, supply) {
   const c = cache.get(mint);
   if (c && now() - c.t < KEEP) return c.pct;
-  if (wallet && supply > 0 && !queue.has(mint)) { queue.set(mint, { wallet, supply }); if (queue.size > 200) queue.delete(queue.keys().next().value); }
+  if (canEnrich(mint) && wallet && supply > 0 && !queue.has(mint)) { queue.set(mint, { wallet, supply }); if (queue.size > 200) queue.delete(queue.keys().next().value); }
   return c?.pct ?? null;
 }
 
@@ -25,6 +26,7 @@ async function tick() {
   if (busy || now() - last < GAP || !queue.size) return;
   const [mint, { wallet, supply }] = queue.entries().next().value;
   queue.delete(mint);
+  if (!canEnrich(mint)) return;
   busy = true; last = now();
   try {
     const url = String(settings.rpcUrl || "").trim() || PUBLIC;
@@ -68,14 +70,14 @@ export const quickStats = { reads: 0, errors: 0, lastError: null };
 export function quickHolders(mint) {
   const c = qh.get(mint);
   if (c && now() - c.t < 60_000) return c.fail ? null : c;
-  qhWant.set(mint, now()); if (qhWant.size > 300) qhWant.delete(qhWant.keys().next().value);
+  if (canEnrich(mint)) qhWant.set(mint, now()); if (qhWant.size > 300) qhWant.delete(qhWant.keys().next().value);
   return c && !c.fail ? c : null;
 }
 async function qhTick() {
   if (qhBusy || now() - qhLast < 2000 || !qhWant.size) return;
   const [mint, at] = qhWant.entries().next().value;
   qhWant.delete(mint);
-  if (now() - at > 30_000) return;
+  if (now() - at > 30_000 || !canEnrich(mint)) return;
   qhBusy = true; qhLast = now();
   const url = String(settings.rpcUrl || "").trim() || PUBLIC;
   const rpc = async (method, params) => { const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(15_000), body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }); const j = await r.json(); if (j.error) throw new Error(j.error.message || "RPC error"); return j.result; };

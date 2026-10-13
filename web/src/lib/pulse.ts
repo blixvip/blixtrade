@@ -360,6 +360,17 @@ function applyTrades(u: (CoinTrade | [...CoinTrade, number | null])[]) {
 // /api/coin/<mint>/trades gives (wallet, size, market cap, tags, tx), plus the coin's mint.
 export type CoinRow = Trade & { mint: string };
 const rowFns = new Map<string, Set<(rows: CoinRow[]) => void>>();
+const flowFns = new Map<string, Set<(value: import('./coin-numbers').LiveCoinFlow) => void>>();
+export function useCoinFlow(mint: string) {
+  const [value, setValue] = useState<import('./coin-numbers').LiveCoinFlow | null>(null);
+  useEffect(() => {
+    let set = flowFns.get(mint); if (!set) flowFns.set(mint, (set = new Set()));
+    const fn = (next: import('./coin-numbers').LiveCoinFlow) => setValue(old => old?.mint === mint && old.t > next.t ? old : next);
+    set.add(fn);
+    return () => { set!.delete(fn); if (!set!.size) flowFns.delete(mint); };
+  }, [mint]);
+  return value?.mint === mint ? value : null;
+}
 export function onCoinRows(mint: string, fn: (rows: CoinRow[]) => void) {
   let set = rowFns.get(mint);
   if (!set) rowFns.set(mint, (set = new Set()));
@@ -452,6 +463,9 @@ export function startPulse() {
     on('metrics', (d) => receiveMetrics(d, replayed));
     on("trade", (d) => applyTrades(d.u));
     on("ctrade", (d) => applyRows(d.u));
+    on('cflow', d => {
+      if (!replayed(d.mint) && Number.isFinite(d.t) && typeof d.complete === 'boolean' && d.flow && ['buys', 'sells'].every(k => Number.isInteger(d.flow[k]) && d.flow[k] >= 0)) flowFns.get(d.mint)?.forEach(fn => fn(d));
+    });
     on("cholders", (d) => { if (!replayed(d.mint)) holderFns.get(d.mint)?.forEach((fn) => fn(d)); });
     on("fbar", (d) => fbarFns.get(`${d.mint}:${d.res}`)?.forEach((fn) => fn(d)));
     on("launch", applyLaunch);

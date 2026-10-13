@@ -34,7 +34,7 @@ Every serious memecoin terminal on Solana is closed source, hosted by someone el
 - **Safety first.** RugCheck on every coin, dev-sold and liquidity-pulled warnings, serial-launcher detection, bundle and sniper tagging in the holder ledger. A coin that fails safety never gets a positive alert.
 - **Trade where you already trade.** Buy on Fomo deep links on every coin, paper fills at real Jupiter quotes with slippage, DexScreener / pump.fun / RugCheck / X one click away.
 
-> Blix watches, grades, alerts and paper-trades. **It never signs a transaction and never touches your keys.**
+> BLIX supports research and simulated paper trades, plus separate hosted account workflows for live trading and pump.fun launches. **Live trades and launches spend real SOL.** The published MCP tools expose data and paper trading, not live account execution. Local-install instructions and hosted-account permissions differ.
 
 ## Screenshots
 
@@ -75,26 +75,9 @@ Every serious memecoin terminal on Solana is closed source, hosted by someone el
 
 ## How it compares
 
-Feature check as of October 2026. "Hosted" terminals change fast; corrections welcome in an issue.
+BLIX focuses on Solana research, local developer access and an inspectable implementation. The hosted app also has separate account-backed trading and token launches; the MCP tools remain limited to data and paper trading.
 
-| | **Blix** | Axiom | GMGN | Photon | BullX |
-|---|:--:|:--:|:--:|:--:|:--:|
-| Open source | **✓ MIT** | – | – | – | – |
-| Runs on your own machine, your data stays local | **✓** | – | – | – | – |
-| Trading fee | **0 %** (paper desk; executes via Fomo) | ~1 % | ~1 % | ~1 % | ~1 % |
-| Pulse-style multi-column new / bonding / migrated | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Live pump.fun launch feed, sub-second | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Holder ledger with dev / sniper / bundle tags | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Candles from real trades, 5s resolution | ✓ | ✓ | ✓ | ✓ | ✓ |
-| AI grade + written thesis on every coin | **✓** | – | partial | – | – |
-| Narrative burst detection with live X lookup | **✓** | – | – | – | – |
-| Public, audited track record of its own calls | **✓** | – | – | – | – |
-| Smart-money discovery from chain, no paid tier | **✓** | paid | paid | – | paid |
-| Real quotes (Jupiter) in the trade panel | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Discord + Telegram alerts you fully control | **✓** | partial | ✓ | – | ✓ |
-| REST + SSE API for your own bots | **✓** | – | partial | – | – |
-| MCP server for AI agents (Claude, Cursor, Codex) | **✓** | – | partial | – | – |
-| Hackable: add a column, a filter, a model | **✓** | – | – | – | – |
+For current, sourced workflow comparisons, see [Axiom](https://blixvip.com/compare/axiom-alternative), [Fomo](https://blixvip.com/compare/fomo-alternative), and [Nio](https://blixvip.com/compare/nio-trade-alternative). These are BLIX-authored comparisons, not independent performance benchmarks. Fees and third-party developer access must be checked with each provider.
 
 ## Quick start
 

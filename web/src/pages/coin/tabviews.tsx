@@ -38,7 +38,7 @@ export function WalletCell({ x, pool, face }: { x: Holder; pool?: string | null;
       <span className="flex min-w-0 items-center gap-2">
         <span className="grid size-[22px] shrink-0 place-items-center rounded-full bg-info/15 text-info"><Icon.curve className="size-3.5" /></span>
         <b className="text-md font-semibold text-ink-2">{pool}</b>
-        <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
+        <a href={`#/trader/${x.wallet}`} title={`${x.wallet} · open this wallet's page`} className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
       </span>
     );
   }
@@ -54,8 +54,8 @@ export function WalletCell({ x, pool, face }: { x: Holder; pool?: string | null;
             <SiteLogo site={face.src === "fomo" ? "fomo" : "pumpfun"} className="absolute -right-1 -bottom-1 size-2.5 rounded-full ring-1 ring-paper-2" />
           </span>
         </Tip>
-        {face.src === "fomo" ? <a href={`#/trader/${encodeURIComponent(face.name.replace(/^@/, ""))}`} className="min-w-0 hover:[&_b]:text-accent">{name}</a> : name}
-        <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={x.wallet} className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
+        {face.src === "fomo" ? <a href={`#/trader/${encodeURIComponent(face.name.replace(/^@/, ""))}`} className="min-w-0 hover:[&_b]:text-accent">{name}</a> : <a href={`#/trader/${x.wallet}`} className="min-w-0 hover:[&_b]:text-accent">{name}</a>}
+        <a href={`#/trader/${x.wallet}`} title={`${x.wallet} · open this wallet's page`} className="font-outlier text-xs text-muted hover:text-accent">{shortAddr(x.wallet)}</a>
         <button onClick={() => copy(x.wallet)} aria-label="Copy address" className="text-muted opacity-0 transition-opacity group-hover/w:opacity-100 hover:text-ink focus-visible:opacity-100"><Icon.copy className="size-3.5" /></button>
         <Tags x={{ ...x, top10: false }} />
       </span>
@@ -64,7 +64,7 @@ export function WalletCell({ x, pool, face }: { x: Holder; pool?: string | null;
   return (
     <span className="group/w flex min-w-0 items-center gap-2">
       <Identicon addr={x.wallet} />
-      <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={x.wallet} className="font-outlier text-xs text-ink hover:text-accent">{shortAddr(x.wallet)}</a>
+      <a href={`#/trader/${x.wallet}`} title={`${x.wallet} · open this wallet's page: what it holds, its trades and PnL`} className="font-outlier text-xs text-ink hover:text-accent">{shortAddr(x.wallet)}</a>
       <button onClick={() => copy(x.wallet)} aria-label="Copy address" className="text-muted opacity-0 transition-opacity group-hover/w:opacity-100 hover:text-ink focus-visible:opacity-100"><Icon.copy className="size-3.5" /></button>
       <Tags x={{ ...x, top10: false }} />
     </span>

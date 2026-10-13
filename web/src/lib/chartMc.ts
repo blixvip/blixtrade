@@ -3,8 +3,13 @@
 // Fomo's). The coin's header shows exactly this while the chart is open (the user, 2026-10-10: "the price on the
 // chart should be one-to-one to the price displayed, never different"), and its price is this over its supply.
 import { create } from "zustand";
+import { setPx } from './livepx';
 
 export const useChartMc = create<Record<string, number>>(() => ({}));
+// Only accepted live observations refresh position values; redrawing an old candle does not.
+export function markChartPrice(mint: string, mc: number, t: number) {
+  setPx([[mint, mc]], false, true, t);
+}
 
 export function setChartMc(mint: string, mc: number) {
   if (!(mc > 0) || !Number.isFinite(mc) || useChartMc.getState()[mint] === mc) return;

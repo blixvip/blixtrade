@@ -2,18 +2,19 @@
 // Kept light so the rail and main.tsx can open the floating window without pulling the tracker's code in.
 import { create } from "zustand";
 import { store } from "@/lib/utils";
+import type { TrackerDockSide } from "@/lib/tracker-window";
 
 export type Tab = "manager" | "trades" | "transfers" | "monitor" | "kols";
-export const TABS: [Tab, string][] = [["manager", "Manager"], ["trades", "Live Trades"], ["transfers", "Transfers"], ["monitor", "Monitor"], ["kols", "KOLs"]];
+export const TABS: [Tab, string][] = [["manager", "Manager"], ["trades", "Live Trades"], ["transfers", "Transfers"], ["monitor", "Monitor"], ["kols", "Find traders"]];
 
-export interface TWallet { address: string; name: string; emoji: string | null; color: string | null; grp: number; alerts: number; added: number; last_trade: number | null; n24: number }
-interface Named { name: string; emoji: string | null; color: string | null; grp: number }
+export interface TWallet { address: string; name: string; emoji: string | null; color: string | null; grp: number; alerts: number; added: number; last_trade: number | null; n24: number; pic?: string | null }
+interface Named { name: string; emoji: string | null; color: string | null; grp: number; pic?: string | null }
 interface Coin { symbol: string | null; tname: string | null; mcap: number | null; born: number | null }
 export interface TTrade extends Named, Coin { id: number; wallet: string; sig: string; mint: string; side: "buy" | "sell"; sol: number | null; usd: number | null; tokens: number | null; mc_usd: number | null; t: number; src: string }
 export interface TTransfer extends Named, Coin { id: number; wallet: string; sig: string; dir: "in" | "out"; mint: string | null; amount: number; usd: number | null; other: string | null; t: number }
 export interface Overview { wallets: TWallet[]; feed: TTrade[]; transfers: TTransfer[]; status: { stream: boolean; streamWallets: number; backlog: number; live: boolean; lastLive: number; lastChain: number; fast?: boolean; fastWallets?: number; fastReads?: number; dropped?: number }; solUsd: number; groups: number[]; colors: string[]; max: number }
-export interface Position { mint: string; symbol: string | null; held: number; value: number | null; unrealized: number | null; mcap: number | null; last: number }
-export interface MonitorWallet extends TWallet { balance: number | null; pnl: { realized: number; unrealized: number; openValue: number; winRate: number | null; closed: number; open: number; trades: number; positions: Position[] } }
+export interface Position { mint: string; symbol: string | null; held: number; value: number | null; unrealized: number | null; mcap: number | null; last: number; supply?: number | null; priceAt?: number | null; exitable?: boolean }
+export interface MonitorWallet extends TWallet { balance: number | null; pnl: { realized: number; unrealized: number; openValue: number; winRate: number | null; closed: number; open: number; trades: number; positions: Position[]; valuationPositions?: Position[] } }
 export interface Kol { rank: number; wallet: string; name: string | null; pic: string | null; x: string | null; pnl: number | null; pnlSol: number | null; pnlPct: number | null; positions: number | null; tracked: boolean }
 
 export const EMOJIS = ["🐸", "🦍", "👻", "🐋", "🤖", "🧙", "🐂", "🐻", "🚀", "💎", "🔥", "👑", "🦊", "🐍", "🧠", "💰", "🎯", "🍕", "🐼", "👀", "⚡", "🍀", "🎲", "🦈"];
@@ -22,12 +23,18 @@ export const nameStyle = (color: string | null | undefined) => (color && COLOR_H
 
 // The floating window: open or not, where it sits, and which tab it is on. Remembered in this browser.
 export interface Box { x: number; y: number; w: number; h: number }
-export const useTracker = create<{ float: boolean; tab: Tab; grp: number | null; sol: number }>(() => ({
+export const useTracker = create<{ float: boolean; docked: boolean; dockSide: TrackerDockSide; dockWidth: number; tab: Tab; grp: number | null; sol: number }>(() => ({
+  dockSide: store.get<string>("wtrack:dock-side", "right") === "left" ? "left" : "right",
+  docked: store.get<boolean>("wtrack:docked", false), dockWidth: store.get<number>("wtrack:dock-width", 440),
   float: store.get<boolean>("wtrack:float", false), tab: store.get<Tab>("wtrack:tab", "trades"), grp: null, sol: store.get<number>("wtrack:sol", 0.25),
 }));
 export const setTab = (tab: Tab) => { useTracker.setState({ tab }); store.set("wtrack:tab", tab); };
 export const setQuickSol = (sol: number) => { useTracker.setState({ sol }); store.set("wtrack:sol", sol); };
 export const openTrackerWindow = () => { useTracker.setState({ float: true }); store.set("wtrack:float", true); };
 export const closeTrackerWindow = () => { useTracker.setState({ float: false }); store.set("wtrack:float", false); };
+export const setTrackerDocked = (docked: boolean, dockSide = useTracker.getState().dockSide) => {
+  useTracker.setState({ docked, dockSide }); store.set("wtrack:docked", docked); store.set("wtrack:dock-side", dockSide);
+};
+export const setTrackerDockWidth = (dockWidth: number) => { useTracker.setState({ dockWidth }); store.set("wtrack:dock-width", dockWidth); };
 export const loadTracker = () => import("@/components/WalletTracker");
 export const warmTracker = () => { void loadTracker().catch(() => {}); };

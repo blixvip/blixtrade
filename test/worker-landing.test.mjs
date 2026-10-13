@@ -26,7 +26,7 @@ test('landing serves through the real Worker, with validators and CSP that allow
     const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))).toString('base64');
     assert.ok(csp.includes(`'sha256-${hash}'`), `inline script not allowed by CSP: ${body.slice(0, 60)}`);
   }
-  assert.equal(response.headers.get('cache-control'), 'no-cache');
+  assert.equal(response.headers.get('cache-control'), 'public, max-age=0, s-maxage=600, stale-while-revalidate=86400');
   const etag = response.headers.get('etag');
   assert.ok(etag);
   const cached = await worker.fetch(new Request('https://blixvip.com/', { headers: { 'if-none-match': etag } }), env, ctx);

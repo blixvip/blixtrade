@@ -8,7 +8,8 @@ const parse = (s, d = null) => { if (s && typeof s === "object") return s; try {
 // the market. Everywhere else, a pool with almost nothing in it means the coin cannot really be sold.
 export const CURVE_DEX = new Set(["pumpfun", "meteoradbc", "bags", "launchlab", "moonshot", "boop", "heaven"]);
 export const onCurve = (t) => CURVE_DEX.has(t?.dex);
-export const illiquid = (t, floor = 1000) => Boolean(t?.pair) && !onCurve(t) && (t.liquidity || 0) < floor;
+const knownLiquidity = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+export const illiquid = (t, floor = 1000) => Boolean(t?.pair) && !onCurve(t) && knownLiquidity(t.liquidity) && t.liquidity < floor;
 
 // Is one market reading believable? Returns null when it is, else a short reason.
 // An emptied pool keeps quoting a "price" that nobody can trade at (one coin showed $3 trillion on $13 of
@@ -21,7 +22,8 @@ export function readingProblem({ dex, liquidity, mcap, asset }, floor = 1000) {
   // No traded coin is worth a few cents in total, or more than the largest companies on earth: a feed glitch.
   if (mcap > (big ? 5e12 : 2e11) || mcap < 100) return "implausible market cap";
   if (CURVE_DEX.has(dex)) return null;
-  const liq = liquidity || 0;
+  if (!knownLiquidity(liquidity)) return null;
+  const liq = liquidity;
   if (liq < floor) return `pool has only $${liq < 10 ? liq.toFixed(2) : Math.round(liq).toLocaleString()} of liquidity`;
   // An emptied pool holds a few thousand dollars at most; one with $100K+ in it is a real market, just not its only one.
   if (mcap / liq > 2000 && !big && liq < 100_000) return "market cap is not backed by the pool";
@@ -70,9 +72,9 @@ export function safetyVerdict(t, { minSafety = 60, minExitLiq = 1000, devCount =
   const reasons = [];
   if (!t) return { ok: false, unknown: true, reasons: ["unknown coin"] };
   const s = parse(t.safety);
-  if (t.status === "dead") reasons.push("the coin is dead (no real trading left)");
+  if (t.status === "dead") reasons.push("recent trading data is unavailable; activity needs rechecking");
   if (t.quarantine) reasons.push(`price data is unreliable: ${t.quarantine}`);
-  else if (illiquid(t, minExitLiq)) reasons.push(`only $${Math.round(t.liquidity || 0).toLocaleString()} of liquidity, effectively unsellable`);
+  else if (illiquid(t, minExitLiq)) reasons.push(`reported pool liquidity $${Math.round(t.liquidity).toLocaleString()}, below your minimum of $${minExitLiq.toLocaleString()}`);
   if (t.asset_class && t.asset_class !== "meme") reasons.push(`not a memecoin (${ASSET_LABEL[t.asset_class] || t.asset_class})`);
   if (!s) reasons.push("safety has not been checked yet");
   else {

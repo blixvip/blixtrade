@@ -131,7 +131,10 @@ if (!NO_WEB && fs.existsSync(path.join(dist, "index.html"))) {
   say(`Shipping web/dist (${fresh.length} new asset files, then index.html)…`);
   // The archive is named relative to its folder: Windows tar reads "C:" in a path as a remote host.
   const tgz = path.join(os.tmpdir(), `blix-dist-${process.pid}.tgz`);
-  execFileSync("tar", ["czf", path.basename(tgz), "-C", dist, ...rest, ...fresh], { cwd: os.tmpdir() });
+  // The names go in a list file: thousands of asset files on the command line overflowed it (ENAMETOOLONG, 2026-10-11).
+  const listFile = path.join(os.tmpdir(), "blix-dist-files.txt");
+  fs.writeFileSync(listFile, [...rest, ...fresh].join(String.fromCharCode(10)) + String.fromCharCode(10));
+  execFileSync("tar", ["czf", path.basename(tgz), "-C", dist, "-T", listFile], { cwd: os.tmpdir() });
   ssh(`mkdir -p /tmp/blix-dist && cat > /tmp/blix-dist/d.tgz && cd ${REMOTE}/web/dist && tar xzf /tmp/blix-dist/d.tgz`, fs.readFileSync(tgz));
   // The server checks every file the new page names before the page goes in; one missing and the old page stays.
   const check = named.map((f) => `[ -s ${f} ] || { echo "missing ${f}"; bad=1; }`).join("; ");

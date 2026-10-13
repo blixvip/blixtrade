@@ -40,6 +40,7 @@ export const DEFAULTS = {
   chartWsUrl2: "",          // a second Helius key (another project) the chart stream moves to when the first has used its day or month (heliuskeys.js)
   heliusProjectId2: "",     // the second key's project ID
   jupiterKey: "",           // optional: increases the shared quote/price request allowance
+  jupiterRequestsPerMinute: 24, // per process; split the organisation's allowance across live and development copies
   autoFollowSmart: true,     // automatically watch the best wallets the radar discovers
   maxSmartWallets: 20,
   walletMinSol: 0.5,         // smallest buy by an auto-followed wallet worth an alert

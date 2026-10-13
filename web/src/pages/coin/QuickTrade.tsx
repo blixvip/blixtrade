@@ -1,18 +1,19 @@
 // Axiom's instant trade window: a small panel floating over the page with buy presets in SOL and sell presets
 // in percent of the position, each one click. There is no quote step: it fills at the live quote, with fake
 // or real SOL by the top bar's Paper switch, through lib/trade.ts like every other buy and sell button.
-// Drag it by its title bar. Whether it is open, where it sits and its presets are kept in this browser.
+// Drag it by its title bar. Whether it is open and where it sits are kept in this browser; the presets (P1 / P2 / P3:
+// sizes, slippage, priority fee, bribe, MEV protection) live in lib/presets.ts, on the account too when signed in.
 // The look (the user, 2026-10-12: "proper, strong, like a real trading terminal"): 6px corners, hairlines, uppercase
 // micro-labels, tabular figures, tiles outlined in their side's colour that fill solid under the pointer. No pills.
 // The floating copy has a grip in its corner that scales the whole panel.
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from "react";
-import { create } from "zustand";
 import { Tip } from "@/components/ui/tooltip";
 import { SolanaLogo } from "@/components/brand";
 import { post } from "@/lib/api";
 import { tokN, usdK } from "@/lib/coin";
 import { setCur, setPaper, useCur, USDC_MINT, USDC_SIZES, useTrade } from "@/lib/mode";
 import { openExchange } from "@/lib/modals";
+import { feesFor, fieldOk, MEV_TIP, pickPreset, PRIO_MAX, presetTxt, savePreset, SELLS, slipTxt, solTxt, TIP_MAX, usePresets } from "@/lib/presets";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
@@ -25,31 +26,10 @@ import { MigratingNote, MIGRATING_TIP } from "@/components/Migrating";
 
 import { useQuick, toggleQuick } from "@/lib/quick";
 
-const SELLS = [25, 50, 75, 100];
 type At = { x: number; y: number };
-// Axiom's P1 / P2 / P3: three sets of presets, one picked at a time, each with its own buy sizes, sell shares and
-// slippage. Empty buys: the paper desk's sizes (below). The first set starts from what the panel kept before.
-type Preset = { buys: number[]; buysUsdc?: number[]; sells: number[]; slip: number };   // buysUsdc: the buy sizes while trading in USDC
-const SLIP_DEFAULT = 300;
 const SCALE_MIN = 0.7, SCALE_MAX = 1.8;   // how small and how big the floating panel's grip lets it go
-const loadPresets = (): Preset[] => {
-  const kept = store.get<Preset[] | null>("qt:presets", null);
-  if (Array.isArray(kept) && kept.length === 3) return kept;
-  const first: Preset = { buys: store.get("qt:buys", []), sells: store.get("qt:sells", SELLS), slip: store.get("trade:slip", SLIP_DEFAULT) };
-  return [first, { buys: [], sells: SELLS, slip: 1000 }, { buys: [], sells: SELLS, slip: 2500 }];
-};
-const slipTxt = (bps: number) => `${+(bps / 100).toFixed(2)}%`;
-// One store for every copy of the panel (the docked one stays mounted while the floating one is out), so an edit
-// or a pick in one is the same in the other.
-const usePresets = create<{ list: Preset[]; pi: number }>(() => ({ list: loadPresets(), pi: Math.min(2, Math.max(0, store.get("qt:preset", 0))) }));
-const pickPreset = (pi: number) => { store.set("qt:preset", pi); usePresets.setState({ pi }); };
-const savePreset = (next: Preset) => { const list = usePresets.getState().list.map((p, i) => (i === usePresets.getState().pi ? next : p)); store.set("qt:presets", list); usePresets.setState({ list }); };
-// A preset field's text is good: a buy above 0 SOL (at most 1000), a sell 1-100 %, slippage 0.1-50 %.
-const fieldOk = (i: number, text: string) => {
-  const v = Number(text);
-  if (!text.trim() || !isFinite(v)) return false;
-  return i < 4 ? v > 0 && v <= 100_000 : i < 8 ? v >= 1 && v <= 100 : v >= 0.1 && v <= 50;   // a USDC preset can run to five figures
-};
+// The eleven preset fields while editing: 4 buys, 4 sells, slippage %, priority fee SOL (or "auto"), bribe SOL
+// (MEV protection is a switch beside them); lib/presets.ts fieldOk says when a field's text is good.
 
 // `docked`: the same panel sitting in the coin page's right column, always there; its pop-out button floats it
 // (and the docked one steps aside until the floating one is closed).
@@ -57,13 +37,14 @@ const fieldOk = (i: number, text: string) => {
 export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, away = false, migrating = null }: { mint: string; symbol: string; sizes: number[]; pos: Pos; onDone: () => void; docked?: boolean; away?: boolean; migrating?: number | null }) {
   const open = useQuick((s) => s.open);
   const paperOn = useTrade((s) => s.paper), wallet = useTrade((s) => s.wallet), me = useMe((s) => s.me);
-  const presets = usePresets((s) => s.list), pi = usePresets((s) => s.pi);
+  const presets = usePresets((s) => s.list), pi = usePresets((s) => s.pi), preset = presets[pi];
   const pick = (i: number) => { pickPreset(i); setEdit(null); };
-  const { buys, buysUsdc, sells, slip } = presets[pi];
+  const { buys, buysUsdc, sells, slip } = preset;
   // In USDC (Axiom's switch, shared with the coin page's panel): the buys are USDC sizes with presets of their own,
   // and a sell is paid in USDC.
   const cur = useCur((s) => s.cur), inUsdc = cur === "USDC";
-  const [edit, setEdit] = useState<string[] | null>(null);     // the nine preset fields while editing (4 buys, 4 sells, slippage %)
+  const [edit, setEdit] = useState<string[] | null>(null);     // the eleven preset fields while editing (above)
+  const [editMev, setEditMev] = useState(false);               // the MEV switch while editing
   const [busy, setBusy] = useState<string | null>(null);
   const pendingBuys = useRef(0);   // buys pressed and not settled yet
   const [at, setAt] = useState<At | null>(() => store.get<At | null>("qt:at", null));
@@ -127,9 +108,9 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     if (busy && !buy) return;
     if (buy) pendingBuys.current++;
     setBusy(key);
-    const slippageBps = slip;
+    const slippageBps = slip, fees = feesFor(preset);
     const money = inUsdc ? { usdc: v } : { sol: v };
-    const ok = await trade(buy ? { side: "buy", mint, symbol, ...money, slippageBps } : { side: "sell", mint, symbol, pct: v, to: cur, slippageBps },
+    const ok = await trade(buy ? { side: "buy", mint, symbol, ...money, slippageBps, ...fees } : { side: "sell", mint, symbol, pct: v, to: cur, slippageBps, ...fees },
       // Paper: a buy opens a row at the live quote; a sell takes the same share of every open row.
       async () => {
         if (buy) return post("paper/quoted", { mint, ...money, slippageBps });
@@ -144,9 +125,12 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
     if (!edit || !edit.every((x, i) => fieldOk(i, x))) return;
     const n = edit.map((x) => Number(x)), sized = n.slice(0, 4).sort((x, y) => x - y);
     // The buy sizes edited are the money shown: SOL ones, or the USDC ones, the other kept.
-    savePreset({ buys: inUsdc ? buys : sized, buysUsdc: inUsdc ? sized : buysUsdc, sells: n.slice(4, 8).map((x) => Math.round(x)), slip: Math.round(n[8] * 100) });
+    savePreset(pi, { ...preset, buys: inUsdc ? buys : sized, buysUsdc: inUsdc ? sized : buysUsdc, sells: n.slice(4, 8).map((x) => Math.round(x)), slip: Math.round(n[8] * 100),
+      prio: /^auto$/i.test(edit[9].trim()) ? null : n[9], tip: n[10], mev: editMev });
     setEdit(null);
   };
+  // Open the editor on this set's fields.
+  const startEdit = () => { setEditMev(preset.mev); setEdit([...buyP, ...sellP, slip / 100, preset.prio == null ? "auto" : preset.prio, preset.tip].map(String)); };
 
   // What there is to buy with, in the money picked: SOL, or USDC (the paper desk's SOL as USDC at the live price).
   const cash = inUsdc
@@ -163,12 +147,12 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
   const label = "text-[11px] font-bold tracking-[0.08em] uppercase";
   // A preset field while editing: the tile's shape, the figure typed in ink, the unit beside it.
   const field = (i: number, suffix: ReactNode) => (
-    <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? `More than 0 ${cur}` : i < 8 ? "1 to 100 %" : "0.1 to 50 %"}
+    <label key={i} title={fieldOk(i, edit![i]) ? undefined : i < 4 ? `More than 0 ${cur}` : i < 8 ? "1 to 100 %" : i === 8 ? "0.1 to 50 %" : i === 9 ? `auto, or 0 to ${PRIO_MAX} SOL` : `0 to ${TIP_MAX} SOL`}
       className={cn("num flex h-9 min-w-0 items-center gap-0.5 rounded-[4px] border bg-paper px-1.5 transition-colors duration-100",
         fieldOk(i, edit![i]) ? "border-rule-2 focus-within:border-ink-2" : "border-down")}>
       <input value={edit![i]} onChange={(e) => setEdit((x) => x && x.map((y, j) => (j === i ? e.target.value : y)))}
         onKeyDown={(e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") { e.stopPropagation(); setEdit(null); } }}
-        inputMode="decimal" aria-label={i < 4 ? `Buy preset ${i + 1} in ${cur}` : i < 8 ? `Sell preset ${i - 3} in percent` : "Slippage in percent"}
+        inputMode={i === 9 ? "text" : "decimal"} aria-label={i < 4 ? `Buy preset ${i + 1} in ${cur}` : i < 8 ? `Sell preset ${i - 3} in percent` : i === 8 ? "Slippage in percent" : i === 9 ? "Priority fee in SOL, or auto" : "Bribe in SOL"}
         className="w-full min-w-0 bg-transparent text-center text-[14px] font-bold text-ink outline-none" />
       {suffix != null && <span className="text-[10px] font-semibold text-muted">{suffix}</span>}
     </label>
@@ -230,7 +214,7 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
             <button onClick={pnlCard.open} aria-label="PnL card" className={iconBtn}><Icon.image className="size-3.5" /></button>
           </Tip>
           <Tip tip={edit ? "Save presets" : "Edit presets"}>
-            <button onClick={() => (edit ? save() : setEdit([...buyP, ...sellP, slip / 100].map(String)))} aria-label={edit ? "Save presets" : "Edit presets"}
+            <button onClick={() => (edit ? save() : startEdit())} aria-label={edit ? "Save presets" : "Edit presets"}
               disabled={edit != null && !edit.every((x, i) => fieldOk(i, x))}
               className={cn(iconBtn, "disabled:cursor-not-allowed disabled:opacity-40", edit && "bg-up text-[#06130b] hover:bg-up hover:text-[#06130b]")}>
               {edit ? <CIcon.check className="size-3.5" /> : <CIcon.pencil className="size-3.5" />}
@@ -244,23 +228,43 @@ export function QuickTrade({ mint, symbol, sizes, pos, onDone, docked = false, a
       </div>
 
       <div className="flex flex-col gap-3 p-3">
-        {/* Which set of presets, and its slippage (the slippage opens the editor: it is a preset field too). */}
+        {/* Which set of presets, and its settings in one line: slippage · priority fee · bribe · MEV (click to change). */}
         <div className="flex items-center justify-between gap-2">
           <div role="tablist" aria-label="Preset set" className={track}>
-            {presets.map((_, i) => (
-              <button key={i} role="tab" aria-selected={pi === i} onClick={() => pick(i)} className={seg(pi === i)}>P{i + 1}</button>
+            {presets.map((p, i) => (
+              <Tip key={i} tip={`${p.name}: ${presetTxt(p)}`}>
+                <button role="tab" aria-selected={pi === i} onClick={() => pick(i)} className={seg(pi === i)}>P{i + 1}</button>
+              </Tip>
             ))}
           </div>
-          {edit ? (
-            <span className="flex items-center gap-1.5 text-[12px] text-muted">Slippage<span className="w-16 [&>label]:h-7">{field(8, "%")}</span></span>
-          ) : (
-            <Tip tip="Max slippage for this preset set (click to change)">
-              <button onClick={() => setEdit([...buyP, ...sellP, slip / 100].map(String))} className="num flex h-6 items-center gap-1.5 rounded-[4px] px-1.5 text-[12px] text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink">
-                <Icon.sliders className="size-3.5" />Slippage <b className="font-bold text-ink">{slipTxt(slip)}</b>
+          {!edit && (
+            <Tip tip={`${preset.name} · slippage ${slipTxt(slip)} · priority ${preset.prio == null ? "auto (what the coin's busy trades pay)" : `${solTxt(preset.prio)} SOL`} · bribe ${solTxt(preset.mev ? Math.max(preset.tip, MEV_TIP) : preset.tip)} SOL · MEV protection ${preset.mev ? "on" : "off"}. Click to change`}>
+              <button onClick={startEdit} className="num flex h-6 min-w-0 items-center gap-1.5 rounded-[4px] px-1.5 text-[12px] text-muted transition-colors duration-100 hover:bg-paper-4 hover:text-ink">
+                <Icon.sliders className="size-3.5 shrink-0" /><span className="truncate"><b className="font-bold text-ink">{slipTxt(slip)}</b> · {preset.prio == null ? "auto" : solTxt(preset.prio)} · {solTxt(preset.mev ? Math.max(preset.tip, MEV_TIP) : preset.tip)}{preset.mev && <b className="ml-1 font-bold text-up">MEV</b>}</span>
               </button>
             </Tip>
           )}
         </div>
+        {/* While editing: the set's slippage, priority fee, bribe and MEV switch, each named in the small capitals. */}
+        {edit && (
+          <div className="grid grid-cols-4 gap-1.5">
+            {([["Slippage", 8, "%", "How far the price may move before the trade is refused"], ["Prio SOL", 9, null, "Priority fee in SOL, paid to the validator to be picked first. auto = what this coin's busiest recent trades paid"], ["Bribe SOL", 10, null, "Tip in SOL for staked connections (Helius Sender). 0.001 or more opens every path, Jito's too. pump.fun coins"]] as const).map(([name, i, unit, tip]) => (
+              <Tip key={i} tip={tip}>
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className={cn(label, "text-[10px] text-muted")}>{name}</span>
+                  <span className="[&>label]:h-8 [&>label]:px-1 [&_input]:text-[12px]">{field(i, unit)}</span>
+                </span>
+              </Tip>
+            ))}
+            <Tip tip={`MEV protection: the bribe is at least ${MEV_TIP} SOL so the transaction goes through Jito and never sits in the public mempool (no sandwiches). pump.fun coins`}>
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className={cn(label, "text-[10px] text-muted")}>MEV</span>
+                <button role="switch" aria-checked={editMev} onClick={() => setEditMev((m) => !m)}
+                  className={cn("num flex h-8 items-center justify-center rounded-[4px] border text-[12px] font-bold transition-colors duration-100", editMev ? "border-up bg-up/15 text-up" : "border-rule-2 bg-paper text-muted hover:text-ink")}>{editMev ? "On" : "Off"}</button>
+              </span>
+            </Tip>
+          </div>
+        )}
 
         {migrating ? <MigratingNote since={migrating} /> : null}
 

@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA } from './db.js';
 import { settings } from './settings.js';
-import { createBudget, dailyAllowance, rpcCredits } from './metric-budget.js';
+import { createBudget, dailyAllowance, pacedAllowance, rpcCredits } from './metric-budget.js';
 
 const clean = v => String(v || '').trim();
 // Memoised: it ran on every stream message (new URL() each time was ~1 s a minute of the main thread, 2026-10-11).
@@ -51,7 +51,7 @@ export function dayBudget(url) {
   const s = st(url);
   return Math.min(s.monthDaily ?? Infinity, dailyAllowance({ configured: budgetCredits(), remaining: s.remaining, limit: s.limit, resetAt: s.monthUntil, spent: s.spentAtRead || 0 }));
 }
-const paced = url => { const d = new Date(); return dayBudget(url) * Math.min(1, (d.getUTCHours() + d.getUTCMinutes() / 60 + 12) / 24); };
+const paced = url => pacedAllowance({ daily: dayBudget(url) });
 function budget(url) {
   const s = st(url);
   return s.budget ||= createBudget({ allowance: () => paced(url), spent: creditsOf(s), byPriority: s.priorities, rate: 8 });
@@ -69,10 +69,15 @@ export function noteBytes(url, bytes, priority = 'price') {
   const s = st(url), b = budget(url); s.bytes += bytes; b.note(bytes / 50_000, priority);
 }
 const wsOf = url => configured().find(u => key(u) === key(String(url))) || '';
+export const priceStreamAllowed = url => {
+  const u = wsOf(url);
+  return u ? keyFree(u) : Boolean(url) && !/^wss?:\/\/[^/]*helius(?:-rpc)?\.(?:com|xyz)\b/i.test(url);
+};
+export function notePriceBytes(url, bytes) { const u = wsOf(url); if (u) noteBytes(u, bytes); }
 export const rpcStreamAllowed = url => {
-  const u = wsOf(url); if (!u) return true;
-  const usage = budget(u).status().byPriority;
-  return keyFree(u) && usage.metrics + usage.history < paced(u) * .25;
+  const u = wsOf(url); if (!u) return Boolean(url) && !/^wss?:\/\/[^/]*helius(?:-rpc)?\.(?:com|xyz)\b/i.test(url);
+  const status = budget(u).status(), cap = paced(u), usage = status.byPriority;
+  return keyFree(u) && status.spent + status.reserved < cap * .8 && usage.metrics + usage.history < cap * .25;
 };
 export function noteRpcBytes(url, bytes) { const u = wsOf(url); if (u) noteBytes(u, bytes, 'metrics'); }
 export function noteCall(url, method) {
@@ -91,7 +96,12 @@ export function markMonth(url, pct, resetAt, usage = {}) {
 }
 export function keyStatus(url) {
   const s = st(url);
-  return { index: keyIndex(url), project: project(url), bytesToday: s.bytes, callsToday: s.calls, creditsToday: Math.ceil(creditsOf(s)), dayBudget: Math.floor(dayBudget(url)), allowedNow: Math.floor(paced(url)), dayUsed: dayUsed(url), monthPct: s.monthPct, monthUsed: monthUsed(url), active: activeUrl() === url, byMethod: s.byMethod, denied: s.denied, coolingUntil: s.coolingUntil, reserved: s.budget?.status().reserved || 0, byPriority: s.budget?.status().byPriority || {} };
+  const cap = dayBudget(url), t = Date.now(), start = Math.floor(t / 864e5) * 864e5, resetAt = start + 864e5;
+  const reserved = s.budget?.status().reserved || 0, spent = creditsOf(s) + reserved;
+  const earnedAt = cap > 0 && spent + 1 < cap * .9 ? start + Math.ceil((spent + 1) / (cap * .9) * (864e5 + 300_000)) - 300_000 : resetAt;
+  // Monthly exhaustion needs a fresh provider report; never promise a reset from a date alone.
+  const nextResumeAt = monthUsed(url) ? null : Math.max(t, s.coolingUntil, dayUsed(url) ? earnedAt : t);
+  return { index: keyIndex(url), project: project(url), bytesToday: s.bytes, callsToday: s.calls, creditsToday: Math.ceil(creditsOf(s)), dayBudget: Math.floor(cap), allowedNow: Math.floor(paced(url)), dayUsed: dayUsed(url), monthPct: s.monthPct, monthUsed: monthUsed(url), active: activeUrl() === url, byMethod: s.byMethod, denied: s.denied, coolingUntil: s.coolingUntil, reserved, byPriority: s.budget?.status().byPriority || {}, resetAt, nextResumeAt, sustainablePerHour: cap * .9 / (24 + 5 / 60), reserveCredits: cap * .1 };
 }
 export const bytesToday = () => [...new Map(configured().map(u => [project(u), st(u)])).values()].reduce((n, s) => n + s.bytes, 0);
 function denied() { const e = new Error('Helius request deferred: shared project budget or rate limit'); e.code = 'HELIUS_BUDGET'; return e; }

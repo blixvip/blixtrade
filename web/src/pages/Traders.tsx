@@ -9,48 +9,15 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { BrandLoader, Problem } from "@/components/page";
 import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
-import { usePoll } from "@/lib/coin";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { Avatar, copy, count, exactUsd, Pile, RANGES, short, signedShort, traderHref, usd, type Range } from "./traders/parts";
 import { PodiumLights } from "./traders/PodiumLights";
 import "./traders/board.css";
 
-// ---------- the two boards as the server sends them ----------
-interface Hold { mint: string; chain: number; img: string | null; value?: number | null; symbol?: string | null }
-interface FomoRow {
-  rank: number; handle: string | null; name: string | null; pic: string | null; pnl: number | null; volume: number | null; trades: number | null; followers: number | null;
-  holdings: number | null; top: Hold[]; badge: string | null; verified: number | null; wallet: string | null; walletVerified?: boolean; walletNote: string | null; tracked?: boolean;
-}
-interface FomoBoard { rows: FomoRow[]; status: { running: boolean; error: string | null; signedOut: boolean; lastOk: number | null } }
-interface PumpRow {
-  rank: number; wallet: string; name: string | null; pic: string | null; x: string | null; verified: boolean; pnl: number | null; pnlPct: number | null;
-  positions: number | null; top: Hold[]; tracked: boolean;
-}
-interface PumpBoardData { t: number | null; error: string | null; rows: PumpRow[] }
-
-// ---------- one row of the merged board ----------
-type Source = "fomo" | "pump";
-interface Trader {
-  key: string; source: Source; srcRank: number; name: string; sub: string; pic: string | null; verified: boolean; top100: boolean;
-  pnl: number | null; stat: string; holds: Hold[]; more: number; wallet: string | null; walletVerified: boolean; walletNote: string | null; tracked: boolean;
-  href?: string; external: boolean;
-}
-const fromFomo = (r: FomoRow): Trader => ({
-  key: `fomo:${r.handle || r.rank}`, source: "fomo", srcRank: r.rank, name: r.name || r.handle || "anon", sub: r.handle ? `@${r.handle}` : "Fomo",
-  pic: r.pic, verified: Boolean(r.verified), top100: Boolean(r.badge && /top/i.test(r.badge)), pnl: r.pnl,
-  stat: [r.volume != null ? `${usd(r.volume)} vol` : null, r.trades != null ? `${count(r.trades)} trades` : null, r.followers != null ? `${count(r.followers)} followers` : null].filter(Boolean).join(" · "),
-  holds: r.top, more: Math.max(0, (r.holdings ?? 0) - r.top.length), wallet: r.wallet, walletVerified: Boolean(r.walletVerified), walletNote: r.walletNote, tracked: Boolean(r.tracked),
-  href: traderHref(r.handle), external: false,
-});
-const fromPump = (r: PumpRow): Trader => ({
-  key: `pump:${r.wallet}`, source: "pump", srcRank: r.rank, name: r.name || "anon", sub: r.x ? `@${r.x}` : `${r.wallet.slice(0, 4)}…${r.wallet.slice(-4)}`,
-  pic: r.pic, verified: r.verified, top100: false, pnl: r.pnl,
-  stat: [r.pnlPct != null ? `${r.pnlPct >= 0 ? "+" : "−"}${Math.abs(r.pnlPct).toLocaleString("en-US", { maximumFractionDigits: 1 })}% return` : null, r.positions != null ? `${r.positions} coins` : null].filter(Boolean).join(" · "),
-  holds: r.top, more: Math.max(0, (r.positions ?? 0) - r.top.length), wallet: r.wallet, walletVerified: true, walletNote: null, tracked: r.tracked,
-  href: `#/trader/${r.wallet}`, external: false,
-});
-
+import { useTraderDirectory, type Trader, type Source, type FomoBoard } from "@/lib/traders";
+import { TrackWalletButton } from "@/components/TrackWalletButton";
+import { openTrackerWindow } from "@/lib/wtrack";
 
 type Filter = "all" | Source;
 
@@ -65,22 +32,7 @@ export function Traders() {
   const pumpRange = range === "all-time" ? null : range;
   // Asked often: the server reads Fomo's board again every minute while it is asked for (fomoboard.js boardLive)
   // and pump.fun's every 5 s (pumpboard.js), so a change on either shows within seconds.
-  const fomo = usePoll<FomoBoard>(filter !== "pump" ? `fomo/board?${new URLSearchParams({ range })}` : null, 10_000);
-  const pump = usePoll<PumpBoardData>(filter !== "fomo" && pumpRange ? `pump/board?range=${pumpRange}` : null, 5_000);
-
-  const all = useMemo(() => {
-    const list = [...(filter !== "pump" ? (fomo.data?.rows || []).map(fromFomo) : []), ...(filter !== "fomo" && pumpRange ? (pump.data?.rows || []).map(fromPump) : [])];
-    // Wallets only, one row each: the better figure of the two boards, the Fomo profile when there is one.
-    const byWallet = new Map<string, Trader>();
-    for (const t of list) {
-      if (!t.wallet) continue;
-      const had = byWallet.get(t.wallet);
-      if (!had) { byWallet.set(t.wallet, t); continue; }
-      const fomoOne = had.source === "fomo" ? had : t.source === "fomo" ? t : null, best = (t.pnl ?? -Infinity) > (had.pnl ?? -Infinity) ? t : had;
-      byWallet.set(t.wallet, fomoOne ? { ...fomoOne, pnl: best.pnl, holds: best.holds.length ? best.holds : fomoOne.holds, more: best.holds.length ? best.more : fomoOne.more } : best);
-    }
-    return [...byWallet.values()].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
-  }, [fomo.data, pump.data, filter, pumpRange]);
+  const { all, fomo, pump } = useTraderDirectory(range);
   const ranked = useMemo(() => {
     const query = q.toLowerCase();
     return all.map((t, i) => ({ t, rank: i + 1 }))
@@ -108,6 +60,7 @@ export function Traders() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button onClick={openTrackerWindow} className="h-9 rounded-full border border-rule-2 bg-paper-2 px-3 text-sm font-semibold hover:bg-paper-4">Wallet tracker</button>
           {filter !== "pump" && (
             <button onClick={readNow} disabled={reading} title="Read Fomo's board again now" aria-label="Read Fomo's board again"
               className="grid size-9 place-items-center rounded-full border border-rule-2 bg-paper-2 text-ink-2 transition-colors hover:border-muted hover:text-ink disabled:opacity-60">
@@ -250,13 +203,14 @@ function Step({ t, rank }: { t: Trader; rank: number }) {
   const pnl = useCountUp(t.pnl, land);
   const ring = { "--a": m.a, "--b": m.b, "--glow": m.glow } as CSSProperties;
   return (
-    <a href={t.href} target={t.external ? "_blank" : undefined} rel={t.external ? "noreferrer" : undefined} className="group flex min-w-0 flex-col items-center text-center outline-none">
+    <div className="group flex min-w-0 flex-col items-center text-center">
       <div className="lb-drop flex w-full min-w-0 flex-col items-center [text-shadow:0_1px_12px_rgba(0,0,0,0.85)]" style={{ animationDelay: `${land}ms` }}>
         <span className="lb-ring transition-transform duration-300 ease-out group-hover:-translate-y-1.5 group-focus-visible:-translate-y-1.5" style={ring}>
           <span className="block rounded-full bg-paper p-[3px]"><Face t={t} size={small ? m.faceSm : m.face} /></span>
         </span>
-        <NameLine t={t} className={cn("mt-3.5 max-w-full justify-center", first ? "text-xl max-sm:text-md" : "text-lg max-sm:text-sm")} />
+        <a href={t.href}><NameLine t={t} className={cn("mt-3.5 max-w-full justify-center", first ? "text-xl max-sm:text-md" : "text-lg max-sm:text-sm")} /></a>
         <WalletLine wallet={t.wallet} className="mt-1 max-sm:text-xs" />
+        <TrackWalletButton address={t.wallet} name={t.name} className="mt-2" />
         <Shine value={t.pnl} className={cn("num mt-3 leading-none font-extrabold tracking-tight", first ? "text-[38px] max-sm:text-xl" : "text-[28px] max-sm:text-base")} delay={land / 1000 + 1.4}>
           {small ? signedShort(pnl) : exactUsd(pnl)}
         </Shine>
@@ -267,7 +221,7 @@ function Step({ t, rank }: { t: Trader; rank: number }) {
         <span className="lb-shine relative block pt-4 text-6xl leading-none font-black tracking-tighter [text-shadow:none] max-sm:pt-2 max-sm:text-3xl"
           style={{ "--c": `color-mix(in oklch, ${m.a} 78%, ${m.b})`, "--c2": "#fff", "--shine-delay": `${2 + rise / 300}s`, filter: `drop-shadow(0 4px 18px ${m.glow})` } as CSSProperties}>{rank}</span>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -286,26 +240,27 @@ function Shine({ value, className, delay = 0, children }: { value: number | null
 function TraderRow({ t, rank, best, i }: { t: Trader; rank: number; best: number; i: number }) {
   const share = best > 0 && (t.pnl ?? 0) > 0 ? Math.max(0.03, Math.min(1, (t.pnl ?? 0) / best)) : 0;
   return (
-    <a href={t.href} target={t.external ? "_blank" : undefined} rel={t.external ? "noreferrer" : undefined}
+    <div
       style={{ animationDelay: `${Math.min(i, 18) * 35 + 250}ms` }}
       className={cn("lb-up group grid [content-visibility:auto] [contain-intrinsic-size:auto_68px] items-center gap-4 rounded-[14px] px-4 py-3 transition-colors duration-150 hover:bg-white/[0.04] max-lg:gap-3 max-lg:px-3", COLS)}>
       <span className={cn("num grid h-8 min-w-8 place-items-center justify-self-start rounded-[10px] px-2 text-sm font-bold", rank <= 10 ? "bg-paper-4 text-ink" : "text-muted")}>{rank}</span>
       <span className="flex min-w-0 items-center gap-3">
         <span className="transition-transform duration-200 group-hover:scale-105"><Face t={t} size={42} /></span>
         <span className="min-w-0">
-          <NameLine t={t} className="text-md" />
+          <a href={t.href}><NameLine t={t} className="text-md" /></a>
           <WalletLine wallet={t.wallet} />
         </span>
       </span>
       <span className="max-lg:hidden">{t.holds.length ? <Pile items={t.holds.map((h) => ({ ...h, title: h.symbol || (h.value != null ? `${usd(h.value)} held` : undefined) }))} more={t.more} size={22} /> : <span className="text-sm text-muted/60">—</span>}</span>
       <span className="flex min-w-0 flex-col items-end gap-1">
         <Shine value={t.pnl} className="num text-lg font-bold tracking-tight max-lg:text-md" delay={1 + (i % 12) * 0.35}><span className="max-lg:hidden">{exactUsd(t.pnl)}</span><span className="lg:hidden">{signedShort(t.pnl)}</span></Shine>
+        <TrackWalletButton address={t.wallet} name={t.name} />
         {/* how close to first place */}
         <span aria-hidden className="h-[3px] w-28 overflow-hidden rounded-full bg-white/[0.05] max-lg:w-16">
           <span className="lb-grow block h-full rounded-full bg-[linear-gradient(90deg,color-mix(in_oklch,var(--color-up)_35%,transparent),var(--color-up))]" style={{ width: `${share * 100}%`, animationDelay: `${Math.min(i, 18) * 35 + 450}ms` }} />
         </span>
       </span>
-    </a>
+    </div>
   );
 }
 

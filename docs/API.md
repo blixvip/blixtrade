@@ -3,7 +3,8 @@
 Blix serves JSON over plain HTTP on `http://localhost:4420` and a live Server-Sent-Events stream. The dashboard in `public/` is just a client of this API, so anything the UI shows you can read from a script, a bot, or your own front end.
 
 - Base URL: `http://localhost:4420` (override with `RADAR_PORT`).
-- Auth: none on localhost. Through the remote tunnel every `/api/*` call needs the install's remote key as the `blix_key` cookie (set once by opening `/?key=…`).
+- Deployment: examples below target your own localhost installation. Hosted BLIX uses sign-in and account permissions; it is not an anonymous public API. Legacy remote-key instructions do not describe hosted account access.
+- Execution: hosted account buys, sells and launches spend real SOL through separate authenticated workflows. Published MCP tools expose data and paper trades only.
 - Origin policy: requests must come from `localhost` / `127.0.0.1` or the configured `publicHost`. Other `Host` or `Origin` headers are refused.
 - Responses are cached server-side for 1–60 s where noted, so polling faster than that returns the same body.
 - `<mint>` is a base58 Solana mint address. `<address>` is a wallet address.

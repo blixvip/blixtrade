@@ -86,7 +86,8 @@ const startSol = () => { const v = isOwner() ? settings.paperStartSol : meta.get
 const returned = (p) => p.exit_sol > 0 ? p.exit_sol : p.usd > 0 ? p.sol * (1 + (p.pnl || 0) / p.usd) : p.sol;
 export function wallet() {
   const since = epoch(), start = startSol();
-  const rows = rowsMine("SELECT * FROM paper WHERE t >= ? AND $MINE", since);
+  const afterId = Number(meta.get(isOwner() ? 'paper_reset_id' : `paper_reset_id:${me()}`, 0)) || 0;
+  const rows = rowsMine("SELECT * FROM paper WHERE t >= ? AND id > ? AND $MINE", since, afterId);
   let cash = start, openCost = 0, openValue = 0, unpriced = 0, realized = 0;
   for (const p of rows) {
     cash -= p.sol;
@@ -119,6 +120,9 @@ export function resetWallet(newStart) {
     catch { db.prepare("UPDATE paper SET status = 'closed', exit_t = ?, exit_why = 'paper wallet reset (no price)', pnl = 0, exit_mcap = last WHERE id = ?").run(now(), p.id); }
   }
   const ok = Number(newStart) > 0 && Number(newStart) <= 100000;
+  // IDs separate trades before and after reset even when both occur in one millisecond.
+  const lastId = rowMine("SELECT COALESCE(MAX(id), 0) id FROM paper WHERE $MINE").id;
+  meta.set(isOwner() ? 'paper_reset_id' : `paper_reset_id:${me()}`, lastId);
   if (isOwner()) {
     if (ok) saveSettings({ paperStartSol: Number(newStart) });
     meta.set("paper_epoch", now());

@@ -1,4 +1,5 @@
 import { heliusFetch as fetch } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // Bubble maps (the coin page's Bubble map tab): the coin's biggest holders as bubbles sized by their share,
 // joined when the wallets are connected. Built fresh on every read from three sources, so it follows the coin:
 //
@@ -86,11 +87,13 @@ function rugNets(mint) {
 }
 
 // One Helius call; a 429 (the key is shared with the chart stream, 10 calls a second) waits and tries again.
-async function call(method, params) {
+async function call(method, params, mint) {
+  if (mint && !canEnrich(mint)) throw new Error('Coin enrichment deferred');
   const ws = activeUrl();
   if (!ws) return rpc(method, params);
   const url = ws.replace(/^ws/i, "http");
   for (let tries = 0; ; tries++) {
+    if (mint && !canEnrich(mint)) throw new Error('Coin enrichment deferred');
 
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(20_000) });
     if (r.status === 429 && tries < 5) { await new Promise((ok) => setTimeout(ok, 600 * 2 ** tries + Math.random() * 400)); continue; }
@@ -103,17 +106,17 @@ async function call(method, params) {
 
 // The SOL that opened a wallet: the sender of the first transfer into it in its oldest transaction (else that
 // transaction's fee payer, when it is someone else). "" when the history is too long to walk or shows no one.
-async function readFunder(wallet) {
+async function readFunder(wallet, mint) {
   let before, oldest = null;
   for (let page = 0; page < PAGES; page++) {
-    const sigs = await call("getSignaturesForAddress", [wallet, { limit: 1000, ...(before ? { before } : {}) }]);
+    const sigs = await call("getSignaturesForAddress", [wallet, { limit: 1000, ...(before ? { before } : {}) }], mint);
     if (!sigs?.length) break;
     oldest = sigs[sigs.length - 1].signature;
     if (sigs.length < 1000) { before = null; break; }
     before = oldest;
   }
   if (!oldest || before) return "";
-  const tx = await call("getTransaction", [oldest, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed", commitment: "confirmed" }]);
+  const tx = await call("getTransaction", [oldest, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed", commitment: "confirmed" }], mint);
   const ixs = [...(tx?.transaction?.message?.instructions || []), ...(tx?.meta?.innerInstructions || []).flatMap((x) => x.instructions || [])];
   for (const ix of ixs) {
     const info = ix?.parsed?.info;
@@ -143,9 +146,9 @@ function traceNew(mint, wallets) {
   Object.assign(s, { busy: true, done: 0, total: list.length, failed: 0 });
   let next = 0;
   Promise.all(Array.from({ length: 2 }, async () => {
-    while (next < list.length) {
+    while (next < list.length && canEnrich(mint)) {
       const w = list[next++];
-      try { putF.run(w, await readFunder(w), now()); bubbleStats.traced++; } catch (e) { bubbleStats.lastError = e.message; s.failed++; }
+      try { putF.run(w, await readFunder(w, mint), now()); bubbleStats.traced++; } catch (e) { bubbleStats.lastError = e.message; s.failed++; }
       s.done++;
     }
   })).finally(() => { s.busy = false; s.t = now(); });
@@ -158,6 +161,10 @@ function traceNew(mint, wallets) {
 // snapshot being rebuilt, a slow RPC) answers the last good map, marked stale, instead of a loading screen.
 const lastGood = new Map();
 export function bubbleMap(mint) {
+  if (!canEnrich(mint)) {
+    const saved = lastGood.get(mint);
+    return saved ? { ...saved, stale: true } : { error: 'More trading activity is needed before deeper analysis.', deferred: true };
+  }
   const a = buildMap(mint);
   if (a.nodes) { lastGood.set(mint, a); if (lastGood.size > 300) lastGood.delete(lastGood.keys().next().value); return a; }
   const g = lastGood.get(mint);

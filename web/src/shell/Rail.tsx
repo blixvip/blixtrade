@@ -1,3 +1,4 @@
+import { openTrackerWindow } from "@/lib/wtrack";
 import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 import { pageHref } from "@/lib/route";
 import { openExchange, openLauncher, warmExchange, warmLauncher } from "@/lib/modals";
@@ -68,10 +69,10 @@ export const Sol = SolanaLogo;
 function Search() {
   return (
     <button onPointerEnter={warmLauncher} onFocus={warmLauncher} onClick={openLauncher} aria-label="Search coins"
-      className="flex h-9 w-64 min-w-0 items-center gap-2 rounded-full border border-rule-2 bg-paper px-3 text-muted transition-colors duration-100 hover:border-muted max-xl:w-48 max-lg:w-28 max-md:w-9 max-md:justify-center max-md:px-0">
+      className="flex h-9 w-64 min-w-0 shrink-0 items-center gap-2 rounded-full border border-rule-2 bg-paper px-3 text-muted transition-colors duration-100 hover:border-muted max-xl:w-48 max-lg:w-9 max-lg:justify-center max-lg:px-0">
       <Icon.search className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate text-left text-md max-md:hidden">Search by token or CA</span>
-      <kbd className="rounded-chip border border-rule-2 px-1.5 text-xs text-muted max-md:hidden">/</kbd>
+      <span className="min-w-0 flex-1 truncate text-left text-md max-lg:hidden">Search by token or CA</span>
+      <kbd className="rounded-chip border border-rule-2 px-1.5 text-xs text-muted max-lg:hidden">/</kbd>
     </button>
   );
 }
@@ -85,7 +86,7 @@ function OwnerWallet() {
   useEffect(() => { loadMe(); const t = setInterval(() => { if (!document.hidden) loadMe(); }, 30_000); return () => clearInterval(t); }, []);
   return (
     <>
-      <button onPointerEnter={warmExchange} onFocus={warmExchange} onClick={() => openExchange("deposit")} className="flex h-9 items-center rounded-full bg-ink px-4 text-md font-semibold whitespace-nowrap text-on-fill max-sm:px-3 transition-transform duration-100 hover:bg-focus active:scale-[0.97]">Deposit</button>
+      <button onPointerEnter={warmExchange} onFocus={warmExchange} onClick={() => openExchange("deposit")} className="flex h-9 items-center rounded-full bg-ink px-4 text-md font-semibold whitespace-nowrap text-on-fill max-sm:px-2 transition-transform duration-100 hover:bg-focus active:scale-[0.97]">Deposit</button>
       <WalletMenu />
       <AccountMenu items={shown(FOOT, owner)} />
     </>
@@ -326,9 +327,9 @@ function PaperBalance({ w, onDone }: { w: PaperWallet; onDone: () => void }) {
 export function TopBar() {
   return (
     <header className="flex h-13 shrink-0 items-center gap-3 border-b border-rule bg-paper/80 px-3 max-md:gap-2">
-      <a href="#/" aria-label="Blix" className="hidden shrink-0 max-md:block max-[379px]:hidden!"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} draggable={false} className="h-6 w-auto mix-blend-screen select-none" /></a>
+      <a href="#/" aria-label="Blix" className="hidden shrink-0 max-md:block max-sm:hidden!"><img src="brand/blix-chrome-sm.webp" alt="Blix" width={300} height={130} draggable={false} className="h-6 w-auto mix-blend-screen select-none" /></a>
       <Tape />
-      <div className="ml-auto flex shrink-0 items-center gap-2.5 max-md:gap-2">
+      <div className="ml-auto flex min-w-0 items-center gap-2.5 max-md:gap-2 max-sm:gap-1">
         <ClipCoin />
         <Search />
         <PaperSwitch />
@@ -346,7 +347,9 @@ export function BottomBar({ route }: { route: string }) {
     <nav aria-label="Pages" onScroll={(e) => { const n = e.currentTarget; setEnd(n.scrollLeft + n.clientWidth >= n.scrollWidth - 2); }}
       className={cn("hidden shrink-0 snap-x overflow-x-auto border-t border-rule bg-paper-2 [scrollbar-width:none] max-md:flex", !end && "[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]")}>
       {/* Every page, the main ones first; it scrolls sideways for the rest. */}
-      {shown([...SIDE, ...FOOT] as Item[], owner).map(([r, label, Ic]) => (
+      {shown([...SIDE, ...FOOT] as Item[], owner).map(([r, label, Ic]) => r === "tracker" ? (
+        <button key={r} onClick={openTrackerWindow} aria-label="Wallets" aria-haspopup="dialog" className="flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 py-2 text-2xs text-muted"><Ic className="size-4.5" />Wallets</button>
+      ) : (
         <a key={r} href={pageHref(r)} aria-current={route === r ? "page" : undefined}
           className={cn("flex w-1/5 shrink-0 snap-start flex-col items-center gap-1 py-2 text-2xs whitespace-nowrap", route === r ? "text-ink" : "text-muted")}>
           <Ic className="size-4.5" />{label}

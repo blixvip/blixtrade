@@ -5,7 +5,7 @@
 // ~50 creates per 2.5 min at a few KB each: under 100 MB a day of the key's budget, metered as "launch".
 import { startRpcStream } from "./rpc-stream.js";
 import { announceCreate, b58 } from "./livetrades.js";
-import { keyUrls, activeUrl, noteBytes } from "./heliuskeys.js";
+import { keyUrls, rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
 
 const MINT_AUTHORITY = "TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM";
 const CREATE = "1b72a94ddeeb6376";   // sha256("event:CreateEvent")[0..8]
@@ -22,11 +22,12 @@ function decodeCreate(buf) {
 let stop = null;
 export function startFastCreate() {
   if (stop || !keyUrls().length) return;
-  const url = () => (fastCreate.url = activeUrl() || keyUrls()[0]);
+  const url = () => (fastCreate.url = keyUrls().find(rpcStreamAllowed) || '');
   stop = startRpcStream({
     url, request: { method: "logsSubscribe", params: [{ mentions: [MINT_AUTHORITY] }, { commitment: "processed" }] },
     onStatus: (s) => { fastCreate.connected = s.connected; fastCreate.error = s.error; },
-    meter: (endpoint, bytes) => noteBytes(endpoint, bytes, "launch"),
+    admit: rpcStreamAllowed,
+    meter: noteRpcBytes,
     silentMs: 120_000,
     onEvent: (d) => {
       const v = d.params?.result?.value;

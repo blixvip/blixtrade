@@ -108,6 +108,10 @@ export function add(who, { address, name, emoji, color, grp, pic } = {}) {
     // The shared chain reader follows it from now on (its stream and poll); what it already read shows at once.
     if (!cleanName(name)) autoName(who, address);
   }
+  // Re-adding an existing entry also repairs a shared reader that was paused or removed.
+  wallets.addWallet(address, "", "tracker");
+  wallets.resyncFast();
+  seedHistory(address);
   return { ...row(who, address), name: row(who, address).name || short(address) };
 }
 
@@ -227,6 +231,7 @@ function record({ wallet, sig, mint, side, solAmt, usd, tokens, mcUsd, t, src })
   }
   const id = Number(r.lastInsertRowid);
   push("wtrade", feedRows({ ids: [id] }));
+  return true;
 }
 
 function push(event, rows) {
@@ -243,11 +248,6 @@ function push(event, rows) {
 }
 
 // A curve or pool trade from the radar's live feeds: (mint, stats, sol, buy, { user, tokens, slot, sig }).
-function fromLive(mint, s, solAmt, buy, x = {}) {
-  const user = x.user;
-  if (!user || !tracked.has(user)) return;
-  const solUsd = liveFeed.solUsd || 150;
-  const supply = s.supply > 0 ? s.supply : 1e9;
 // The cap a trade happened at, from the trade itself: the SOL paid over the tokens received is the fill price;
 // on the coin's supply at the SOL price that is the cap. Exact per trade (a buy's cap used to be the cap after the
 // buy had moved it, 10% high on a fresh coin; a bonded coin's cap had its supply counted twice: the live feed's
@@ -357,14 +357,14 @@ function feedRows({ who = null, ids = null, since = 0, limit = FEED_LIMIT, grp =
   if (who != null) { where.push("f.wallet IN (SELECT address FROM wt_wallets WHERE who = ?" + (grp ? " AND grp = ?" : "") + ")"); args.push(who); if (grp) args.push(grp); }
   if (since) { where.push("f.id > ?"); args.push(since); }
   if (wallet) { where.push("f.wallet = ?"); args.push(wallet); }
-  const rows = db.prepare(`SELECT f.* FROM wt_feed f ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY f.id DESC LIMIT ?`).all(...args, Math.min(500, Math.max(1, limit | 0)));
+  const rows = db.prepare(`SELECT f.* FROM wt_feed f ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY f.t DESC, f.id DESC LIMIT ?`).all(...args, Math.min(500, Math.max(1, limit | 0)));
   return rows.map((r) => ({ ...r, ...meta(r.mint) }));
 }
 function transferRows({ who = null, ids = null, limit = 150 } = {}) {
   const where = [], args = [];
   if (ids) { where.push(`x.id IN (${ids.map(() => "?").join(",")})`); args.push(...ids); }
   if (who != null) { where.push("x.wallet IN (SELECT address FROM wt_wallets WHERE who = ?)"); args.push(who); }
-  const rows = db.prepare(`SELECT x.* FROM wt_transfers x ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY x.id DESC LIMIT ?`).all(...args, limit);
+  const rows = db.prepare(`SELECT x.* FROM wt_transfers x ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY x.t DESC, x.id DESC LIMIT ?`).all(...args, limit);
   return rows.map((r) => ({ ...r, ...(r.mint ? meta(r.mint) : { symbol: "SOL", tname: "Solana", mcap: null, born: null }) }));
 }
 const named = (who, rows) => {
@@ -409,8 +409,11 @@ function pnlOf(address) {
   const c = pnlCache.get(address);
   if (c && now() - c.t < 30_000) return c.v;
   const p = wallets.walletPnl(address);
+  const mark = x => ({ mint: x.mint, symbol: x.symbol, held: x.held, value: x.value, unrealized: x.unrealized, mcap: x.mcap, last: x.last,
+    supply: x.price > 0 && x.mcap > 0 ? x.mcap / x.price : null, priceAt: x.priceAt, exitable: x.exitable });
   const v = { realized: p.realized, unrealized: p.unrealized, openValue: p.openValue, winRate: p.winRate, closed: p.closed, open: p.open, trades: p.trades,
-    positions: p.positions.filter((x) => x.held > 0 && (x.value == null || x.value > 1)).slice(0, 6).map((x) => ({ mint: x.mint, symbol: x.symbol, held: x.held, value: x.value, unrealized: x.unrealized, mcap: x.mcap, last: x.last })) };
+    positions: p.positions.filter((x) => x.held > 0 && (x.value == null || x.value > 1)).slice(0, 6).map(mark),
+    valuationPositions: p.positions.filter(x => x.held > 0).map(mark) };
   pnlCache.set(address, { v, t: now() });
   if (pnlCache.size > 2000) pnlCache.clear();
   return v;
@@ -464,14 +467,19 @@ export function status() {
   return { wallets: tracked.size, members: db.prepare("SELECT COUNT(DISTINCT who) n FROM wt_wallets").get().n, ...wtStats };
 }
 const timers = [];
+let subscribed = false;
 export function stop() { for (const t of timers.splice(0)) clearTimeout(t); }
 export function start(emitFn) {
   stop();
   emit = emitFn || emit;
   reload();
-  onLiveTrade(fromLive);
-  onPoolLedger(fromLive);
-  wallets.onTx(fromTx);
+  if (!subscribed) {
+    onLiveTrade(fromLive);
+    onPoolLedger(fromLive);
+    wallets.onTx(fromTx);
+    wallets.onStoredTrade(fromEngine);
+    subscribed = true;
+  }
   // Every wallet on a member's list is followed by the chain reader (a restart, or lists made before this ran).
   for (const a of tracked.keys()) {
     wallets.addWallet(a, "", "tracker");
@@ -479,16 +487,6 @@ export function start(emitFn) {
   }
   wallets.resyncFast();
   backfillPics();
-  const prune = () => {
-    try {
-      db.prepare("DELETE FROM wt_feed WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
-      db.prepare("DELETE FROM wt_transfers WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
-    } catch (e) { logEvent("error", `wallet tracker prune: ${e.message}`); }
-  };
-  timers.push(setTimeout(prune, 60_000), setInterval(prune, 6 * 3600_000));
-  const sweep = () => { if (tracked.size) confirmSweep().catch(() => {}); };
-  timers.push(setInterval(sweep, 10_000));
-  for (const t of timers) t.unref?.();
   // Rows kept before caps came from the fill: a week's worth get theirs once (whole-token reading, believable
   // range), once the SOL price is known: done on the start-up placeholder they came out 46% high (2026-10-13).
   const fixCaps = (tries = 0) => {

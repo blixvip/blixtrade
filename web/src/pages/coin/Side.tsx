@@ -1,10 +1,13 @@
 // The right column: 5-minute flow, the paper trade panel at real quotes, your paper position,
 // token info (an icon and a figure each, green when clean, red when not), addresses and links.
+import { spotTokens, type MarketWindows } from "@/lib/coin-numbers";
+import { useNow } from "@/lib/route";
 import { UNLOCK_USD, useAiUnlock } from "../AiPicks";
 import { SolanaLogo } from "@/components/brand";
 import { useFeeBps } from "@/components/ShareLink";
 import { SiteLogo, PADS, padOf, type Site } from "@/components/logos";
 import { depositPaper, loadPaperSizes, setCur, useCur, USDC_MINT, USDC_SIZES, useTrade, type Cur } from "@/lib/mode";
+import { presetTxt, savePreset, useActivePreset, usePresets } from "@/lib/presets";
 import { trade } from "@/lib/trade";
 import { useMe } from "@/lib/ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -27,7 +30,7 @@ const RealTag = () => <span className="flex items-center gap-1 rounded-[5px] bg-
 
 export function Flow({ c }: { c: CoinData | null }) {
   const m = c?.m5;
-  if (!m) return <div className={cn(card, "text-sm text-muted")}>No trades in the last 5 minutes.</div>;
+  if (!m) return <div className={cn(card, "text-sm text-muted")}>Waiting for 5-minute market data…</div>;
   const total = m.buyUsd != null && m.sellUsd != null ? m.buyUsd + m.sellUsd : m.buys + m.sells;
   const share = total > 0 ? (m.buyUsd != null && m.sellUsd != null ? m.buyUsd : m.buys) / total : null;
   const net = m.netUsd ?? null, up = (net ?? 0) >= 0;
@@ -36,7 +39,7 @@ export function Flow({ c }: { c: CoinData | null }) {
     <div className={cn(card, "flex flex-col gap-3 p-3.5")}>
       <div className="flex items-end justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="flex items-center gap-1.5 text-xs font-medium text-muted"><i className="size-1.5 animate-pulse rounded-full bg-up" />5m volume</span>
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted"><i className={cn("size-1.5 rounded-full", m.source === "live" ? "animate-pulse bg-up" : "bg-muted")} />5m volume</span>
           <b className="num text-xl leading-none font-semibold tracking-tight text-ink">{usdK(m.volUsd)}</b>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -63,9 +66,9 @@ export function Flow({ c }: { c: CoinData | null }) {
 }
 
 // Paper buys and sells filled at the real quote (Jupiter, or the curve's own math). Nothing is really bought.
-const SLIPS: [number, string][] = [[100, "1%"], [300, "3%"], [500, "5%"], [1000, "10%"]];
+const SLIPS: [number, string][] = [[300, "3%"], [1000, "10%"], [2000, "20%"], [3000, "30%"]];
 const PCTS = [25, 50, 100];
-export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = null }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void; pos: Pos; solUsd?: number | null; migrating?: number | null }) {
+export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, priceUsd, priceAgeMs, migrating = null }: { mint: string; symbol: string; r: TokenDetail; onDone: () => void; pos: Pos; solUsd?: number | null; priceUsd?: number | null; priceAgeMs?: number | null; migrating?: number | null }) {
   // The live PnL card (./PnlShare.tsx), from the icon by the paper/real tag.
   const pnlCard = usePositionCard(pos, mint, symbol, solUsd);
   // Blix's fee on real-money trades (blix-vault feeBps), out of the SOL spent or received: less for an invited trader.
@@ -78,12 +81,12 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
   const cur = useCur((st) => st.cur), inUsdc = cur === "USDC";
   const [usdc, setUsdcState] = useState<number>(() => store.get("trade:usdc", 25));
   const [pct, setPct] = useState(100);
-  const [slip, setSlipState] = useState<number>(() => store.get("trade:slip", 300));
+  const preset = useActivePreset(), pi = usePresets((st) => st.pi), slip = preset.slip;
   const [q, setQ] = useState<{ key: string; quote?: Quote; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const setSol = (v: number) => { store.set("trade:sol", v); setSolState(v); };
   const setUsdc = (v: number) => { store.set("trade:usdc", v); setUsdcState(v); };
-  const setSlip = (v: number) => { store.set("trade:slip", v); setSlipState(v); };
+  const setSlip = (v: number) => savePreset(pi, { ...preset, slip: v });
   const wallet = useTrade((st) => st.wallet), paperOn = useTrade((st) => st.paper);
   // Paper off: the same panel trades the signed-in wallet's real SOL (or USDC), and sells what that wallet holds.
   const me = useMe((st) => st.me), held = me?.wallet?.tokens?.find((x) => x.mint === mint)?.ui ?? 0;
@@ -154,6 +157,8 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
     : realSell ? `${pct === 100 ? "All" : `${pct}%`} of ${held.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${symbol}`
     : quote ? (inUsdc && quote.usdOut != null ? `${quote.usdOut.toFixed(2)} USDC` : `${(quote.outSol ?? 0).toFixed(4)} SOL${quote.usdOut != null ? ` · ${usdK(quote.usdOut)}` : ""}`) : error ? error : "Pricing…";
   const worthDim = (buy && !(amount > 0)) || worthText === "Pricing…";
+  const spotUsd = inUsdc ? amount : solUsd != null && solUsd > 0 ? amount * solUsd : null;
+  const indicative = buy ? spotTokens(spotUsd, priceUsd ?? null, priceAgeMs) : null;
   return (
     <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-paper p-2">
       {/* Buy / Sell tabs and the gear */}
@@ -213,12 +218,16 @@ export function TradePanel({ mint, symbol, r, onDone, pos, solUsd, migrating = n
         </span>
       </div>
 
+      {indicative != null && amount > 0 && <span data-spot-estimate className="num px-1 text-xs text-muted" title="Calculated from the current price. Excludes fees and price impact; the executable quote above can differ.">At spot ≈ {tokN(indicative)} {symbol}</span>}
+
       {/* The gear's drawer, opening like an accordion */}
       <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", more ? "grid-rows-[1fr]" : "grid-rows-[0fr]")} aria-hidden={!more}>
         <div className="min-h-0 overflow-hidden">
           <div className="flex flex-col gap-2.5 rounded-xl bg-paper-3 p-3 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 font-bold text-muted"><Icon.sliders className="size-3.5" />Slippage</span>
+              <Tip tip={`Preset P${pi + 1} ${preset.name}: ${presetTxt(preset)}. Priority fee, bribe and MEV protection are set in the instant trade panel or Settings`}>
+                <span className="flex items-center gap-1.5 font-bold text-muted"><Icon.sliders className="size-3.5" />Slippage <span className="num font-semibold text-muted/70">P{pi + 1}</span></span>
+              </Tip>
               <div role="radiogroup" aria-label="Slippage" className="flex gap-0.5 rounded-md bg-paper-2 p-0.5">
                 {SLIPS.map(([v, l]) => <button key={v} role="radio" aria-checked={slip === v} onClick={() => setSlip(v)} tabIndex={more ? 0 : -1}
                   className={cn("num rounded px-2 py-0.5 font-bold transition-colors duration-150", slip === v ? "bg-paper-5 text-ink" : "text-muted hover:text-ink-2")}>{l}</button>)}
@@ -270,23 +279,16 @@ const FOMO_USDC = [10, 100, 500, 1000];   // Fomo's four sizes
 // About the coin, Fomo's card under its trade panel, measured on fomo.family: who gets the fees, the change over
 // 5M / 1H / 6H / 1D as four small tiles (one picked), that window's buys and sells, volumes and traders with 6px
 // bars, the coin's links as small chips, and "View more" hanging off the card's bottom edge.
-// Figures: Jupiter's per-window stats (GET /api/jup/<mint>, server/jupdisc.js windows), asked again every 25 s.
-interface Win { chg: number | null; buys: number | null; sells: number | null; buyVol: number | null; sellVol: number | null; traders: number | null; netBuyers: number | null }
-interface Jup { t: number | null; mcap?: number | null; holders?: number | null; launchpad?: string | null; dev?: string | null; windows: Record<"5m" | "1h" | "6h" | "24h", Win> | null }
+// Shared with the coin page: one poll keeps the provider interest alive and refreshes on tab return.
 const WINS: ["5m" | "1h" | "6h" | "24h", string][] = [["5m", "5M"], ["1h", "1H"], ["6h", "6H"], ["24h", "1D"]];
-export function About({ r, c }: { r: TokenDetail; c: CoinData | null }) {
+export function About({ r, c, market: j, error, refresh }: { r: TokenDetail; c: CoinData | null; market: MarketWindows | null; error: string | null; refresh: () => void }) {
   const t = r.token, name = t.name || t.symbol || "this coin";
-  const [j, setJ] = useState<Jup | null>(null);
+  const now = useNow();
   const [win, setWin] = useState<"5m" | "1h" | "6h" | "24h">("1h");
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => {
-    let on = true;
-    const look = () => api<Jup>(`jup/${t.mint}`).then((x) => { if (on && x?.windows) setJ(x); }).catch(() => {});
-    look();
-    const timer = setInterval(() => { if (!document.hidden) look(); }, 25_000);
-    return () => { on = false; clearInterval(timer); };
-  }, [t.mint]);
-  const w = j?.windows?.[win] || null;
+  const indexed = j?.windows?.[win] || null;
+  const w = win === "5m" && c?.m5 ? { ...indexed, chg: indexed?.chg ?? null, netBuyers: indexed?.netBuyers ?? null, buys: c.m5.buys, sells: c.m5.sells, buyVol: c.m5.buyUsd, sellVol: c.m5.sellUsd, traders: c.m5.traders } : indexed;
+  const stale = Boolean(j?.t && now - j.t > 60_000);
   const dev = c?.dev?.wallet || t.creator || j?.dev || null;
   const pad = padOf({ mint: t.mint, pool: (t as { pool?: string | null }).pool, dex: (t as { dex?: string | null }).dex });
   const padName = PADS[pad]?.name || (j?.launchpad ?? null);
@@ -317,7 +319,7 @@ export function About({ r, c }: { r: TokenDetail; c: CoinData | null }) {
   return (
     <div className="relative mb-3 flex flex-col gap-3 rounded-2xl border border-white/10 bg-paper p-3 pb-4">
       <div className="flex flex-col gap-0.5">
-        <h3 className="truncate text-base font-medium text-ink">About {name}</h3>
+        <div className="flex items-center justify-between gap-2"><h3 className="truncate text-base font-medium text-ink">About {name}</h3><span className={cn("shrink-0 text-2xs", error || stale ? "text-warn" : "text-muted")} title="Indexed window statistics update when the market data source refreshes">{error ? "Reconnecting" : j?.t ? `${stale ? "Delayed · " : "Updated "}${sinceMs(Math.max(0, now - j.t))} ago` : "Loading stats"}</span></div>
         <span className="truncate text-xs text-muted">
           {dev ? <>Creator fees to <button onClick={() => copy(dev, "Dev address copied")} className="num font-medium text-ink-2 transition-colors duration-150 hover:text-ink">{shortAddr(dev)}</button></> : "Creator unknown"}
           {padName ? ` via ${padName}` : ""}
@@ -349,7 +351,7 @@ export function About({ r, c }: { r: TokenDetail; c: CoinData | null }) {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">{[0, 1].map((i) => <div key={i} className="flex flex-col gap-1.5"><i className="h-5 w-2/3 animate-pulse rounded bg-paper-3" /><i className="h-1.5 w-full animate-pulse rounded-[1.5px] bg-paper-3" /></div>)}</div>
+        <div className="flex flex-col gap-3">{error ? <button onClick={refresh} className="text-sm text-warn">Stats unavailable · Retry</button> : null}{[0, 1].map((i) => <div key={i} className="flex flex-col gap-1.5"><i className="h-5 w-2/3 animate-pulse rounded bg-paper-3" /><i className="h-1.5 w-full animate-pulse rounded-[1.5px] bg-paper-3" /></div>)}</div>
       )}
 
       <div className="flex flex-wrap gap-1.5">
@@ -447,13 +449,14 @@ function DexBanner({ src, href, symbol }: { src: string; href: string; symbol: s
 }
 
 export function Info({ r, c }: { r: TokenDetail; c: CoinData | null }) {
+  const now = useNow();
   // Every figure comes from /api/coin, which only passes on a reading that can still be true (unknown is "—").
   const t = r.token, i = c?.info;
   const pv = (x: number | { pct: number } | null | undefined) => x == null ? null : typeof x === "object" ? x.pct : x;
   const top10 = pv(i?.top10), dev = pv(i?.devPct), sn = pv(i?.snipers), bd = pv(i?.bundle), ins = pv(i?.insiders), safety = i?.safety ?? null;
   const curve = c?.onCurve ?? (r.progress != null && !t.graduated);
   const lp = curve ? null : (i?.lpLocked ?? null);
-  const from = i?.source ? `From ${i.source}${i.checked ? `, read ${sinceMs(Date.now() - i.checked)} ago` : ""}` : c && !curve ? "RugCheck has no current reading yet (a bonded coin's first reports go stale within minutes); asking it again" : undefined;
+  const from = i?.source ? `From ${i.source}${i.checked ? `, read ${sinceMs(Math.max(0, now - i.checked))} ago` : ""}` : c && !curve ? "RugCheck has no current reading yet (a bonded coin's first reports go stale within minutes); asking it again" : undefined;
   const ledgerOnly = curve ? "Only known for coins Blix saw from the first trade" : "Unknown after bonding: Blix reads the curve, not the pool";
   const paid = Boolean(t.header) || (t.boosts || 0) > 0;
   // The AI's grade is part of its read: behind the same $10 lock (AiPicks.tsx).
@@ -467,7 +470,7 @@ export function Info({ r, c }: { r: TokenDetail; c: CoinData | null }) {
       {banner && <DexBanner src={banner} href={`https://dexscreener.com/solana/${t.pair || t.mint}`} symbol={t.symbol || "Coin"} />}
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="label">Token info</h3>
-        {i?.checked ? <span className="truncate text-xs text-muted">{i.source ? `${i.source} · ` : ""}{sinceMs(Date.now() - i.checked)} ago</span> : null}
+        {i?.checked ? <span className="truncate text-xs text-muted">{i.source ? `${i.source} · ` : ""}{sinceMs(Math.max(0, now - i.checked))} ago</span> : null}
       </div>
       <div className="grid grid-cols-3 gap-1">
         <Tile icon={<Icon.crown />} value={pctN(top10)} label="Top 10" bad={tone(top10, 30)} tip={`Share held by the 10 largest wallets. ${from || ""}`} />

@@ -1,3 +1,4 @@
+import { TrackWalletButton } from "@/components/TrackWalletButton";
 // A Fomo trader's profile (#/trader/<handle>), laid out like Fomo's: cover and avatar, name, badges, bio and
 // stats; portfolio value with the PnL chart (24H / 7D / 30D / ALL); best trades; open positions; recent
 // swaps; where they rank on today's boards. Data: /api/fomo/trader/<handle> (server/fomoboard.js reads the
@@ -10,7 +11,8 @@ import { ago, Problem } from "@/components/page";
 import { FollowButton } from "@/components/follow";
 import { Segmented } from "@/components/ui/segmented";
 import { toast } from "@/components/ui/toast";
-import { api, post } from "@/lib/api";
+import { api } from "@/lib/api";
+import { peekAnswer } from "@/lib/coin";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { amount, Avatar, Check, Chip, copy, count, exactUsd, hold, pct, QUOTES, RANGES, short, SOLANA, tone, TokenPic, usd, type Range } from "./traders/parts";
@@ -43,12 +45,13 @@ function FomoTrader({ handle }: { handle: string }) {
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<Range>("24h");
   const [dust, setDust] = useState(false);
-  const [follow, setFollow] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
 
   const load = async (fresh = false) => {
+    // Already in hand (the link was hovered, lib/traderlinks.ts prefetched it): shown now, the read below refreshes it.
+    if (!fresh) { const k = peekAnswer<Profile>(`fomo/trader/${encodeURIComponent(handle)}`); if (k?.chart && typeof k.chart === "object") setP((cur) => cur ?? k); }
     setBusy(true);
-    try { const d = await api<Profile>(`fomo/trader/${encodeURIComponent(handle)}${fresh ? "?fresh=1" : ""}`); if (!d?.chart || typeof d.chart !== "object") throw new Error("This trader came back unreadable. Try again."); setP(d); setFollow(Boolean(d.tracked)); setErr(null); }
+    try { const d = await api<Profile>(`fomo/trader/${encodeURIComponent(handle)}${fresh ? "?fresh=1" : ""}`); if (!d?.chart || typeof d.chart !== "object") throw new Error("This trader came back unreadable. Try again."); setP(d); setErr(null); }
     catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
@@ -74,14 +77,7 @@ function FomoTrader({ handle }: { handle: string }) {
   const open = p.positions.filter((x) => (value(x) ?? 0) >= (dust ? 0 : 1)).sort((a, b) => (value(b) ?? 0) - (value(a) ?? 0));
   const best = [...p.best].map((b) => ({ ...b, pnl: (b.realized ?? 0) + (b.unrealized ?? 0) })).sort((a, b) => b.pnl - a.pnl).slice(0, 5);
 
-  const toggleFollow = async () => {
-    if (!p.wallet) return;
-    const on = !follow;
-    try {
-      await post(`wallet/${p.wallet}`, on ? { follow: true, label: `@${p.handle}` } : { watching: false });
-      setFollow(on); toast(on ? `Following @${p.handle}'s wallet` : `Stopped following @${p.handle}'s wallet`);
-    } catch (e) { toast((e as Error).message); }
-  };
+
 
   const total = open.reduce((s, x) => s + (value(x) ?? 0), 0);
   const unreal = open.reduce((s, x) => { const v = value(x); return v != null && x.cost != null ? s + (v - x.cost) : s; }, 0);
@@ -120,10 +116,7 @@ function FomoTrader({ handle }: { handle: string }) {
             <button onClick={() => load(true)} disabled={busy} title="Read the profile from Fomo again" className={cn(iconBtn, "disabled:opacity-60")}><Icon.refresh className={cn("size-3.5", busy && "animate-spin")} /></button>
             <span aria-hidden className="mx-1 h-5 w-px bg-rule-2" />
             <FollowButton kind="trader" target={p.handle} />
-            <button onClick={toggleFollow} disabled={!p.wallet} title={p.wallet ? "Track every trade this wallet makes" : "The wallet has not been found on chain yet"}
-              className={cn("flex h-8 items-center rounded-full px-4 text-md font-semibold transition-colors disabled:opacity-50", follow ? "border border-up/50 bg-up/10 text-up hover:border-down/60 hover:bg-down/10 hover:text-down" : "bg-ink text-on-fill hover:bg-focus")}>
-              {follow ? "Following wallet" : "Follow wallet"}
-            </button>
+            <TrackWalletButton address={p.wallet} name={p.name || `@${p.handle}`} />
           </div>
         </div>
         <div className="grid grid-cols-6 border-t border-rule max-lg:grid-cols-3 max-sm:grid-cols-2">

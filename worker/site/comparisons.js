@@ -6,7 +6,7 @@ const CHECKED = "2026-10-10";
 const DATE = "October 10, 2026";
 const sources = (items) => `<h2 id="sources">Sources and review</h2><p class="meta">Reviewed by BLIX · ${DATE}. Product documentation can change. This is a documentation comparison, not an independent execution benchmark.</p><ul>${items.map(([url, label]) => `<li>${ext(url, label)}</li>`).join("")}</ul><p>Discuss these guides in the <a href="https://discord.gg/3VWHBP6paA" target="_blank" rel="noopener noreferrer">BLIX Discord</a>. Links on this page contain no referral codes.</p>`;
 const independent = (name) => `<p class="note">BLIX publishes this comparison of its own product. It is independent of ${name}; no affiliation or endorsement is implied.</p>`;
-const cta = `<div class="cta"><a class="btn primary" href="/app">Open BLIX</a><a class="btn" href="/memecoin-paper-trading">Explore paper trading</a></div>`;
+const cta = `<div class="cta"><a class="btn primary" href="/start?next=%2Fapp">Open BLIX</a><a class="btn" href="/memecoin-paper-trading">Explore paper trading</a></div>`;
 const common = { og: "og-api.png", topic: "comparisons", verifiedAt: CHECKED, updated: CHECKED, author: "BLIX" };
 
 const hub = {

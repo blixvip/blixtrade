@@ -179,13 +179,31 @@ ${RISK}`,
   ],
 });
 
+// ---------- the provider pages ----------
+// Each page answers one question for one product and carries only what is its own: the comparison for that product,
+// the one worked request that makes sense for someone arriving from it, and that product's own facts. The four
+// calls, the rules, the limits and the roadmap live once, on /trade-api, and are linked, not repeated (the seven
+// pages shared up to 53% of their text and risked being filtered as copies of each other; site audit 2026-10-12).
+const HUB_LINKS = `<p class="note">The trade API itself is documented once: <a href="/trade-api#calls">the four calls</a>, <a href="/trade-api#flow">the flow in curl</a>, <a href="/trade-api#fees">what a trade costs</a>, <a href="/trade-api#rules">the rules</a>, <a href="/trade-api#limits">limits</a> and <a href="/trade-api#roadmap">what is live and what is next</a>.</p>`;
+
 // ---------- /pump-fun-trading-api ----------
+const PUMPPORTAL_SIDE_BY_SIDE = code(`# The same buy, 0.1 SOL of one coin, asked of each service.
+
+# PumpPortal trade-local (no key; its 0.5% fee is inside the transaction it returns, as raw bytes to sign)
+curl -s https://pumpportal.fun/api/trade-local -H "content-type: application/json" \\
+  -d '{"publicKey":"'$WALLET'","action":"buy","mint":"'$MINT'","amount":0.1,"denominatedInSol":"true","slippage":3,"priorityFee":0.0001,"pool":"pump"}' \\
+  --output tx.bin
+
+# BLIX build (your key; Blix's fee inside; JSON with the quote beside the base64 transaction)
+curl -s ${BASE}/api/v1/trade/build -H "${KEY_H}" -H "content-type: application/json" \\
+  -d '{"wallet":"'$WALLET'","mint":"'$MINT'","side":"buy","sol":0.1,"slippageBps":300}'
+# → { "transaction": "<base64>", "quote": { "tokensOutUi": …, "feeSol": 0.002, "priorityFeeSol": 0.0001, "marketCapSol": … }, "validForMs": 90000 }`, "bash");
 const pump = page({
   path: "/pump-fun-trading-api", crumb: "pump.fun trading API", og: "og-api.png", eyebrow: `pump.fun trading APIs · checked ${CHECKED}`,
   title: "pump.fun Trading API: PumpPortal, pumpdev.io and BLIX Compared (2026) | BLIX",
   description: "The pump.fun trading APIs a bot can use in 2026: PumpPortal (0.5% local, 1% Lightning), pumpdev.io, Jupiter, and the BLIX trade API with your own wallet, data and AI under one key.",
   h1: "pump.fun trading API: what a bot can use today",
-  lede: `pump.fun publishes its programs and IDLs, not a hosted trading API, so bots trade through a third party that builds the transaction. For two years that has meant <a href="https://pumpportal.fun" rel="noopener">PumpPortal</a>; since then clones such as pumpdev.io and Jupiter's router have appeared, and now <a href="/trade-api">the BLIX trade API</a>. This page lays them side by side: what each builds, what it charges, whether it holds your key, and what else comes with the key.`,
+  lede: `pump.fun publishes its programs and IDLs, not a hosted trading API, so bots trade through a third party that builds the transaction. For two years that has meant <a href="https://pumpportal.fun" rel="noopener">PumpPortal</a>; since then clones such as pumpdev.io and Jupiter's router have appeared, and now <a href="/trade-api">the BLIX trade API</a>. This page lays them side by side: what each builds, what it charges, whether it holds your key, how a request to each looks, and what else comes with the key.`,
   body: `${TRADE_CTA()}
 ${facts([["pump.fun itself", "Programs and IDLs published; no hosted trade API"], ["PumpPortal", "Local 0.5% a trade; Lightning (custodial) 1%; trade stream needs a funded key"], ["pumpdev.io", "A PumpPortal clone: 0.25% client-side, 0.5% custodial; small, unlicensed"], ["Jupiter", "Free routing across launchpads; integrators add their own fee"], ["BLIX", "2% (1.6% invited), local-sign only, staked sends, data + AI + stream on the same key"], FACT.community])}
 <h2 id="compare">Side by side</h2>
@@ -193,25 +211,24 @@ ${table(["", "PumpPortal", "pumpdev.io", "Jupiter Swap API", "BLIX trade API"], 
     ["Builds", "pump.fun curve, PumpSwap, Bonk", "pump.fun curve, PumpSwap (not delivered in our test)", "Every Solana DEX and launchpad it indexes", "pump.fun curve and PumpSwap by hand; the rest through Jupiter next"],
     ["Fee", "0.5% local, 1% Lightning", "0.25% client-side, 0.5% custodial", "None to callers; integrators add theirs", "2% a trade, 1.6% with an invite, inside the transaction"],
     ["Your key", "Local API: yours. Lightning: PumpPortal holds a wallet for you", "Client-side: yours. Custodial wallets offered", "Yours", "Yours, always. No custodial option"],
+    ["Auth", "None for trade-local; an API key (funded) for Lightning and the trade stream", "API key", "Free tier keyless; a key from Jupiter's portal for higher limits", "Bearer key made on /trade-api, 5 per account"],
     ["Sends", "Jito bundles optional", "Jito bundles", "You send", "Helius Sender staked path + RPCs, re-sent until it lands, landing reported"],
     ["Stream", "Launches and trades; token trade stream metered", "Free websocket", "None", "WebSocket, PumpPortal's method names, with the account"],
     ["Data beyond trades", "No", "No", "Price API", `${N_ENDPOINTS} endpoints: holders with snipers and bundles, candles, AI reads, wallets`],
     ["Launch bundles", "Yes", "Yes", "No", "No, by design"],
   ], "cmp")}
-<p>Sources: ${ext("https://pumpportal.fun", "PumpPortal")}, pumpdev.io's published code and pricing, ${ext("https://dev.jup.ag/docs/", "Jupiter developer docs")} and pump.fun's published program interfaces, checked ${CHECKED}.</p>
-<h2 id="blix">Trading pump.fun through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${CURL}
+<p>Sources: ${ext("https://pumpportal.fun", "PumpPortal")}, pumpdev.io's published code and pricing, ${ext("https://dev.jup.ag/docs/", "Jupiter developer docs")} and pump.fun's published program interfaces, checked ${CHECKED}. Request shapes are the ones each service documents on that date; check its docs for the current field list before you ship.</p>
+<h2 id="request">The same request to PumpPortal and to BLIX</h2>
+<p>PumpPortal's <code>trade-local</code> answers with the raw transaction bytes and nothing else; BLIX's <code>build</code> answers with the transaction and the quote it was built from, so a bot can refuse a fill it does not like before it signs. Both are signed by you.</p>
+${PUMPPORTAL_SIDE_BY_SIDE}
 <h2 id="pumpportal">Moving a PumpPortal bot over</h2>
 ${steps([
-    `<b>Trades.</b> Where you posted to PumpPortal's <code>trade-local</code>, post to <code>${BASE}/api/v1/trade/build</code> with <code>wallet</code>, <code>mint</code>, <code>side</code> and <code>sol</code> or <code>pct</code>; sign the returned <code>transaction</code> exactly as before and post the signed bytes to <code>/api/v1/trade/send</code> instead of your own RPC. The answer carries the signature, status, slot and landing time.`,
+    `<b>Trades.</b> Where you posted to <code>trade-local</code>, post to <code>${BASE}/api/v1/trade/build</code> with <code>wallet</code>, <code>mint</code>, <code>side</code> and <code>sol</code> or <code>pct</code>; sign the returned <code>transaction</code> exactly as before and post the signed bytes to <code>/api/v1/trade/send</code> instead of your own RPC. The answer carries the signature, status, slot and landing time.`,
+    `<b>Slippage and fees.</b> PumpPortal's <code>slippage</code> is a percentage; BLIX's <code>slippageBps</code> is basis points (3% = 300). PumpPortal's <code>priorityFee</code> and BLIX's <code>priorityFeeSol</code> are both SOL per transaction.`,
     `<b>Stream.</b> Point the WebSocket at <code>wss://blixvip.com/api/v1/stream</code> with your key; <code>subscribeNewToken</code>, <code>subscribeTokenTrade</code>, <code>subscribeAccountTrade</code> and <code>subscribeMigration</code> work as they did, and the trade event's fields keep their names.`,
     `<b>Filters.</b> Before a buy, read <code>GET /api/holders/&lt;mint&gt;</code> (dev share and whether the dev sold, snipers, bundles, top-10 share) and the row's AI call from <code>GET /api/pulse</code>; both are on the same key.`,
   ])}
-${RULES}
-${PHASES}
-${COMMUNITY}
+${HUB_LINKS}
 ${TRADE_MORE}
 ${NOT_AFFILIATED("pump.fun, PumpPortal, pumpdev.io or Jupiter")}${RISK}`,
   faq: [
@@ -223,12 +240,24 @@ ${NOT_AFFILIATED("pump.fun, PumpPortal, pumpdev.io or Jupiter")}${RISK}`,
 });
 
 // ---------- /gmgn-trading-api ----------
+const GMGN_SIDE_BY_SIDE = code(`// Node 20+. The GMGN shape is the one its docs describe (a route, then a proxy send); check them for the current parameters.
+const sol = "So11111111111111111111111111111111111111112";
+
+// GMGN: ask for a swap route (the transaction comes back built), then send the signed bytes through GMGN's proxy
+const route = await fetch(\`https://gmgn.ai/defi/router/v1/sol/tx/get_swap_route?token_in_address=\${sol}&token_out_address=\${MINT}&in_amount=100000000&from_address=\${WALLET}&slippage=3\`).then((r) => r.json());
+// … sign route.data.raw_tx.swapTransaction with your key, then POST it to https://gmgn.ai/txproxy/v1/send_transaction
+
+// BLIX: the build carries the quote; sign it and hand it back to send (staked path, re-sent until it lands)
+const H = { authorization: \`Bearer \${process.env.BLIX_KEY}\`, "content-type": "application/json" };
+const built = await fetch("${BASE}/api/v1/trade/build", { method: "POST", headers: H, body: JSON.stringify({ wallet: WALLET, mint: MINT, side: "buy", sol: 0.1, slippageBps: 300 }) }).then((r) => r.json());
+if (built.quote.feeSol > 0.003) throw new Error("fee higher than expected");   // the quote is there to be checked
+// … sign built.transaction, then POST { transaction } to ${BASE}/api/v1/trade/send`, "javascript");
 const gmgn = page({
   path: "/gmgn-trading-api", crumb: "GMGN trading API", og: "og-gmgn.png", eyebrow: `GMGN trading API · checked ${CHECKED}`,
   title: "GMGN Trading API: Swaps Through the OpenAPI vs the BLIX Trade API | BLIX",
   description: "How trading through GMGN's OpenAPI works (Ed25519 key, private key on their side of the request, IP whitelist, no published prices) and how the BLIX trade API does the same trade with your key never leaving your machine.",
   h1: "GMGN trading API, and the BLIX trade API beside it",
-  lede: `GMGN has an official API: the GMGN OpenAPI, with agent "skills" wrapped around it. Data calls need a key you create at gmgn.ai/ai by uploading an Ed25519 public key; <b>swaps</b> also need the matching private key configured for the request and a whitelisted IP address, and GMGN publishes no prices or rate limits. The <a href="/trade-api">BLIX trade API</a> takes a different shape: Blix builds the transaction for your wallet, you sign it where your key already lives, Blix sends it over staked connections and reports where it landed. This page compares the two for a bot on Solana.`,
+  lede: `GMGN has an official API: the GMGN OpenAPI, with agent "skills" wrapped around it. Data calls need a key you create at gmgn.ai/ai by uploading an Ed25519 public key; <b>swaps</b> also need the matching private key configured for the request and a whitelisted IP address, and GMGN publishes no prices or rate limits. The <a href="/trade-api">BLIX trade API</a> takes a different shape: Blix builds the transaction for your wallet, you sign it where your key already lives, Blix sends it over staked connections and reports where it landed. This page compares the two for a bot on Solana, request by request.`,
   body: `${TRADE_CTA()}
 ${facts([["GMGN OpenAPI", "Key by application (Ed25519 public key); swaps need the private key and an IP whitelist"], ["GMGN price", "Not published in its docs"], ["GMGN chains", "Solana, BSC, Base, more announced"], ["BLIX", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign; Solana"], ["Same key", `${N_ENDPOINTS} data endpoints, AI reads, MCP connector`], FACT.community])}
 <h2 id="compare">Trading through each</h2>
@@ -236,6 +265,7 @@ ${table(["", "GMGN OpenAPI", "BLIX trade API"], [
     ["Getting access", "Create a key at gmgn.ai/ai with an Ed25519 public key", "Sign in with Google, open /trade-api, make a key"],
     ["Who signs", "Your private key is configured for GMGN's swap requests; requests must come from a whitelisted IP", "You, on your machine, with any Solana library. Blix never sees the key"],
     ["Fee", "Not published; the terminal charges about 1%", "2% a trade, 1.6% with an invite, inside the transaction"],
+    ["Rate limits", "Not published", "120 quotes and builds, 60 sends a minute per key"],
     ["Venues", "Solana, BSC, Base", "pump.fun curve and PumpSwap today; other pools through Jupiter next"],
     ["Sends", "GMGN's", "Helius Sender staked path + RPCs, re-sent until it lands, landing reported"],
     ["Stream", "Not part of the OpenAPI", "WebSocket, PumpPortal-compatible"],
@@ -243,13 +273,16 @@ ${table(["", "GMGN OpenAPI", "BLIX trade API"], [
     ["Agent tools", "GMGN skills", `MCP connector with every account`],
   ], "cmp")}
 <p>Sources: ${ext("https://docs.gmgn.ai/index/gmgn-agent-api", "GMGN Agent API docs")}, checked ${CHECKED}. GMGN's terms and access rules govern its API; BLIX's API is BLIX's own and not a way around them.</p>
-<h2 id="blix">The same buy through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${NODE}
-${RULES}
-${PHASES}
-${COMMUNITY}
+<h2 id="request">The same buy, request by request</h2>
+<p>The shapes differ in one way that matters to a bot: GMGN returns a route to sign, BLIX returns a quote with the transaction, so the fee, the fill and the priority fee can be checked in code before anything is signed.</p>
+${GMGN_SIDE_BY_SIDE}
+<h2 id="moving">What changes when a GMGN bot moves</h2>
+${bullets([
+    "<b>No key upload, no whitelist.</b> There is nothing to register but an account; the key is made on the page and sent as a bearer header from anywhere.",
+    "<b>Solana only.</b> A BSC or Base leg stays on GMGN (or Jupiter has nothing for it either); BLIX trades pump.fun's curve and PumpSwap today.",
+    "<b>The data side maps cleanly.</b> GMGN's token, wallet and K-line calls have counterparts in <code>/api/token</code>, <code>/api/wallet-page</code> and <code>/api/candles</code> on the same key, and <a href=\"/gmgn-api\">the GMGN API page</a> walks through them.",
+  ])}
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on GMGN", [["/gmgn-api", "GMGN API", "The data side: access, limits, what it covers."], ["/compare/gmgn-alternative", "GMGN alternative", "BLIX beside GMGN."], ["/axiom-vs-gmgn", "Axiom vs GMGN", "Speed versus multi-chain."]])}
 ${NOT_AFFILIATED("GMGN")}${RISK}`,
@@ -261,12 +294,24 @@ ${NOT_AFFILIATED("GMGN")}${RISK}`,
 });
 
 // ---------- /axiom-trading-api ----------
+const AXIOM_FILTER_SELL = code(`// Node 20+. An Axiom-style rule as code: watch the Final stretch, act on the holder ledger, sell half once it bonds.
+const H = { authorization: \`Bearer \${process.env.BLIX_KEY}\`, "content-type": "application/json" };
+const api = (p, body) => fetch(\`${BASE}/api/\${p}\`, body ? { method: "POST", headers: H, body: JSON.stringify(body) } : { headers: H }).then((r) => r.json());
+
+const pulse = await api("pulse");                       // the three tables Axiom's Pulse shows, as rows
+const pick = pulse.final.find((c) => c.hl.t10 < 25 && c.hl.bd < 10 && c.hl.sn < 15 && !c.hl.ds && c.ai?.call === "buy");
+if (!pick) process.exit();                               // nothing passes the filter this minute
+const built = await api("v1/trade/build", { wallet: WALLET, mint: pick.mint, side: "buy", sol: 0.2, slippageBps: 300 });
+// … sign built.transaction with your key, POST { transaction } to v1/trade/send
+
+// later, once the migration event arrives on the stream: take half off
+const half = await api("v1/trade/build", { wallet: WALLET, mint: pick.mint, side: "sell", pct: 50 });`, "javascript");
 const axiom = page({
   path: "/axiom-trading-api", crumb: "Axiom trading API", og: "og-axiom.png", eyebrow: `Axiom trading API · checked ${CHECKED}`,
   title: "Axiom Trading API: No Official One. Trade Programmatically With BLIX | BLIX",
   description: "Axiom Trade publishes no public trading API or SDK; unofficial SDKs sign in as your account. The BLIX trade API builds pump.fun and PumpSwap trades for your own wallet: you sign, Blix sends, 2% a trade.",
   h1: "Axiom trading API: what exists, and what to use instead",
-  lede: `Axiom Trade is the fast terminal: Pulse, limit orders, MEV modes, a migration sniper, Hyperliquid perps. What it does not publish, as of ${CHECKED}, is a trading API, an SDK or developer docs. The "Axiom APIs" you find are unofficial libraries that drive your own Axiom account through its private endpoints, which can break with any release and put your account's session in a bot's hands. If what you want is to trade pump.fun programmatically with Axiom-grade speed, the <a href="/trade-api">BLIX trade API</a> is built for exactly that, with your own wallet.`,
+  lede: `Axiom Trade is the fast terminal: Pulse, limit orders, MEV modes, a migration sniper, Hyperliquid perps. What it does not publish, as of ${CHECKED}, is a trading API, an SDK or developer docs. The "Axiom APIs" you find are unofficial libraries that drive your own Axiom account through its private endpoints, which can break with any release and put your account's session in a bot's hands. If what you want is to trade pump.fun programmatically with Axiom-grade speed, the <a href="/trade-api">BLIX trade API</a> is built for exactly that, with your own wallet, and Axiom's Pulse filters exist as fields you can code against.`,
   body: `${TRADE_CTA()}
 ${facts([["Axiom public API", "None published; unofficial SDKs use your account's session"], ["Axiom fee", "1%, less 0.05–0.25% cashback by volume"], ["BLIX trade API", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign"], ["Sends", "Helius Sender staked path, re-sent until it lands"], ["Same key", `${N_ENDPOINTS} data endpoints, AI reads, stream`], FACT.community])}
 <h2 id="compare">A bot's options</h2>
@@ -280,15 +325,17 @@ ${table(["", "Unofficial Axiom SDKs", "BLIX trade API"], [
     ["Data on the same key", "Axiom's private endpoints", `Pulse, holders with snipers and bundles, candles, AI grades, wallets (${N_ENDPOINTS} endpoints)`],
   ], "cmp")}
 <p>Axiom's own documentation describes Pulse's three tables and filters (${ext("https://docs.axiom.trade/axiom/finding-tokens/pulse", "docs.axiom.trade")}); it lists no developer API. Facts checked ${CHECKED}.</p>
-<h2 id="blix">Programmatic trading through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${CURL}
 <h2 id="pulse">Axiom's Pulse filters, as API fields</h2>
 <p>The filters Axiom's Pulse offers (age, top-10 %, dev %, snipers %, insiders %, bundle %, holders, liquidity, volume, market cap, transactions) are fields on every row of <code>GET /api/pulse</code> (<code>hl.t10</code>, <code>hl.dev</code>, <code>hl.ds</code>, <code>hl.sn</code>, <code>hl.bd</code>, <code>buys</code>, <code>sells</code>, <code>liveVol</code>, <code>mcap</code>), so the screen you filter by hand on Axiom is a filter in your bot here, with the build call one line later. See the <a href="/axiom-api">Axiom API page</a> for the data side.</p>
-${RULES}
-${PHASES}
-${COMMUNITY}
+<h2 id="rule">A Pulse rule as code: buy on the ledger, sell half on migration</h2>
+${AXIOM_FILTER_SELL}
+<h2 id="wallet">Bringing an Axiom wallet with you</h2>
+${steps([
+    "Axiom's wallets are Turnkey wallets with exportable keys: export the private key from Axiom's wallet settings (its docs describe the steps) and keep it on the machine the bot runs on.",
+    `Load it in your bot (<code>Keypair.fromSecretKey</code> in web3.js, <code>Keypair.from_base58_string</code> in solders); its public address is the <code>wallet</code> in every BLIX call. Blix reads its SOL and token balances to size and check each trade and never asks for the key.`,
+    "Nothing moves: the wallet keeps its SOL and positions, and Axiom's app still opens it. The bot and the app now trade the same wallet, which is also the simplest way to compare fills.",
+  ])}
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on Axiom", [["/axiom-api", "Axiom API", "The data side and the unofficial SDKs."], ["/axiom-trading-bot", "Axiom trading bot", "Why there is no official one."], ["/axiom-trade", "Axiom Trade", "What it is, fees, features."]])}
 ${NOT_AFFILIATED("Axiom Trade")}${RISK}`,
@@ -300,12 +347,37 @@ ${NOT_AFFILIATED("Axiom Trade")}${RISK}`,
 });
 
 // ---------- /fomo-trading-api ----------
+const FOMO_FLOW_PY = code(`# pip install solders requests   (Python 3.10+)
+import base64, os, requests
+from solders.keypair import Keypair
+from solders.transaction import Transaction
+
+H = {"authorization": f"Bearer {os.environ['BLIX_KEY']}"}
+kp = Keypair.from_base58_string(os.environ["WALLET_SECRET"])        # your key stays in this process
+get = lambda p: requests.get(f"${BASE}/api/{p}", headers=H, timeout=30).json()
+post = lambda p, body: requests.post(f"${BASE}/api/{p}", json=body, headers=H, timeout=120).json()
+
+# 1. what Fomo's leaderboard traders are buying right now: flow per coin, from the chain
+flow = get("fomo")["flow"]                                           # [{mint, symbol, buyers, netSol, ...}, ...]
+coin = max(flow, key=lambda c: c["buyers"])                          # the coin the most of them bought
+
+# 2. the ledger before the trade: a coin five Fomo traders bought can still be a bundle
+h = get(f"holders/{coin['mint']}")
+if h["bundles"]["pct"] > 15 or h["dev"]["sold"]:
+    raise SystemExit("ledger says no")
+
+# 3. the trade, from your own wallet
+built = post("v1/trade/build", {"wallet": str(kp.pubkey()), "mint": coin["mint"], "side": "buy", "sol": 0.05, "slippageBps": 300})
+tx = Transaction.from_bytes(base64.b64decode(built["transaction"]))
+tx.sign([kp], tx.message.recent_blockhash)
+sent = post("v1/trade/send", {"transaction": base64.b64encode(bytes(tx)).decode()})
+print(sent["status"], sent["signature"], sent.get("landedMs"), "ms")`, "python");
 const fomo = page({
   path: "/fomo-trading-api", crumb: "Fomo trading API", og: "og-fomo.png", eyebrow: `Fomo trading API · checked ${CHECKED}`,
   title: "Fomo Trading API: None Official. Trade pump.fun With the BLIX Trade API | BLIX",
   description: "Fomo (fomo.family) publishes no trading API; third-party Fomo APIs resell data. The BLIX trade API builds pump.fun and PumpSwap trades for your own wallet, 2% a trade, and reads Fomo's traders from the chain.",
   h1: "Fomo trading API: none official, and the BLIX route",
-  lede: `Fomo (fomo.family) is a social trading app: a feed of other traders' buys, sells and theses, one-tap trades with network fees covered, perps, clans. It publishes no trading API, SDK or developer docs as of ${CHECKED}, and its backend needs the app's own login. The third-party "Fomo APIs" sell data on credits, not trades. What people searching for a Fomo trading API usually want is to act on what Fomo's traders are buying, programmatically. The <a href="/trade-api">BLIX trade API</a> does the trade with your own wallet, and the same key reads what Fomo's leaderboard traders are buying, from the chain.`,
+  lede: `Fomo (fomo.family) is a social trading app: a feed of other traders' buys, sells and theses, one-tap trades with network fees covered, perps, clans. It publishes no trading API, SDK or developer docs as of ${CHECKED}, and its backend needs the app's own login. The third-party "Fomo APIs" sell data on credits, not trades. What people searching for a Fomo trading API usually want is to act on what Fomo's traders are buying, programmatically. The <a href="/trade-api">BLIX trade API</a> does the trade with your own wallet, and the same key reads what Fomo's leaderboard traders are buying, from the chain. Below: the whole loop in one Python script.`,
   body: `${TRADE_CTA()}
 ${facts([["Fomo public API", "None; third-party Fomo APIs resell data on credits"], ["Fomo fee", "About 0.5% spot, quoted per trade; network fees covered"], ["BLIX trade API", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign"], ["Fomo's traders in BLIX", "<code>GET /api/fomo</code>: what they are buying, flow per coin, top traders"], ["Same key", `${N_ENDPOINTS} data endpoints, stream, MCP connector`], FACT.community])}
 <h2 id="compare">What a bot gets</h2>
@@ -314,21 +386,15 @@ ${table(["", "Fomo", "Third-party Fomo APIs", "BLIX"], [
     ["What Fomo traders buy", "In the app's feed", "Leaderboards and holders, metered by credits", "<code>GET /api/fomo</code> and <code>/api/fomo/board</code>, from the chain, with the account"],
     ["Fee", "About 0.5% spot in the app", "Credits per call", "2% a trade, 1.6% with an invite, inside the transaction"],
     ["Who signs", "Fomo's non-custodial app", "Not applicable", "You, with your own key"],
+    ["Reads", "The app", "Per-credit", "1,200 API reads a minute per address; 120 builds and 60 sends a minute per key"],
     ["Stream", "None public", "Websocket alerts, metered", "WebSocket, PumpPortal-compatible"],
   ], "cmp")}
 <p>Sources: ${ext("https://fomo.family", "fomo.family")}, ${ext("https://newsletter.fomo.family/", "the Fomo newsletter")}, checked ${CHECKED}. Beware of Telegram bots calling themselves the "official Fomo bot": Fomo publishes none.</p>
-<h2 id="blix">Acting on Fomo's traders, through BLIX</h2>
-${KEYS_NOTE}
-${steps([
-    `<b>Read the flow.</b> <code>GET ${BASE}/api/fomo</code> lists what Fomo's leaderboard traders are buying right now (flow per coin, sampled from the swaps Fomo sponsors) and the top traders by observed profit; <code>GET /api/wallet-page/&lt;wallet&gt;</code> opens any of them from the chain.`,
-    `<b>Check the coin.</b> <code>GET /api/holders/&lt;mint&gt;</code> for the dev, snipers and bundles; the row's AI call from <code>GET /api/pulse</code>. A coin several Fomo traders bought can still be a bundle; the ledger says so.`,
-    `<b>Trade it.</b> <code>POST /api/v1/trade/build</code> for your wallet, sign, <code>POST /api/v1/trade/send</code>. The quote shows every fee first.`,
-  ])}
-${CALLS}
-${PY}
-${RULES}
-${PHASES}
-${COMMUNITY}
+<h2 id="loop">The loop: read the flow, check the ledger, trade</h2>
+<p><code>GET /api/fomo</code> lists what Fomo's leaderboard traders are buying right now (flow per coin, sampled from the swaps Fomo sponsors) and the top traders by observed profit; <code>GET /api/wallet-page/&lt;wallet&gt;</code> opens any of them from the chain. The holder ledger is the check between seeing a buy and copying it, and the trade is three calls on the same key.</p>
+${FOMO_FLOW_PY}
+<p class="note">The script copies nothing automatically: it reads, checks and makes one trade when you run it. A loop around it, position sizing and the exits are your bot's.</p>
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on Fomo", [["/fomo-api", "Fomo API", "Is there one? What the unofficial ones sell."], ["/fomo-trading-bot", "Fomo trading bot", "Why there is no official one."], ["/fomo-app", "The Fomo app", "What it is, fees, chains."]])}
 ${NOT_AFFILIATED("Fomo (Fomo Labs)")}${RISK}`,
@@ -340,12 +406,25 @@ ${NOT_AFFILIATED("Fomo (Fomo Labs)")}${RISK}`,
 });
 
 // ---------- /photon-trading-api ----------
+const PHOTON_SNIPER = code(`// Node 22+ (global WebSocket). A Photon-style sniper: every launch as an event, a filter, then the build.
+const H = { authorization: \`Bearer \${process.env.BLIX_KEY}\`, "content-type": "application/json" };
+const ws = new WebSocket("wss://blixvip.com/api/v1/stream?key=" + process.env.BLIX_KEY);
+ws.onopen = () => ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+ws.onmessage = async (e) => {
+  const m = JSON.parse(e.data);
+  if (m.txType !== "create" || m.solAmount < 1) return;                         // the dev bought at least 1 SOL
+  const h = await fetch(\`${BASE}/api/holders/\${m.mint}\`, { headers: H }).then((r) => r.json());
+  if (h.bundles.pct > 10 || h.snipers.pct > 20) return;                          // first-block wallets hold too much
+  const built = await fetch("${BASE}/api/v1/trade/build", { method: "POST", headers: H,
+    body: JSON.stringify({ wallet: WALLET, mint: m.mint, side: "buy", sol: 0.1, slippageBps: 500, priorityFeeSol: 0.0005, tipSol: 0.001 }) }).then((r) => r.json());
+  // … sign built.transaction, POST { transaction } to ${BASE}/api/v1/trade/send; the answer carries landedMs and the slot
+};`, "javascript");
 const photon = page({
   path: "/photon-trading-api", crumb: "Photon trading API", og: "og-api.png", eyebrow: `Photon trading API · checked ${CHECKED}`,
   title: "Photon Trading API: None Public. Trade pump.fun Programmatically With BLIX | BLIX",
   description: "Photon publishes no trading API or SDK. The BLIX trade API builds pump.fun and PumpSwap trades for your own wallet: you sign, Blix sends, 2% a trade, with holders and AI reads on the same key.",
   h1: "Photon trading API: what exists, and the BLIX route",
-  lede: `Photon is one of the fast Solana terminals: a sniper, quick buys, about 1% a trade, with a wallet generated in the app. As of ${CHECKED} it publishes no trading API, SDK or developer documentation, so "Photon API" wrappers you find drive the website or your account, and break when Photon changes. If you want Photon-style speed from a bot, the <a href="/trade-api">BLIX trade API</a> builds the transaction for your own wallet in one account read and sends it over staked connections.`,
+  lede: `Photon is one of the fast Solana terminals: a sniper, quick buys, about 1% a trade, with a wallet generated in the app. As of ${CHECKED} it publishes no trading API, SDK or developer documentation, so "Photon API" wrappers you find drive the website or your account, and break when Photon changes. If you want Photon-style speed from a bot, the <a href="/trade-api">BLIX trade API</a> builds the transaction for your own wallet in one account read and sends it over staked connections; the sniper people use Photon for is a short script against the stream, shown below.`,
   body: `${TRADE_CTA()}
 ${facts([["Photon public API", "None published"], ["Photon fee", "About 1% (0.75% quoted by some reviews; 1% with the sniper)"], ["BLIX trade API", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign"], ["Sends", "Helius Sender staked path + RPCs, re-sent until it lands"], ["Same key", `${N_ENDPOINTS} data endpoints, AI reads, stream`], FACT.community])}
 <h2 id="compare">A bot's options</h2>
@@ -354,17 +433,18 @@ ${table(["", "Photon", "BLIX trade API"], [
     ["Who signs", "Photon's in-app wallet", "You, with your own key. Blix never sees it"],
     ["Fee", "About 1%", "2% a trade, 1.6% with an invite, inside the transaction"],
     ["Speed path", "Photon's", "One account read, no router round trip, staked sends with your priority fee and tip; landing time reported"],
+    ["Sniping", "In the app, by hand", "Your script on the launch stream (below); 3 live connections per key"],
     ["Stream", "None public", "WebSocket, PumpPortal-compatible"],
     ["Data on the same key", "None", `Pulse, holders with snipers and bundles, candles, AI grades, wallets (${N_ENDPOINTS} endpoints)`],
   ], "cmp")}
 <p>Facts about Photon checked ${CHECKED} against its site and public reviews; Photon's terms govern its product.</p>
-<h2 id="blix">Programmatic trading through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${NODE}
-${RULES}
-${PHASES}
-${COMMUNITY}
+<h2 id="sniper">A Photon-style sniper, as a script</h2>
+<p>Photon's sniper waits for a launch and buys on your settings. The same thing as code is the launch stream, a filter on the holder ledger, and a build with a higher priority fee and tip for the first seconds; what to filter on and how much to risk stay yours.</p>
+${PHOTON_SNIPER}
+<p class="note">Sniping new launches is the riskiest trade on pump.fun: most coins bought in their first seconds go to zero, and a bundle can be invisible until the ledger is read. The filter above is a starting point, not advice.</p>
+<h2 id="wallet">Using your Photon wallet in the bot</h2>
+<p>Photon generates a wallet in the app and lets you export its private key; a bot can trade that same wallet through BLIX by loading the key locally and passing its address as <code>wallet</code>. Alternatively make a fresh keypair for the bot and fund it: the API treats any Solana address the same, and Blix never holds the key either way.</p>
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on Photon", [["/photon-alternative", "Photon alternative", "BLIX beside Photon."], ["/axiom-vs-photon", "Axiom vs Photon", "The two fast ones."], ["/best-solana-trading-terminal", "Best Solana trading terminal", "All of them on one table."]])}
 ${NOT_AFFILIATED("Photon")}${RISK}`,
@@ -376,12 +456,33 @@ ${NOT_AFFILIATED("Photon")}${RISK}`,
 });
 
 // ---------- /bullx-trading-api ----------
+const BULLX_EXIT_PY = code(`# pip install solders requests   (Python 3.10+). Rebuild the exits a BullX position had: a sell, and following it until it lands.
+import base64, os, time, requests
+from solders.keypair import Keypair
+from solders.transaction import Transaction
+
+H = {"authorization": f"Bearer {os.environ['BLIX_KEY']}"}
+kp = Keypair.from_base58_string(os.environ["WALLET_SECRET"])
+api = lambda m, p, **kw: requests.request(m, f"${BASE}/api/{p}", headers=H, timeout=120, **kw).json()
+
+# what the wallet holds now, from the chain (the positions BullX showed are just token accounts)
+me = api("GET", f"wallet-page/{kp.pubkey()}")
+for pos in me["positions"]:
+    if pos["pnlPct"] < -40 or pos["pnlPct"] > 150:                               # your exit rule
+        built = api("POST", "v1/trade/build", json={"wallet": str(kp.pubkey()), "mint": pos["mint"], "side": "sell", "pct": 100})
+        if "transaction" not in built: print(pos["symbol"], built["error"]); continue   # e.g. 409 route unsupported
+        tx = Transaction.from_bytes(base64.b64decode(built["transaction"]))
+        tx.sign([kp], tx.message.recent_blockhash)
+        sent = api("POST", "v1/trade/send", json={"transaction": base64.b64encode(bytes(tx)).decode()})
+        while sent["status"] == "sent":                                            # follow it until it lands or expires
+            time.sleep(1); sent = api("GET", f"v1/trade/{sent['signature']}")
+        print(pos["symbol"], sent["status"], sent.get("slot"))`, "python");
 const bullx = page({
   path: "/bullx-trading-api", crumb: "BullX trading API", og: "og-api.png", eyebrow: `BullX trading API · checked ${CHECKED}`,
   title: "BullX Trading API: Trading Suspended, No API. Use the BLIX Trade API | BLIX",
   description: "BullX suspended trading on June 1, 2026 and never published a trading API. The BLIX trade API builds pump.fun and PumpSwap trades for your own wallet, 2% a trade, with data, AI reads and a live stream on the same key.",
   h1: "BullX trading API: none, and trading is suspended",
-  lede: `BullX (and BullX Neo) suspended trading on June 1, 2026; withdrawals stayed open and as of ${CHECKED} no relaunch date had been published. It never offered a public trading API or SDK, so a "BullX bot" always meant automating your own account through its web app. For programmatic pump.fun trading today, the <a href="/trade-api">BLIX trade API</a> is a documented rail with your own wallet: Blix builds, you sign, Blix sends.`,
+  lede: `BullX (and BullX Neo) suspended trading on June 1, 2026; withdrawals stayed open and as of ${CHECKED} no relaunch date had been published. It never offered a public trading API or SDK, so a "BullX bot" always meant automating your own account through its web app. For programmatic pump.fun trading today, the <a href="/trade-api">BLIX trade API</a> is a documented rail with your own wallet: Blix builds, you sign, Blix sends. This page is about the move: getting funds out of BullX, and rebuilding the automatic exits BullX positions had.`,
   body: `${TRADE_CTA()}
 ${facts([["BullX status", "Trading suspended since June 1, 2026; withdrawals open; no relaunch date published"], ["BullX API", "None, before or since"], ["BLIX trade API", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign"], ["Sends", "Helius Sender staked path + RPCs, landing reported"], ["Same key", `${N_ENDPOINTS} data endpoints, AI reads, stream`], FACT.community])}
 <h2 id="compare">Where to take a BullX bot</h2>
@@ -390,17 +491,22 @@ ${table(["", "BullX", "BLIX trade API"], [
     ["API", "None", "Documented v1, your own key"],
     ["Who signs", "BullX's in-app wallets", "You, with your own key"],
     ["Fee", "Was about 0.9–1%", "2% a trade, 1.6% with an invite, inside the transaction"],
+    ["Exits", "Take profit and stop loss in the app", "In the terminal for one-click trades; in your own code for the API (below)"],
     ["Stream", "None public", "WebSocket, PumpPortal-compatible"],
     ["Data on the same key", "None", `Pulse, holders with snipers and bundles, candles, AI grades, wallets (${N_ENDPOINTS} endpoints)`],
   ], "cmp")}
 <p>If you hold funds on BullX, withdraw them first; nothing here touches a BullX account. Facts checked ${CHECKED}.</p>
-<h2 id="blix">Programmatic trading through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${PY}
-${RULES}
-${PHASES}
-${COMMUNITY}
+<h2 id="out">Getting out of BullX</h2>
+${steps([
+    "Withdraw from BullX while withdrawals are open: SOL and any tokens you still hold go to an address you control. BullX's in-app wallets were never meant to be exported, so send the funds rather than the key.",
+    "Make a keypair for the bot (or reuse a wallet you already hold the key for) and keep it on the bot's machine. Its public address is the <code>wallet</code> in every BLIX call.",
+    `Open <code>GET /api/wallet-page/&lt;wallet&gt;</code>: the positions BullX showed are token accounts on the chain, and BLIX reads them from there, with the entry price it can see and the live profit.`,
+  ])}
+<h2 id="exits">Rebuilding the exits</h2>
+<p>A BullX position carried a take profit and a stop loss. Through the API those are your rule, run against the wallet's live positions; the script sells everything that crosses it and follows each send until the chain confirms it.</p>
+${BULLX_EXIT_PY}
+<p class="note">A coin in a pool the hand-built path does not cover answers <code>409</code> with <code>"route": "unsupported"</code> rather than a wrong transaction; sell those through the terminal or Jupiter until the routed build ships.</p>
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on BullX", [["/compare/bullx-alternative", "BullX alternative", "Where to go after the suspension."], ["/axiom-vs-bullx", "Axiom vs BullX", "Head to head."], ["/fomo-vs-bullx", "Fomo vs BullX", "Social versus the suspended terminal."]])}
 ${NOT_AFFILIATED("BullX")}${RISK}`,
@@ -411,12 +517,26 @@ ${NOT_AFFILIATED("BullX")}${RISK}`,
 });
 
 // ---------- /jupiter-trading-api ----------
+const JUPITER_SIDE_BY_SIDE = code(`# The same buy, 0.1 SOL of one coin, asked of each. Both return something you sign yourself.
+SOL=So11111111111111111111111111111111111111112
+
+# Jupiter: a quote, then the swap transaction for that quote (two round trips; keyless on the free endpoint)
+curl -s "https://lite-api.jup.ag/swap/v1/quote?inputMint=$SOL&outputMint=$MINT&amount=100000000&slippageBps=300" > quote.json
+curl -s https://lite-api.jup.ag/swap/v1/swap -H "content-type: application/json" \\
+  -d "{\\"quoteResponse\\":$(cat quote.json),\\"userPublicKey\\":\\"$WALLET\\"}"
+# → { "swapTransaction": "<base64>", ... }   sign it, send it to your own RPC, poll the signature yourself
+
+# BLIX: the build is the quote and the transaction in one answer (one account read, no router)
+curl -s ${BASE}/api/v1/trade/build -H "${KEY_H}" -H "content-type: application/json" \\
+  -d '{"wallet":"'$WALLET'","mint":"'$MINT'","side":"buy","sol":0.1,"slippageBps":300}'
+# → { "transaction": "<base64>", "quote": {...}, "validForMs": 90000 }   sign it, POST { transaction } to /api/v1/trade/send
+# → { "signature": "…", "status": "confirmed", "slot": …, "landedMs": 1180 }`, "bash");
 const jupiter = page({
   path: "/jupiter-trading-api", crumb: "Jupiter trading API", og: "og-api.png", eyebrow: `Jupiter Swap API vs BLIX · checked ${CHECKED}`,
   title: "Jupiter Trading API vs the BLIX Trade API for pump.fun Bots | BLIX",
   description: "Jupiter's Swap and Ultra APIs route every Solana DEX for free. When a pump.fun bot should use them, when BLIX's hand-built pump.fun and PumpSwap transactions with staked sends fit better, and how BLIX will use Jupiter for the rest.",
   h1: "Jupiter's trading API and the BLIX trade API, honestly compared",
-  lede: `Jupiter publishes the best general-purpose trading API on Solana: the Swap API and Ultra API quote and build a route across every DEX and launchpad Jupiter indexes, free to callers, with integrators adding their own fee. The <a href="/trade-api">BLIX trade API</a> is narrower on purpose: pump.fun's bonding curve and PumpSwap pools, built by hand from one account read with no router round trip, sent over staked connections, with Blix's fee inside and the terminal's data, holder ledgers and AI reads on the same key. Here is when each fits, and how they meet.`,
+  lede: `Jupiter publishes the best general-purpose trading API on Solana: the Swap API and Ultra API quote and build a route across every DEX and launchpad Jupiter indexes, free to callers, with integrators adding their own fee. The <a href="/trade-api">BLIX trade API</a> is narrower on purpose: pump.fun's bonding curve and PumpSwap pools, built by hand from one account read with no router round trip, sent over staked connections, with Blix's fee inside and the terminal's data, holder ledgers and AI reads on the same key. Here is when each fits, the same request to both, and how they meet.`,
   body: `${TRADE_CTA()}
 ${facts([["Jupiter Swap / Ultra API", "Free routing across every Solana DEX and launchpad; integrator fees optional"], ["Jupiter key", "Free tier keyless; higher limits with a key from Jupiter"], ["BLIX trade API", "pump.fun curve and PumpSwap by hand; 2% (1.6% invited); local-sign; staked sends"], ["Where they meet", "Blix routes the launchpads it does not hand-build through Jupiter in the next phase"], ["Same key", `${N_ENDPOINTS} data endpoints, AI reads, stream`], FACT.community])}
 <h2 id="compare">Side by side</h2>
@@ -424,12 +544,15 @@ ${table(["", "Jupiter Swap API", "BLIX trade API"], [
     ["Covers", "Every DEX and launchpad Jupiter indexes, any token pair", "pump.fun bonding curve and PumpSwap pools (SOL pairs) today"],
     ["Round trips before signing", "Two (quote, then swap transaction)", "One account read; the build is local"],
     ["Fee", "None from Jupiter; integrators may add a platform fee", "2% a trade, 1.6% with an invite, inside the transaction"],
+    ["Auth and limits", "Keyless on the free endpoint, metered; a portal key raises the limits (per Jupiter's plans)", "Bearer key; 120 quotes and builds, 60 sends a minute"],
     ["Who signs", "You", "You"],
     ["Sends", "You, to your own RPC", "Blix: Helius Sender staked path + RPCs, re-sent every second, landing reported; or send it yourself"],
     ["Stream", "None (price API)", "WebSocket, PumpPortal-compatible: launches, trades, migrations"],
     ["Data on the same key", "Prices, token lists", `Pulse, holders with snipers and bundles, candles from real trades, AI grades, smart-money wallets (${N_ENDPOINTS} endpoints)`],
   ], "cmp")}
-<p>Source: ${ext("https://dev.jup.ag/docs/", "Jupiter developer docs")}, checked ${CHECKED}. Jupiter's terms govern its API.</p>
+<p>Source: ${ext("https://dev.jup.ag/docs/", "Jupiter developer docs")}, checked ${CHECKED}. Jupiter's terms govern its API; the request shape above is the one its docs describe on that date.</p>
+<h2 id="request">The same buy, request by request</h2>
+${JUPITER_SIDE_BY_SIDE}
 <h2 id="when">Which one, when</h2>
 ${bullets([
     "<b>A coin in its first minutes on pump.fun, where every hundred milliseconds matters:</b> BLIX. The transaction is built from one read of the curve and sent over staked connections with your priority fee and tip; the quote shows the exact fill.",
@@ -437,13 +560,7 @@ ${bullets([
     "<b>A bot that needs the filter as much as the fill:</b> BLIX, because the holder ledger, the AI grade and the live stream are on the same key as the build; with Jupiter you assemble those from other services.",
     "<b>Zero fee above the pool's own:</b> Jupiter, and you run your own RPC and sends.",
   ])}
-<h2 id="blix">Trading pump.fun through BLIX</h2>
-${KEYS_NOTE}
-${CALLS}
-${CURL}
-${RULES}
-${PHASES}
-${COMMUNITY}
+${HUB_LINKS}
 ${TRADE_MORE}
 ${links("More on Jupiter", [["/compare/jupiter-terminal-alternative", "Jupiter Terminal alternative", "The terminal beside BLIX."], ["/solana-swap", "Solana swap", "One-click swaps in the terminal."]])}
 ${NOT_AFFILIATED("Jupiter")}${RISK}`,

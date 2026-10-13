@@ -1,4 +1,4 @@
-import test, { after } from 'node:test';
+import test, { after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -12,6 +12,8 @@ globalThis.fetch = async () => { throw new Error('Unstubbed network request in g
 const { settings } = await import('../server/settings.js');
 const { db } = await import('../server/db.js');
 let serial = 0;
+// Admission tests run late in a fixed day; midnight pacing has dedicated coverage.
+beforeEach(t => t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-11T23:00:00Z') }));
 
 after(() => {
   globalThis.fetch = originalFetch;
@@ -204,4 +206,12 @@ test('restart preserves charged usage when previously unknown keys gain a verifi
   assert.equal(restored.keyStatus(first).creditsToday, 150);
   assert.equal(restored.keyStatus(second).creditsToday, 150);
   assert.equal(restored.bytesToday(), 150 * 50_000);
+});
+
+test('analytics websocket yields at eighty percent while the price key stays available', async () => {
+  const { governor, first } = await fixture();
+  assert.equal(governor.rpcStreamAllowed(first), true);
+  governor.noteBytes(first, governor.keyStatus(first).allowedNow * .8 * 50_000);
+  assert.equal(governor.rpcStreamAllowed(first), false);
+  assert.equal(governor.activeUrl(), first);
 });

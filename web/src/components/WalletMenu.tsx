@@ -9,7 +9,7 @@ import { useMe } from "@/lib/ui";
 import { cn, store } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 
-// The top bar's two menus, as Axiom has them. The balance pill opens the wallet panel: total value (in SOL or USDC),
+// The top bar shows both actual balances. The balance pill opens the wallet panel: total value (in SOL or USDC),
 // the SOL and USDC held, copy the address, Deposit and Withdraw. The avatar opens the account menu: Account,
 // Settings, MCP, API and Log out. Signed out, both still just open the account page (sign in).
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -68,8 +68,10 @@ export function WalletMenu() {
   return (
     <div ref={box} className="relative shrink-0">
       <button aria-label="Your wallet" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)} onPointerEnter={warmExchange}
-        className={cn(pillCls, open && "border-muted")}>
-        <Icon.wallets className="size-4 text-muted" /><SolanaLogo className="size-3.5" /><span className="num">{w ? fmt(sol, 3) : "—"}</span>
+        className={cn(pillCls, "max-xl:flex-col max-xl:items-start max-xl:justify-center max-xl:gap-0 max-xl:text-xs", open && "border-muted")}>
+        <span className="flex items-center gap-1.5"><SolanaLogo className="size-3.5" /><span className="num">{w ? fmt(sol, 4) : "—"}</span><span className="text-xs text-ink-2">SOL</span></span>
+        <span aria-hidden="true" className="h-3.5 w-px bg-rule-2 max-xl:hidden" />
+        <span className="flex items-center gap-1.5"><UsdcLogo className="size-3.5" /><span className="num">{w ? fmt(usdc) : "—"}</span><span className="text-xs text-ink-2">USDC</span></span>
       </button>
       {open && (
         <div role="dialog" aria-label="Your wallet" className={cn(panel, "w-80 max-w-[calc(100vw-1.5rem)]")}>

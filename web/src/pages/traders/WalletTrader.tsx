@@ -1,3 +1,4 @@
+import { TrackWalletButton } from "@/components/TrackWalletButton";
 // A trader page for any Solana wallet (#/trader/<wallet>): pump.fun's leaderboard traders, Feed callers and anyone
 // Blix has no Fomo profile for. Built by the server from the chain (server/walletpage.js): pump.fun's public
 // profile when there is one, the wallet's SOL and every coin it holds (priced), the latest swaps read from its
@@ -7,8 +8,10 @@ import { useEffect, useState } from "react";
 import { SiteLogo } from "@/components/logos";
 import { ago, Problem } from "@/components/page";
 import { toast } from "@/components/ui/toast";
-import { api, post } from "@/lib/api";
+import { api } from "@/lib/api";
 import { usePoll } from "@/lib/coin";
+import { useLivePrices } from '@/lib/livepx';
+import { markPortfolio } from '@/lib/wallet-values';
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { amount, Avatar, copy, count, exactUsd, pct, RANGES, short, SOLANA, tone, TokenPic, usd, type Range } from "./parts";
@@ -21,6 +24,7 @@ interface Page {
   wallet: string; name: string | null; pic: string | null; bio: string | null; x: string | null; followers: number | null; following: number | null; joined: string | null;
   solUsd: number; sol: number | null; value: number; tokensUsd: number; positions: Position[]; best: Best[]; recent: Swap[];
   readSince: number | null; volume: number; tradesRead: number; ranks: Partial<Record<Range, Rank | null>>; read: number; updating: boolean;
+  partial?: boolean;   // the holdings only, answered the moment they were read; the trades and the rest follow (polled)
 }
 
 const card = "rounded-card border border-rule bg-paper-2";
@@ -30,14 +34,15 @@ const POS = "grid grid-cols-[minmax(160px,1.5fr)_120px_110px_minmax(90px,0.8fr)_
 const hue = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360;
 
 export function WalletTrader({ wallet }: { wallet: string }) {
-  const { data: p, error, refresh } = usePoll<Page>(`wallet-page/${wallet}`, 15_000);
+  const { data: snapshot, error, refresh } = usePoll<Page>(`wallet-page/${wallet}`, 15_000);
+  const prices = useLivePrices(snapshot?.positions.map(p => p.mint) || []);
+  const p = snapshot ? markPortfolio(snapshot, prices, Date.now()) : null;
   const [busy, setBusy] = useState(false);
   const [dust, setDust] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const [follow, setFollow] = useState(false);
   useEffect(() => { window.scrollTo(0, 0); }, [wallet]);
   // While the server is reading the chain again, look back soon for the new answer.
-  useEffect(() => { if (!p?.updating) return; const t = setTimeout(refresh, 4000); return () => clearTimeout(t); }, [p?.updating, p?.read]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!p?.updating) return; const t = setTimeout(refresh, p.partial ? 1200 : 4000); return () => clearTimeout(t); }, [p?.updating, p?.read, p?.partial]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error && !p) return <div className="p-4"><Problem text={error} /><a href="#/traders" className="mt-3 inline-block text-md text-ink-2 hover:text-ink">‹ Back to the leaderboard</a></div>;
   if (!p) return (
@@ -49,11 +54,7 @@ export function WalletTrader({ wallet }: { wallet: string }) {
   );
 
   const again = async () => { setBusy(true); try { await api(`wallet-page/${wallet}?fresh=1`); setTimeout(refresh, 3500); } catch (e) { toast((e as Error).message); } setBusy(false); };
-  const toggleFollow = async () => {
-    const on = !follow, label = p.name || short(wallet);
-    try { await post(`wallet/${wallet}`, on ? { follow: true, label } : { watching: false }); setFollow(on); toast(on ? `Following ${label}'s wallet` : `Stopped following ${label}'s wallet`); }
-    catch (e) { toast((e as Error).message); }
-  };
+
 
   const open = p.positions.filter((x) => (x.value ?? 0) >= (dust ? 0 : 1));
   const solValue = (p.sol ?? 0) * p.solUsd;
@@ -94,10 +95,7 @@ export function WalletTrader({ wallet }: { wallet: string }) {
             <a href={`https://solscan.io/account/${wallet}`} target="_blank" rel="noopener" title="Wallet on Solscan" className={iconBtn}><SiteLogo site="solscan" className="size-4" /></a>
             <button onClick={again} disabled={busy || p.updating} title="Read the wallet again now" className={cn(iconBtn, "disabled:opacity-60")}><Icon.refresh className={cn("size-3.5", (busy || p.updating) && "animate-spin")} /></button>
             <span aria-hidden className="mx-1 h-5 w-px bg-rule-2" />
-            <button onClick={toggleFollow} title="Track every trade this wallet makes"
-              className={cn("flex h-8 items-center rounded-full px-4 text-md font-semibold transition-colors", follow ? "border border-up/50 bg-up/10 text-up hover:border-down/60 hover:bg-down/10 hover:text-down" : "bg-ink text-on-fill hover:bg-focus")}>
-              {follow ? "Following wallet" : "Follow wallet"}
-            </button>
+            <TrackWalletButton address={wallet} name={p.name || short(wallet)} />
           </div>
         </div>
         <div className="grid grid-cols-6 border-t border-rule max-lg:grid-cols-3 max-sm:grid-cols-2">
@@ -219,7 +217,8 @@ export function WalletTrader({ wallet }: { wallet: string }) {
                 <span className="num text-right text-md font-semibold">{usd(s.usd)}</span>
                 <span className="num text-right text-xs text-muted">{ago(s.t).replace(" ago", "")}</span>
               </a>
-            )) : <p className="px-4 pb-4 text-md text-muted">No swaps in its latest transactions.</p>}
+            )) : p.partial ? <p className="flex items-center gap-2 px-4 pb-4 text-md text-muted"><i className="size-3.5 animate-spin rounded-full border-2 border-current/25 border-t-current" />Reading its trades…</p>
+              : <p className="px-4 pb-4 text-md text-muted">No swaps in its latest transactions.</p>}
             {p.recent.length > 10 && <button onClick={() => setShowAll(!showAll)} className="w-full border-t border-rule py-2.5 text-sm font-medium text-muted hover:bg-paper-3/50 hover:text-ink">{showAll ? "Show fewer" : `Show all ${p.recent.length}`}</button>}
           </section>
           <p className="px-1 text-xs leading-relaxed text-muted">Read from the chain {ago(p.read)}{p.updating ? ", reading again now" : ""}. Trades, costs and best trades come from the wallet's latest transactions{p.readSince ? ` (since ${ago(p.readSince)})` : ""}.</p>

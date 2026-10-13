@@ -78,7 +78,7 @@ export function CoinTabs({ mint, r, c, trades, onPaper, sideTrades = false, end 
         {tab === "trades" && <TradesTab trades={trades} />}
         {tab === "holders" && (hc ? <HoldersView c={hc} bonding={!r.token?.graduated && (hc.onCurve || (r.progress ?? r.live?.progress ?? hc.progress ?? 1) < 1)} /> : replayEpoch && c ? finding : <Ghost />)}
         {tab === "traders" && (tc ? <TradersView c={tc} /> : replayEpoch && c ? finding : <Ghost />)}
-        {tab === "known" && <KnownHolders f={fomo} mint={mint} mc={c?.mcUsd ?? r.token?.mcap ?? null} supply={c?.supply ?? null} />}
+        {tab === "known" && <KnownHolders f={fomo} mint={mint} mc={c?.mcUsd ?? r.token?.mcap ?? null} supply={c?.supply ?? null} priceAgeMs={c?.priceAgeMs} />}
         {tab === "theses" && <AllTheses mint={mint} f={fomo} />}
         {tab === "dev" && (c?.dev ? <DevView mint={mint} c={c} /> : c ? <Empty title="Dev unknown" text="Neither Blix nor Jupiter knows who created this coin." /> : <Ghost />)}
         {tab === "ai" && <AiGate><AiView mint={mint} r={r} onRead={onPaper} /></AiGate>}
@@ -119,7 +119,7 @@ const tradeKeys = (rows: TradeRowData[]) => {
   return out;
 };
 
-export function SideTrades({ trades }: { trades: Trades | null }) {
+export function SideTrades({ trades, flow: summary }: { trades: Trades | null; flow?: CoinData["m5"] }) {
   const now = useNow();
   const [f, setF] = useTradeFilter();
   // An answer without a trades list (an error body, an older server's shape) reads as none, not a crash (seen 2026-10-11).
@@ -135,7 +135,10 @@ export function SideTrades({ trades }: { trades: Trades | null }) {
   // Buy and sell pressure: dollars and trades each way in the last 5 minutes (every trade, whatever the filter).
   let buy = 0, sell = 0, nBuy = 0, nSell = 0;
   for (const x of trades?.trades || []) if (now - x.t <= 300_000) { if (x.side === "buy") { buy += x.usd || 0; nBuy++; } else { sell += x.usd || 0; nSell++; } }
-  const flow = buy + sell, buyPct = flow ? Math.round((buy / flow) * 100) : 50;
+  // Prefer the complete aggregate also used by the volume card. Row totals are only a sample.
+  if (summary) { buy = summary.buyUsd ?? 0; sell = summary.sellUsd ?? 0; nBuy = summary.buys; nSell = summary.sells; }
+  const flow = buy + sell, count = nBuy + nSell, buyPct = flow ? Math.round((buy / flow) * 100) : count ? Math.round(nBuy / count * 100) : 50;
+  const label = summary ? "5m" : "Shown";
   const big = Math.max(1, ...shown.map((x) => x.usd || 0));
   return (
     <div className="relative w-[340px] shrink-0 bg-paper-2/40 max-2xl:w-[290px] max-xl:w-[264px]">
@@ -148,12 +151,12 @@ export function SideTrades({ trades }: { trades: Trades | null }) {
             </span>
             <span className="rounded-full bg-paper-3 px-2 py-0.5 text-2xs font-semibold text-muted">{trades?.source === "live" ? "Live feed" : trades?.source === "pool" ? "Pool trades" : "5m"}</span>
           </div>
-          {flow > 0 && (
-            <div className="flex flex-col gap-1.5" title="Dollars bought vs sold in the last 5 minutes">
+          {(summary || flow > 0) && (
+            <div className="flex flex-col gap-1.5" title={summary ? "Complete 5-minute totals, shared with the volume card" : "Recent displayed trades only; full 5-minute totals are loading"}>
               <div className="num flex items-end justify-between text-xs">
-                <span className="flex flex-col"><b className="text-md font-semibold text-up">{usdK(buy)}</b><span className="text-muted">{nBuy} buys</span></span>
-                <span className="mb-0.5 rounded bg-paper-3 px-1.5 text-2xs font-semibold text-muted">5m</span>
-                <span className="flex flex-col items-end"><b className="text-md font-semibold text-down">{usdK(sell)}</b><span className="text-muted">{nSell} sells</span></span>
+                <span className="flex flex-col"><b className="text-md font-semibold text-up">{usdK(summary ? summary.buyUsd : buy)}</b><span className="text-muted">{nBuy} buys</span></span>
+                <span className="mb-0.5 rounded bg-paper-3 px-1.5 text-2xs font-semibold text-muted">{label}</span>
+                <span className="flex flex-col items-end"><b className="text-md font-semibold text-down">{usdK(summary ? summary.sellUsd : sell)}</b><span className="text-muted">{nSell} sells</span></span>
               </div>
               <div className="flex h-1 gap-0.5">
                 <i className="block h-full rounded-full bg-up transition-[width] duration-500" style={{ width: `${buyPct}%` }} />
@@ -205,7 +208,7 @@ const TradeRow = memo(function TradeRow({ x, now, share, fresh }: { x: TradeRowD
         {x.wallet
           ? <>
               <i aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `oklch(72% 0.13 ${hueOf(x.wallet)})` }} />
-              <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={x.wallet} className="truncate font-outlier text-xs text-ink-2 hover:text-ink hover:underline">{x.wallet.slice(0, 4)}…{x.wallet.slice(-4)}</a>
+              <a href={`#/trader/${x.wallet}`} title={`${x.wallet} · open this wallet's page`} className="truncate font-outlier text-xs text-ink-2 hover:text-ink hover:underline">{x.wallet.slice(0, 4)}…{x.wallet.slice(-4)}</a>
             </>
           : <span className="text-xs text-muted">—</span>}
         {role && <i title={role[2]} className={cn("shrink-0 rounded px-1 text-[0.58rem] leading-4 font-bold not-italic tracking-wide", role[1])}>{role[0]}</i>}

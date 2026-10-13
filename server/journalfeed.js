@@ -1,4 +1,5 @@
 import { heliusFetch as fetch } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // Runs the trade journal (journal.js) against the radar's live feeds: every pump.fun curve trade and PumpSwap
 // trade is recorded as it is heard, written once a second, confirmed a few seconds later, and kept a day. The
 // feeds' outages (and the radar's own downtime) are recorded as gaps and repaired from the chain when the
@@ -46,12 +47,12 @@ export const poolInfo = (pool) => poolInfoOf(pool);
 // Paced to ~3 calls a second, and held for a minute after a rate limit: the live feeds share this RPC, and a
 // read-back that crowds them out opens the next gap.
 let nextCall = 0;
-export async function repairCall(method, params) {
+export async function repairCall(method, params, mint = null) {
   for (let i = 0; i < 4; i++) {
     const wait = nextCall - now(); nextCall = Math.max(now(), nextCall) + 330;
     if (wait > 0) await new Promise((go) => setTimeout(go, wait));
     try {
-      const url = coinRpcUrl();
+      const url = mint && canEnrich(mint) ? coinRpcUrl() : 'https://solana-rpc.publicnode.com';
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
       if (r.status === 429) { nextCall = now() + 60_000; continue; }
       const j = await r.json();
@@ -74,7 +75,7 @@ async function runRepairs() {
   while (repairs.length) {
     const job = repairs.shift();
     const id = typeof job === "object" ? job.id : job, only = typeof job === "object" ? job.only : null;
-    try { await J.repairGap(id, { watched: watchedFn(), only, poolMint, poolInfo, supply: supplyOf, call: repairCall }); } catch {}
+    try { await J.repairGap(id, { watched: watchedFn(), only, poolMint, poolInfo, supply: supplyOf, coinCall: mint => (method, params) => repairCall(method, params, mint) }); } catch {}
   }
   repairing = false;
 }
@@ -105,8 +106,8 @@ export function repairCoin(mint, fromMs) {
 // Endpoints in turn: one that rate limits rests 20 s; a Helius key with budget left is the last resort.
 const FREE = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
 const resting = new Map();   // url -> until
-async function pnCall(method, params) {
-  const urls = [...FREE, coinRpcUrl()].filter((u, i, a) => a.indexOf(u) === i);
+async function pnCall(method, params, mint = null) {
+  const urls = [...FREE, ...(mint && canEnrich(mint) ? [coinRpcUrl()] : [])].filter((u, i, a) => a.indexOf(u) === i);
   for (const url of urls) {
     if ((resting.get(url) || 0) > now()) continue;
     try {
@@ -118,7 +119,7 @@ async function pnCall(method, params) {
   }
   return null;
 }
-const pnTx = (sig) => pnCall("getTransaction", [sig, { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
+const pnTx = (sig, mint) => pnCall("getTransaction", [sig, { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" }], mint);
 // Per coin: the newest signature checked, and the transactions still to read (newest first). A busy coin
 // (18 trades a second on 2026-10-09) has far more history than free endpoints can read, so each run reads at
 // most PER_RUN, newest first, and the queue keeps the newest TODO_MAX: the live end is always whole, then as
@@ -141,7 +142,7 @@ async function reconcile(mint) {
   const cut = Math.floor((now() - J.KEEP_MS) / 1000), fresh = [];
   let before = null, top = null;
   for (let page = 0; page < 8; page++) {
-    const list = await pnCall("getSignaturesForAddress", [mint, { limit: 1000, commitment: "confirmed", ...(c.newest ? { until: c.newest } : {}), ...(before ? { before } : {}) }]);
+    const list = await pnCall("getSignaturesForAddress", [mint, { limit: 1000, commitment: "confirmed", ...(c.newest ? { until: c.newest } : {}), ...(before ? { before } : {}) }], mint);
     if (!list) return;   // every endpoint out: the next run asks again from the same place
     if (!list.length) break;
     top ??= list[0].signature;
@@ -160,7 +161,7 @@ async function reconcile(mint) {
   }
   c.todo = keep;
   if (!batch.length) return;
-  const r = await J.readBack(mint, batch, { getTx: pnTx, poolMint, poolInfo, supply: supplyOf, conc: 4 });
+  const r = await J.readBack(mint, batch, { getTx: sig => pnTx(sig, mint), poolMint, poolInfo, supply: supplyOf, conc: 4 });
   // Unreadable (rate limited, or not on that node yet): back in the queue while the chart is open, 20 tries
   // (about a minute) before it is let go: three were used up in seconds when the endpoints were busy.
   const failed = new Set(r.failed);

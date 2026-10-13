@@ -22,6 +22,7 @@ import { LiveMc } from "@/components/Live";
 import { thumb } from "@/lib/thumb";
 import { useRole } from "@/lib/role";
 import { SLOW_MS, useNet, watchNet } from "@/lib/net";
+import { openTrackerWindow, useTracker, warmTracker } from "@/lib/wtrack";
 import { Hot } from "@/pages/Feed";
 
 const I = (d: ReactNode) => ({ className, ...p }: SVGProps<SVGSVGElement>) => (
@@ -377,6 +378,7 @@ export function StatusBar() {
 }
 
 function DesktopStatusBar() {
+  const trackerOpen = useTracker(s => s.float);
   const tradesPerSec = usePulse((s) => s.live.tradesPerSec);
   const launchesPerMin = usePulse((s) => s.live.launchesPerMin);
   const owner = useRole() === "owner";
@@ -391,7 +393,7 @@ function DesktopStatusBar() {
       {owner && <Tip tip="Settings"><a href="#/settings" aria-label="Settings" className={item}><Icon.settings className="size-3.5" /></a></Tip>}
       <span className="my-2 w-px bg-rule" />
       <Watchlist />
-      {owner && go("account", "Wallets", <Icon.wallets className="size-3.5" />, "Your Blix wallet: deposit, withdraw, holdings")}
+      <Tip tip="Open your draggable wallet tracker"><button type="button" aria-label="Wallets" aria-expanded={trackerOpen} aria-haspopup="dialog" onPointerEnter={warmTracker} onFocus={warmTracker} onClick={openTrackerWindow} className={cn(item, trackerOpen && "bg-paper-4 text-ink")}><Icon.wallets className="size-3.5" /><span className="max-xl:sr-only">Wallets</span></button></Tip>
       <Pnl />
       <Feed />
       {go("", "Pulse", <Icon.pulse className="size-3.5" />, "Every new pump.fun coin, live")}

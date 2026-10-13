@@ -2,7 +2,8 @@ import { Component, lazy, StrictMode, Suspense, useEffect, useRef, useState, typ
 import { createRoot } from "react-dom/client";
 import { Toaster } from "@/components/ui/toast";
 import { NetNotice } from "@/components/NetNotice";
-import { TrackerTape } from "@/components/TrackerTape";
+import { WatchTape } from "@/components/WatchTape";
+import { startTraderLinks } from "@/lib/traderlinks";
 import { gated } from "@/components/DepositGate";
 import { PicPreview } from "@/components/PicPreview";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -183,12 +184,13 @@ function App() {
   const route = useRoute(), arg = useRouteArg(), View = PAGES[route];
   const needsWallet = useMe(s => Boolean(s.me?.signedIn && s.me?.needsWallet));
   const focusFeed = useUi(s => s.feedFocus) && route === 'feed';
-  // The wallet tracker's floating window stays over every page but its own.
-  const trackerFloat = useTracker((s) => s.float) && route !== "tracker";
+  // One tracker window stays mounted across pages, floating or docked beside the content.
+  const trackerFloat = useTracker((s) => s.float);
   // Google sign-in may land on any page. Start onboarding once the missing wallet is known.
   useEffect(() => { if (needsWallet) location.replace("#/account"); }, [needsWallet]);
   useEffect(() => {
     performance.mark("blix:mounted");
+    startTraderLinks();   // trader and wallet pages prefetch on hover, everywhere (lib/traderlinks.ts)
     return startPulse();
   }, []);
   // The tab says which page this is ("Blix | Discover"). A coin's tab is set by its header, live market cap first.
@@ -212,17 +214,19 @@ function App() {
         {!focusFeed && <ShellGuard name="rail"><Rail route={route} /></ShellGuard>}
         <div className="flex min-w-0 flex-1 flex-col">
           {!focusFeed && <ShellGuard name="topbar"><TopBar /></ShellGuard>}
-          {!focusFeed && <ShellGuard name="trackertape"><TrackerTape /></ShellGuard>}
+          {!focusFeed && <ShellGuard name="watchtape"><WatchTape /></ShellGuard>}
+          <div id="tracker-workspace" className="relative flex min-h-0 min-w-0 flex-1">
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
             <PageGuard route={`${route}/${arg || ""}`}>
             {route === "coin" && arg ? <Suspense fallback={null}><Coin mint={arg} /></Suspense> : route === "trader" && arg ? <Suspense fallback={null}><Trader handle={decodeURIComponent(arg)} /></Suspense> : View ? <Suspense fallback={null}><View /></Suspense> : <NotPorted route={route} />}
             </PageGuard>
           </main>
+          {trackerFloat && <ShellGuard name="tracker"><Suspense fallback={null}><TrackerWindow /></Suspense></ShellGuard>}
+          </div>
           {!focusFeed && <ShellGuard name="bottombar"><BottomBar route={route} /></ShellGuard>}
           {!focusFeed && <ShellGuard name="statusbar"><StatusBar /></ShellGuard>}
         </div>
       </div>
-      {trackerFloat && <ShellGuard name="tracker"><Suspense fallback={null}><TrackerWindow /></Suspense></ShellGuard>}
       <ShellGuard name="modals"><Modals /></ShellGuard>
       <ShellGuard name="toasts"><Toaster /></ShellGuard>
       <ShellGuard name="netnotice"><NetNotice /></ShellGuard>

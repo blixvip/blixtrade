@@ -12,7 +12,10 @@ import { Tip } from "@/components/ui/tooltip";
 import { pctN, tokN, usdK, usdP, type CoinData, type TokenDetail } from "@/lib/coin";
 import { ageStr, safeHref } from "@/lib/format";
 import { useNow } from "@/lib/route";
-import { useTradeMc } from "@/lib/pulse";
+import { usePulse, useTradeMc } from "@/lib/pulse";
+import { useRouteArg } from "@/lib/route";
+import { api } from "@/lib/api";
+import { toggleStar, useStarred } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 import { CIcon, CoinPic, Price } from "./parts";
@@ -29,10 +32,9 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
   // The latest trade, live from the coin's own stream, for a coin in its first day; an older coin's figure follows
   // its Gecko chart (pushed in), so no per-coin chain subscription is held for it.
   const traded = useTradeMc(t.mint, false); // the visible chart owns the dedicated stream
-  // While the chart is open the header says exactly what the chart's newest candle says (lib/chartMc.ts), for every
-  // chart source; the coin's own figures only until the chart has drawn.
+  // The shared live mark also prices holdings and wallet PnL. Chart snapshots are the initial fallback.
   const chartMc = useChartMc((s) => s[t.mint]);
-  const mc = chartMc ?? traded ?? c?.mcUsd ?? (graduated ? t.mcap : L?.mcap ?? t.mcap) ?? null;
+  const mc = c?.mcUsd ?? chartMc ?? traded ?? (graduated ? t.mcap : L?.mcap ?? t.mcap) ?? null;
   // The tab title follows the same live figure: "$52.21K CATE | Blix", market cap first so it reads in a narrow tab.
   const mcTab = mc != null ? usdP(mc) : null;
   useEffect(() => { document.title = `${mcTab ? `${mcTab} ` : ""}${t.symbol || "Coin"} | Blix`; }, [mcTab, t.symbol]);
@@ -149,7 +151,7 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
 
         {/* The rest of the figures, a tile each */}
         <div className="flex min-w-0 flex-[1_1_480px] items-center overflow-x-auto [scrollbar-width:none] max-sm:grid max-sm:grid-cols-3 max-sm:gap-x-3 max-sm:gap-y-2.5 [&::-webkit-scrollbar]:hidden">
-          {stat(<Icon.candles />, "Price", <Price value={chartMc && shownSupply ? chartMc / shownSupply : c?.priceUsd ?? t.price} />, "USD per token")}
+          {stat(<Icon.candles />, "Price", <Price value={mc != null && shownSupply && shownSupply > 0 ? mc / shownSupply : c?.priceUsd ?? t.price} />, "USD per token")}
           {stat(<Icon.wallets />, "Liquidity", curve ? "Curve" : liq ? usdK(liq) : "—", curve ? "on the bonding curve" : liq && mc ? `${Math.round((liq / mc) * 100)}% of market cap` : undefined, curve ? "Still on the bonding curve: the curve is the market, there is no pool" : undefined)}
           {curve
             ? stat(<Icon.curve />, "Bonding", `${(prog! * 100).toFixed(1)}%`, bar(prog! * 100, "bg-up"), "How full the bonding curve is: it moves to its own pool at 100%")
@@ -166,6 +168,27 @@ export function CoinHeader({ r, c, sizes, onPaper }: { r: TokenDetail; c: CoinDa
 }
 
 
+// The star at the end of the tab row: this coin on or off the watchlist (lib/watchlist.ts), which shows in the strip
+// under the top bar (components/WatchTape.tsx). Lit gold while it is on.
+function WatchButton({ pill }: { pill: (on: boolean) => string }) {
+  const mint = useRouteArg();
+  const on = useStarred(mint);
+  const symbol = usePulse((st) => (mint ? st.coins[mint]?.symbol : null));
+  const press = async () => {
+    if (!mint) return;
+    const sym = symbol || (await api<{ token?: { symbol?: string | null } }>(`token/${mint}`).then((r) => r.token?.symbol || null).catch(() => null)) || mint.slice(0, 4);
+    toast(toggleStar(mint, sym) ? `$${sym} added to your watchlist` : `$${sym} removed from your watchlist`);
+  };
+  return (
+    <Tip tip={on ? "On your watchlist (in the strip up top). Press to take it off" : "Add to your watchlist: it shows in the strip up top with its live market cap"}>
+      <button onClick={press} aria-pressed={on} aria-label={on ? "Remove from watchlist" : "Add to watchlist"}
+        className={cn(pill(on), "w-8 justify-center px-0 pr-0 pl-0", on && "bg-warn text-paper shadow-[0_0_0_1px_oklch(100%_0_0/0.15),0_4px_14px_-4px_var(--color-warn)]")}>
+        <Icon.star className={cn("size-4 transition-colors duration-150", on ? "fill-current" : "text-ink-2 group-hover:text-ink")} />
+      </button>
+    </Tip>
+  );
+}
+
 // The Instant panel toggle: floats the quick buy / sell panel over the chart. Sits at the end of the tab row (Tabs.tsx).
 // The two pills at the end of the tab bar: Instant Trade (the floating quick trade panel) and Live Trades (the
 // trades column beside the chart, folded away or brought back). Both lit while on.
@@ -176,6 +199,7 @@ export function InstantButton() {
       : "bg-paper-3 text-ink shadow-[inset_0_0_0_1px_var(--color-rule-2),inset_0_1px_0_oklch(100%_0_0/0.06)] hover:bg-paper-4");
   return (
     <span className="flex shrink-0 items-center gap-1.5">
+      <WatchButton pill={pill} />
       <Tip tip="Float the quick buy / sell panel over the chart (drag it anywhere)">
         <button onClick={toggleQuick} aria-pressed={quick} className={pill(quick)}>
           <Icon.bolt className={cn("size-3.5 transition-colors duration-150", quick ? "fill-current" : "fill-current text-ink-2 group-hover:text-ink")} />Instant Trade

@@ -9,9 +9,11 @@
 // Meteora DLMM: the active bin; Meteora DAMM v2: sqrt price). Constant-product pools (Raydium CPMM, AMM v4) are
 // priced from their two vaults, less the fees parked in them that are not liquidity.
 import { startRpcStream } from "./rpc-stream.js";
+import { priceStreamAllowed, notePriceBytes } from "./heliuskeys.js";
 import { rpcWsUrl, b58 } from "./livetrades.js";
 import { rpc } from "./solana.js";
 import { streamSub } from "./chartstream.js";
+import { canStream } from './coin-screen.js';
 
 const WSOL = "So11111111111111111111111111111111111111112";
 const USD = new Set(["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]);   // USDC, USDT
@@ -96,6 +98,7 @@ function sub(account, onData, shared = true) {
     (res) => { const v = res?.value; if (v?.data?.[0]) onData(Buffer.from(v.data[0], "base64")); });
   if (fast) return fast;
   return startRpcStream({
+    admit: priceStreamAllowed, meter: notePriceBytes,
     url: rpcWsUrl,
     request: { method: "accountSubscribe", params: [account, { encoding: "base64", commitment: "processed" }] },
     silentMs: 120_000,
@@ -108,16 +111,18 @@ const tokenAmount = (b) => (b.length >= 72 ? u64(b, 64) : null);
 // Keep `mint`'s pool watched for another 15 s (the chart asks for candles every second or so while open).
 // `forever`: never dropped (the SOL price below).
 export function watchPool(mint, pool, forever = false) {
+  if (!forever && !canStream(mint)) return;
   const w = watches.get(mint);
   if (w) { w.t = now(); return; }
   const entry = { forever, t: now(), stops: [], state: null, b0: null, b1: null, last: null, d: null };
   watches.set(mint, entry);
   describe(pool, mint).then(async (d) => {
-    if (!d || watches.get(mint) !== entry) { if (!d) entry.dead = true; return; }
+    if (!d || watches.get(mint) !== entry || (!forever && !canStream(mint))) { if (!d) entry.dead = true; return; }
     entry.d = d; entry.state = d.state;
     if (d.v0) {
       const r = await rpc("getMultipleAccounts", [[d.v0, d.v1], { encoding: "base64", dataSlice: { offset: 64, length: 8 } }]);
       const [a0, a1] = r?.value || [];
+      if (watches.get(mint) !== entry || (!forever && !canStream(mint))) return;
       if (a0) entry.b0 = u64(Buffer.from(a0.data[0], "base64"), 0);
       if (a1) entry.b1 = u64(Buffer.from(a1.data[0], "base64"), 0);
       entry.stops.push(sub(d.v0, (b) => { entry.b0 = tokenAmount(b) ?? entry.b0; emit(entry); }, !forever), sub(d.v1, (b) => { entry.b1 = tokenAmount(b) ?? entry.b1; emit(entry); }, !forever));
@@ -129,7 +134,7 @@ export function watchPool(mint, pool, forever = false) {
 }
 // A coin whose chart has been closed for 15 s: its subscriptions go.
 setInterval(() => {
-  for (const [m, w] of watches) if (w.forever && !w.dead) continue; else if (now() - w.t > 15_000 || (w.dead && now() - w.t > 60_000)) { for (const s of w.stops) try { s(); } catch {} watches.delete(m); }
+  for (const [m, w] of watches) if (w.forever && !w.dead) continue; else if (!canStream(m) || now() - w.t > 15_000 || (w.dead && now() - w.t > 60_000)) { for (const s of w.stops) try { s(); } catch {} watches.delete(m); }
   poolStats.watching = [...watches.values()].filter((x) => x.d).length;
 }, 5_000).unref?.();
 

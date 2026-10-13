@@ -14,7 +14,8 @@ export function receiveMetrics(data: { boot?: number; coins?: MetricCoin[] }, ex
     if (!coin?.mint || !coin.fields || excluded(coin.mint) || (values.get(coin.mint)?.revision ?? -1) >= coin.revision) continue;
     values.set(coin.mint, { ...coin, fields: { ...values.get(coin.mint)?.fields, ...coin.fields } });
     const mc = coin.fields.mc?.value;
-    if (Number.isFinite(mc) && mc > 0) setPx([[coin.mint, mc]], false, true);
+    const field = coin.fields.mc;
+    if (Number.isFinite(mc) && mc > 0 && Date.now() - field.observedAt <= field.maxAgeMs) setPx([[coin.mint, mc]], false, true, field.observedAt);
     listeners.get(coin.mint)?.forEach(fn => fn());
   }
   if (values.size > 30_000) for (const mint of values.keys()) { if (!listeners.has(mint)) values.delete(mint); if (values.size <= 20_000) break; }

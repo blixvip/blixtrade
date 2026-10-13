@@ -17,6 +17,7 @@ import { useNow } from "@/lib/route";
 import { trade } from "@/lib/trade";
 import { cn } from "@/lib/utils";
 import { COLOR_HEX, nameStyle, openTrackerWindow, useTracker, type Overview, type TTrade } from "@/lib/wtrack";
+import { useTracking } from "@/lib/tracking";
 import { Icon } from "@/shell/icons";
 
 const KEEP = 24;
@@ -55,6 +56,8 @@ function Chip({ r, fresh }: { r: TTrade; fresh: boolean }) {
 }
 
 export function TrackerTape() {
+  const tracking = useTracking();
+  const tracked = useMemo(() => new Map(tracking.wallets.map(w => [w.address, w])), [tracking.wallets]);
   const role = useRole(), known = useRoleKnown();
   const path = known && role !== "visitor" ? `wtrack?limit=${KEEP}` : null;
   const { data, refresh } = usePoll<Overview>(path, 30_000, true);
@@ -63,7 +66,8 @@ export function TrackerTape() {
   const [freshId, setFreshId] = useState<number | null>(null);
   const alerts = useRef<Map<string, boolean>>(new Map());
   const lastToast = useRef(0);
-  useEffect(() => { alerts.current = new Map((data?.wallets || []).map((w) => [w.address, Boolean(w.alerts)])); }, [data]);
+  useEffect(() => { alerts.current = new Map(tracking.wallets.map((w) => [w.address, Boolean(w.alerts)])); }, [tracking.wallets]);
+  useEffect(() => { const changed = () => refresh(); addEventListener("blix:tracker-change", changed); return () => removeEventListener("blix:tracker-change", changed); }, [refresh]);
   // Back from another tab: the stream was muted meanwhile, so the feed is asked for at once.
   useEffect(() => { const f = () => { if (!document.hidden) refresh(); }; document.addEventListener("visibilitychange", f); return () => document.removeEventListener("visibilitychange", f); }, [refresh]);
   useEffect(() => onTracker((kind, row) => {
@@ -72,17 +76,17 @@ export function TrackerTape() {
     const r = row as TTrade;
     setLive((l) => (l.some((x) => x.id === r.id) ? l : [r, ...l].slice(0, KEEP)));
     setFreshId(r.id);
-    if (r.side === "buy" && alerts.current.get(r.wallet) !== false && Date.now() - lastToast.current > 4000) {
+    if (r.side === "buy" && alerts.current.get(r.wallet) === true && Date.now() - r.t < 60_000 && Date.now() - lastToast.current > 4000) {
       lastToast.current = Date.now();
       toast(`${r.name} bought $${r.symbol || shortAddr(r.mint)}${r.sol != null ? ` · ${solNum(r.sol)} SOL` : ""}`);
     }
   }), []);
   const rows = useMemo(() => {
     const by = new Map<number, TTrade>();
-    for (const r of [...live, ...(data?.feed || [])]) if (!by.has(r.id) && !gone.has(r.id)) by.set(r.id, r);
-    return [...by.values()].sort((a, b) => b.id - a.id).slice(0, KEEP);
-  }, [live, data, gone]);
-  if (!path || !data?.wallets?.length || !rows.length) return null;
+    for (const r of [...live, ...(data?.feed || [])]) if (!by.has(r.id) && !gone.has(r.id) && tracked.has(r.wallet)) by.set(r.id, { ...r, ...tracked.get(r.wallet) });
+    return [...by.values()].sort((a, b) => b.t - a.t || b.id - a.id).slice(0, KEEP);
+  }, [live, data, gone, tracked]);
+  if (!path || !tracking.wallets.length || !rows.length) return null;
   return (
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-rule bg-paper-2/70 px-3 max-md:px-2">
       <Tip tip="Open the wallet tracker">

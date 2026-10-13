@@ -14,6 +14,7 @@ import { noteLive, sparkOrKeep } from "@/components/Spark";
 import { Avatar } from "../traders/parts";
 import { freshest, keptRow, takeRows, takeSparks } from "./fresh";
 import { DiscoverRow, withLive, type LiveFigures, type Row, type Tf } from "./parts";
+import { PostsHover, warmPosts, type Batch } from "./postsCard";
 
 export type HotWin = "5" | "30" | "60";
 export const HOT_WINS: [HotWin, string][] = [["5", "5m"], ["30", "30m"], ["60", "1h"]];
@@ -38,20 +39,23 @@ function fromHot(h: HotCoin): Row {
   };
 }
 
-function Lead({ h, rank, heat }: { h: HotCoin; rank: number; heat: number }) {
+// `win`: the window, for the posts card (postsCard.tsx) that opens when the pointer rests on the count and faces.
+function Lead({ h, rank, heat, win }: { h: HotCoin; rank: number; heat: number; win: HotWin }) {
   const net = h.buy - h.sell, traders = h.traders ?? h.people.length;
   return (
     <div className="relative flex min-w-0 items-center gap-2.5 self-stretch">
       <i aria-hidden className="pointer-events-none absolute inset-y-1 -left-4 rounded-r bg-gradient-to-r from-up/[0.08] to-transparent" style={{ width: `${Math.max(6, heat * 100)}%` }} />
       <span className={cn("num relative w-5 shrink-0 text-right text-md", rank <= 3 ? "font-bold text-ink" : "text-muted")}>{rank}</span>
       <div className="relative flex min-w-0 flex-col gap-1">
-        <Tip tip={`${h.n} post${h.n === 1 ? "" : "s"} about it by ${traders} trader${traders === 1 ? "" : "s"} in the window`}>
-          <span className="num text-md leading-none font-semibold text-ink">{h.n} <span className="text-xs font-normal text-muted">post{h.n === 1 ? "" : "s"}</span></span>
-        </Tip>
-        <span className="flex items-center gap-1.5">
-          <span className="flex -space-x-1.5">{h.people.slice(0, 3).map(([name, pic]) => <Avatar key={name} src={pic} name={name} size={16} className="ring-1 ring-paper-2" />)}</span>
-          {traders > Math.min(3, h.people.length) && <span className="num text-xs text-muted">+{traders - Math.min(3, h.people.length)}</span>}
-        </span>
+        {/* The count and the faces: resting on them opens the card with every post, live (postsCard.tsx). */}
+        <PostsHover mint={h.mint} w={win} n={h.n} traders={traders}>
+          <span title={`${h.n} post${h.n === 1 ? "" : "s"} about it by ${traders} trader${traders === 1 ? "" : "s"} in the window. Rest here to read them`}
+            className="num cursor-help text-md leading-none font-semibold text-ink">{h.n} <span className="text-xs font-normal text-muted">post{h.n === 1 ? "" : "s"}</span></span>
+          <span className="flex cursor-help items-center gap-1.5">
+            <span className="flex -space-x-1.5">{h.people.slice(0, 3).map(([name, pic]) => <Avatar key={name} src={pic} name={name} size={16} className="ring-1 ring-paper-2" />)}</span>
+            {traders > Math.min(3, h.people.length) && <span className="num text-xs text-muted">+{traders - Math.min(3, h.people.length)}</span>}
+          </span>
+        </PostsHover>
         {h.buy + h.sell > 0 && (
           <Tip tip={`${money(h.buy)} bought · ${money(h.sell)} sold in the posted trades`}>
             <span className={cn("num text-xs font-semibold", net > 0 ? "text-up" : net < 0 ? "text-down" : "text-muted")}>{net >= 0 ? "+" : "−"}{money(net)}</span>
@@ -74,6 +78,9 @@ export function HotTab({ win, q, sol, hidden, onHide, onHideAll }: { win: HotWin
   const { data: blix } = usePoll<{ rows: Row[] }>(mints ? `tokens?${new URLSearchParams({ mints, limit: "200" })}` : null, 5000, true);
   const { data: live } = usePoll<Sparks>(mints ? `sparks?${new URLSearchParams({ w: tf, m: mints })}` : null, 3000);
   useEffect(() => { if (mints) warmPics(mints.split(",")); }, [mints]);
+  // Every row's newest posts in one read, so the posts card opens full the instant the pointer reaches a row.
+  const { data: peek } = usePoll<Batch>(mints ? `feed/hot/posts?${new URLSearchParams({ mints, w: win, src: "fomo,pump" })}` : null, 4000, true);
+  warmPosts(peek);
   takeSparks(live);   // newest figures per coin, whichever answer lands last (fresh.ts)
   takeRows(blix);   // Blix's row per coin, kept across reads (fresh.ts)
   const byMint = { get: (m: string) => keptRow<Row>(m) };
@@ -106,7 +113,7 @@ export function HotTab({ win, q, sol, hidden, onHide, onHideAll }: { win: HotWin
               </span>
             </div>
             {!rows ? (error && !data ? <Problem text={error} /> : <div className="p-3"><Loading /></div>)
-              : rows.length ? rows.map(({ h, rank, row }) => <DiscoverRow key={h.mint} r={row} tf={tf} sol={sol} grid={HOT_GRID} onHide={onHide} lead={<Lead h={h} rank={rank} heat={h.n / most} />} />)
+              : rows.length ? rows.map(({ h, rank, row }) => <DiscoverRow key={h.mint} r={row} tf={tf} sol={sol} grid={HOT_GRID} onHide={onHide} lead={<Lead h={h} rank={rank} heat={h.n / most} win={win} />} />)
               : <Empty>{needle ? "No hot coin matches." : `Quiet out there: no coin talk in the last ${label}.`}</Empty>}
           </div>
         </div>

@@ -14,6 +14,7 @@ export interface Holder extends WalletTags {
   wallet: string; tokens: number | null; pct: number | null; maxPct: number;
   boughtSol: number | null; soldSol: number | null; valueSol: number | null; pnlSol: number | null; realizedSol: number | null;
   boughtUsd: number | null; soldUsd: number | null; valueUsd: number | null; pnlUsd: number | null;
+  pnlTokens?: number | null; pnlBasis?: "usd" | "sol";
   avgBuyMc: number | null; avgSellMc: number | null; trades: number; first: number;
   status: "holding" | "sold some" | "sold all" | "outside top 100"; slot?: number | null; afterFirstMs?: number;
 }
@@ -27,7 +28,7 @@ export interface CoinData {
   // Curve full, pool not trading yet: pump.fun is migrating it and every trade fails meanwhile (server livetrades.js).
   migrating?: { since: number } | null;
   priceAgeMs?: number | null;   // how old mcUsd is (0 = priced this second by the Pulse)
-  m5: { source: "live" | "tracked"; buys: number; sells: number; buyUsd: number | null; sellUsd: number | null; volUsd: number | null; netUsd: number | null; traders: number | null } | null;
+  m5: { source: "live" | "tracked"; buys: number; sells: number; buyUsd: number | null; sellUsd: number | null; volUsd: number | null; netUsd: number | null; traders: number | null; calculatedAt?: number; complete?: boolean } | null;
   holders: { count: number; wallets: number; trades: number; since: number | null; last: number; genesis: boolean; partial: boolean; frozen: boolean; top10: number; list: Holder[]; source?: "jupiter" | "ledger" | "chain" | "rugcheck" } | null;
   // Tabs filled from the Jupiter data API when the ledger cannot cover the coin (bonded, or met after launch).
   jupiter?: { tabs: ("holders" | "traders" | "early")[]; tradersWindow: { trades: number; since: number | null } | null } | null;
@@ -120,6 +121,8 @@ export const peek = <T,>(path: string) => known<T>(path);
 // answer will do (the view asks again when it opens); one request per path at a time, and none for an answer
 // that came within the last second.
 const asking = new Set<string>();
+// What the poll cache holds for a path right now (a prefetched or recently polled answer), else null.
+export const peekAnswer = <T,>(path: string): T | null => known<T>(path);
 export function prefetch<T = unknown>(path: string): Promise<T | null> | undefined {
   if (path === "market" && !matchMedia("(min-width: 768px)").matches) return;
   if (asking.has(path) || performance.now() - (answeredAt.get(path) ?? -Infinity) < 1000) return;

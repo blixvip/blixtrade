@@ -480,7 +480,9 @@ export async function candles(mint, tf = 60, since = null) {
   // A bonded coin outside PumpSwap: its pool is read on-chain while the chart is open (poolwatch.js), since
   // Jupiter's candles trail the chain by 6-10 s. PumpSwap pools are already read trade by trade (pumpswap.js).
   const tok = db.prepare("SELECT graduated, dex, pair FROM tokens WHERE mint = ?").get(mint);
-  if (tok?.graduated && tok.pair && tok.dex !== "pumpswap" && tok.dex !== "pumpfun") { watchPool(mint, tok.pair); poolLogs(mint, tok.pair); }
+  // Whatever the graduated flag says: a LaunchLab coin that moved to its Raydium pool kept graduated = 0 (dex raydium,
+  // onCurve), so nothing read its pool and its chart sat 4x above the market for 5 minutes (8kjE…SrYU, 2026-10-11).
+  if (tok?.pair && tok.dex && tok.dex !== "pumpswap" && tok.dex !== "pumpfun") { watchPool(mint, tok.pair); poolLogs(mint, tok.pair); }
   // A pump.fun coin still on its curve can never trade under the curve's starting price (27.96 SOL of market cap):
   // a provider's bar under half of that is a bad tick. Jupiter closed fries (5V5r…pump, 2026-10-12) at $136 against a
   // $3.2K market, and the header showed the chart's $136. Such bars are dropped and the wicks kept off the floor.
@@ -559,6 +561,25 @@ export async function candles(mint, tf = 60, since = null) {
 // The candles only exist in memory, so every restart used to hand the chart an empty page. They are written
 // to disk twice a minute (a few coins at a time, so the radar keeps answering) and read back at start if the
 // copy is under half an hour old; the gap while the radar was down shows as flat candles or a break.
+// A coin's candles from the radar's own store and live book alone (server.js /api/candles/warm): nothing asked of
+// Jupiter or GeckoTerminal, no chart focused, no stream opened. The Pulse chart card (web hoverChart.ts) reads every
+// row on the page this way ahead of the pointer, so the card's first frame is drawn from memory the instant a row is
+// hovered (the user, 2026-10-11: "it needs to literally be instant"). `since`: candles from there on (a refresh of
+// what the page holds); `cap`: at most this many, the newest. A coin the radar never heard trade answers no rows,
+// and the card reads it the usual way.
+export function ownCandles(mint, tf, since = null, cap = 720) {
+  tf = [1, 5, 15, 60, 300].includes(+tf) ? +tf : 60;
+  since = Number(since) > 0 ? Number(since) : null;
+  const own = fromBook(mint, Math.max(tf, STEP));
+  const from = since ? since - tf : now() / 1000 - cap * tf;
+  const stored = store.read(mint, tf, from);
+  // The live book's buckets from the last stored candle on (it holds the same trades plus the newest ones).
+  const tail = stored.length ? own.filter((r) => r.time >= stored[stored.length - 1].time) : own;
+  let rows = tail.length ? [...stored.filter((r) => r.time < tail[0].time), ...tail] : stored;
+  if (since) rows = rows.filter((r) => r.time >= since);
+  return rows.length > cap ? rows.slice(-cap) : rows;
+}
+
 const STATE_FILE = path.join(DATA, "candles-state.json");
 const RESUME_MS = 30 * 60_000;
 export const candleStats = { restored: 0, savedAt: 0 };

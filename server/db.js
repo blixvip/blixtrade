@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
+import { superviseCheckpoint } from './checkpoint-watch.js';
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,18 +15,15 @@ export const DB_FILE = path.join(DATA, "radar.db");
 export const db = new DatabaseSync(DB_FILE);
 // Checkpoints on a thread of their own (dbcheckpoint.js). Not under test runs, which open throwaway copies.
 export const checkpointStats = { runs: 0, pages: 0, busy: 0, maxMs: 0, lastMs: 0 };
-if (!process.env.RADAR_DATA) {
-  try {
-    const w = new Worker(new URL("./dbcheckpoint.js", import.meta.url), { workerData: { file: DB_FILE, everyMs: 5000 } });
-    w.on("message", (m) => Object.assign(checkpointStats, m));
-    w.on("error", () => {});
-    w.unref();
-  } catch {}
-  // No pass reported within a minute (the thread failed to start): SQLite's own checkpointing comes back on.
-  setTimeout(() => { if (!checkpointStats.runs) try { db.exec("PRAGMA wal_autocheckpoint = 1000"); } catch {} }, 60_000).unref?.();
-}
-// The log is folded back by dbcheckpoint.js on its own thread, never at the end of one of the radar's writes.
+// Off-thread checkpoints normally keep writes responsive; SQLite takes over if the worker fails.
 db.exec(`PRAGMA wal_autocheckpoint = ${process.env.RADAR_DATA ? 1000 : 0}`);
+if (!process.env.RADAR_DATA) {
+  superviseCheckpoint({
+    spawn: () => new Worker(new URL("./dbcheckpoint.js", import.meta.url), { workerData: { file: DB_FILE, everyMs: 5000 } }),
+    onStats: m => Object.assign(checkpointStats, m, { lastReportAt: Date.now() }),
+    fallback: enabled => { db.exec(`PRAGMA wal_autocheckpoint = ${enabled ? 1000 : 0}`); checkpointStats.fallback = enabled; },
+  });
+}
 
 // The radar asks the same few hundred questions over and over, many of them every second. Compiling the
 // SQL each time made thousands of throwaway native statements a minute; each query is now compiled once
@@ -39,10 +37,20 @@ const writes = new Map();
 {
   const proto = Object.getPrototypeOf(compile("SELECT 1"));
   const run = proto.run;
+  // The statement's counter is found once per statement object and kept on it: working the key out of the SQL
+  // text on every run (a regex over the text, 700+ runs a second on the trade journal alone) was 12% of the
+  // radar's whole CPU in a profile (2026-10-11), more than the writes themselves cost.
+  const KEY = Symbol("writeKey");
   proto.run = function (...a) {
     const r = run.apply(this, a);
-    const k = this.sourceSQL?.replace(/\s+/g, " ").slice(0, 90) || "?", w = writes.get(k);
-    if (w) { w.n++; w.rows += r.changes || 0; } else if (writes.size < 400) writes.set(k, { n: 1, rows: r.changes || 0 });
+    let w = this[KEY];
+    if (w === undefined) {
+      const k = this.sourceSQL?.replace(/\s+/g, " ").slice(0, 90) || "?";
+      w = writes.get(k);
+      if (!w) { if (writes.size < 400) { w = { n: 0, rows: 0 }; writes.set(k, w); } else w = null; }
+      this[KEY] = w;
+    }
+    if (w) { w.n++; w.rows += r.changes || 0; }
     return r;
   };
   setInterval(() => { dbStats.writers = [...writes].sort((x, y) => y[1].n - x[1].n).slice(0, 10).map(([sql, w]) => ({ sql, ...w })); }, 10_000).unref?.();
@@ -60,7 +68,9 @@ db.prepare = (sql) => {
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 5000;
+-- 15 s, not 5: a write that waits is a stall, a write that gives up is a lost row and, in an unguarded job, a crash.
+-- The waits come from the disk folding a large write-ahead log after a restart; they end, the lost rows did not.
+PRAGMA busy_timeout = 15000;
 PRAGMA journal_size_limit = 67108864;
 -- A 590 MB file: 64 MB of page cache and the file mapped into memory, so hot reads stop going to disk.
 PRAGMA cache_size = -65536;
@@ -132,7 +142,9 @@ try { db.exec("ALTER TABLE tokens ADD COLUMN creator TEXT"); } catch {}
 try { db.exec("ALTER TABLE tokens ADD COLUMN dev_sol REAL"); } catch {}
 try { db.exec("ALTER TABLE tokens ADD COLUMN header TEXT"); } catch {}
 // Data quality: what the asset is, whether its latest price can be trusted, and when it was last really priced.
-for (const c of ["asset_class TEXT", "class_user TEXT", "themes_user TEXT", "quarantine TEXT", "price_t INTEGER", "price_src TEXT"])
+// migrated_at: the instant pump.fun moved the coin to its pool (its migration event, exact): the Migrated column's
+// clock, which no later DexScreener reading moves (engine.js bondedOnChain / applyPair).
+for (const c of ["asset_class TEXT", "class_user TEXT", "themes_user TEXT", "quarantine TEXT", "price_t INTEGER", "price_src TEXT", "migrated_at INTEGER"])
   try { db.exec(`ALTER TABLE tokens ADD COLUMN ${c}`); } catch {}
 // ok = 1 when the reading came from a market someone could actually trade in.
 try { db.exec("ALTER TABLE snapshots ADD COLUMN ok INTEGER"); } catch {}

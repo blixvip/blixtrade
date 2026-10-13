@@ -148,10 +148,12 @@ const tools = page({
   title: "Everything BLIX Does: Tools, Guides and Comparisons | BLIX",
   description: "Every BLIX page in one place: trading, scanners, signals, wallets, AI, coin creation, developer access, comparisons with Axiom, Fomo, Photon, GMGN and BullX.",
   h1: "Everything BLIX does",
-  lede: `BLIX is one terminal, and one free account unlocks all of it: live pump.fun and Solana scanning, one-click trading with your own wallet, an AI that reads every coin, wallet and X tracking, a coin launcher, developer access with the API and MCP connector, and the Discord. This page lists every part of the site, grouped by what you are trying to do.`,
+  lede: `One free account unlocks all of it: live pump.fun and Solana scanning, one-click trading with your own wallet, an AI that reads every coin, wallet and X tracking, a coin launcher, and developer access with the API and MCP connector. This is the index: every page on the site by the job it does, titles only. For what each page covers and which to read first, start at the <a href="/guides">guides hub</a>.`,
   body: (PAGES) => `${START()}
 ${GROUPS.map(([name, paths]) => {
-    const rows = paths.filter((p) => PAGES[p]).map((p) => `<a href="${p}"><b>${esc(PAGES[p].h1)}</b><span>${esc(PAGES[p].description)}</span></a>`);
+    // Titles only: /guides is the hub that describes each page; repeating every description here made the two pages
+    // near-copies of each other (60% shared text, site audit 2026-10-12).
+    const rows = paths.filter((p) => PAGES[p]).map((p) => `<a href="${p}"><b>${esc(PAGES[p].h1)}</b></a>`);
     return rows.length ? `<h2 id="${name.toLowerCase().replace(/[^a-z]+/g, "-")}">${esc(name)}</h2><div class="related">${rows.join("")}</div>` : "";
   }).join("")}
 ${COMMUNITY}`,

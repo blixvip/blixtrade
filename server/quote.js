@@ -7,6 +7,7 @@
 // router (the same route a real swap would take), free and keyless.
 import { live, feed } from "./livetrades.js";
 import { jupiterGet } from "./jupiter.js";
+import { poolStateOf } from "./pumpswap.js";
 import { db } from "./db.js";
 import { supplyOf } from "./jup.js";
 
@@ -108,16 +109,29 @@ function fastQuote(mint, side, amount, slippageBps, estimate, waitMs = 800) {
 // side "buy": amount in SOL. side "sell": amount in tokens. Returns sizes in SOL / tokens plus USD views.
 // `estimate`: when Jupiter is rate limited or down, answer with poolEstimate() (src "estimate") instead of failing.
 // `waitMs`: how long an estimate-allowed quote waits on Jupiter before taking the pool estimate (paper fills: 250).
-export async function quote(mint, side, amount, { slippageBps = 300, estimate = false, waitMs = 800 } = {}) {
+// `usdc`: the trade is in USDC (Axiom-style, 2026-10-11): a buy's `amount` is USDC, a sell is paid in USDC. The
+// quote itself is worked in SOL at the live SOL price (the curve's own maths for a curve coin, Jupiter's SOL route
+// otherwise) and answered with the USDC figures beside it (`usdcIn` / `usdcOut`); the real trade quotes its own
+// USDC route in the wallet service (blix-vault), the paper desk fills at this one.
+export async function quote(mint, side, amount, { slippageBps = 300, estimate = false, waitMs = 800, usdc = false } = {}) {
   amount = Number(amount);
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(mint || ""))) throw err(400, "That is not a Solana address.");
   if (!["buy", "sell"].includes(side)) throw err(400, "side must be buy or sell.");
   if (!(amount > 0) || !Number.isFinite(amount)) throw err(400, "Amount must be finite and above zero.");
   if (!feed.solKnown) throw err(503, "Waiting for the SOL price, so dollar figures would be wrong. Try again in a few seconds.");
   slippageBps = Math.max(1, Math.min(5000, Math.round(Number(slippageBps) || 300)));
+  let usdcIn = null;
+  if (usdc && side === "buy") { usdcIn = amount; amount = amount / feed.solUsd; }
   const s = live.get(mint);
   const onCurve = s && s.vSol > 0 && s.vTok > 0 && (s.progress ?? 0) < 0.995 && now() - (s.resT || 0) < CURVE_FRESH_MS;
+  // A migrated pump coin whose PumpSwap pool the radar hears trade by trade (pumpswap.js): a preview is worked from
+  // the pool's own price and depth (poolEstimate), like a curve quote, instead of asking Jupiter, a quarter of whose
+  // answers were refusals on the free allowance (2026-10-11), each one pausing every Jupiter read for seconds. Real
+  // trades never take this: the wallet service quotes itself.
+  const pool = !onCurve && estimate ? poolStateOf(mint) : null;
+  const local = pool && now() - (pool.t || 0) < 90_000 ? poolEstimate(mint, side, amount, slippageBps) : null;
   const q = onCurve ? { ...curveQuote(s, side, amount, slippageBps), src: "curve", route: ["pump.fun curve"], feeBps: s.feeBps ?? 125, reservesAgeMs: now() - s.resT }
+    : local ? { ...local, src: "pool", route: ["PumpSwap pool"], note: null, reservesAgeMs: now() - pool.t }
     : await fastQuote(mint, side, amount, slippageBps, estimate, waitMs).then((x) => ({ ...x, src: "jupiter" }), (e) => {
       const est = estimate && (e.status === 429 || e.status === 503) ? poolEstimate(mint, side, amount, slippageBps) : null;
       if (!est) throw e;
@@ -130,5 +144,6 @@ export async function quote(mint, side, amount, { slippageBps = 300, estimate = 
   const sup = /pump$/.test(mint) || onCurve ? 1e9 : supplyOf(mint) ?? 1e9;
   return { ...q, mint, slippageBps, solUsd: usd, t: now(),
     avgMcapUsd: q.avgSol * sup * usd, spotMcapUsd: q.spotSol ? q.spotSol * sup * usd : null,
-    usdIn: side === "buy" ? amount * usd : null, usdOut: side === "sell" ? q.outSol * usd : null };
+    usdIn: side === "buy" ? amount * usd : null, usdOut: side === "sell" ? q.outSol * usd : null,
+    usdcIn, usdcOut: usdc && side === "sell" ? q.outSol * usd : null };
 }

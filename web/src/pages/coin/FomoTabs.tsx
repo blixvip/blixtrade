@@ -2,8 +2,9 @@
 // first, with their position, PnL, average entry and pinned thesis) and the theses (why traders bought,
 // with likes, the market cap when written and the author's position now). Data: /api/coin/<mint>/fomo
 // (server/fomoboard.js reads Fomo through Aside, kept three minutes).
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { usdK, usdSigned } from "@/lib/coin";
+import { markKnownHolder } from "@/lib/coin-numbers";
 import { toast } from "@/components/ui/toast";
 import { Icon } from "@/shell/icons";
 import { ageStr } from "@/lib/format";
@@ -11,7 +12,6 @@ import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Empty } from "./parts";
 import { thumb, original } from "@/lib/thumb";
-import { useLiveMc } from "@/lib/livepx";
 import { Flash } from "@/components/Live";
 import { FomoEyes } from "../traders/parts";
 
@@ -34,9 +34,8 @@ const hold = (s: number | null) => (s == null ? null : s >= 86400 ? `${Math.floo
 const amt = (n: number | null) => (n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : n.toFixed(0));
 
 // The market cap at the holder's average entry: entry price times the coin's supply (market cap over price now).
-function entryMc(x: FomoHolder, mc: number | null) {
-  const price = x.value && x.amount ? x.value / x.amount : null;
-  return x.entry != null && price && mc ? usdK((x.entry / price) * mc) : "—";
+function entryMc(x: FomoHolder, supply: number | null | undefined) {
+  return x.entry != null && supply && supply > 0 ? usdK(x.entry * supply) : "—";
 }
 
 // A trader's face: the resized copy, then the original if that fails, then Fomo's own default picture (its eyes on a
@@ -80,21 +79,14 @@ function Source({ f }: { f: CoinFomo }) {
   return <span className="text-sm text-muted">From Fomo{f.read ? ` · updated ${ageStr(now - f.read)} ago` : ""}</span>;
 }
 
-// Fomo's figures are as of its last read (every few minutes); between reads each holder's value and PnL move with
-// the coin's live market cap, the same as the chart: value x (MC now / MC at the read), the difference added to PnL.
-export function KnownHolders({ f, mc, mint, supply }: { f: CoinFomo | null; mc: number | null; mint?: string; supply?: number | null }) {
-  const live = useLiveMc(mint) ?? mc;
-  const base = useRef<{ read: number | null; mc: number | null } | null>(null);
-  if (f?.read && (!base.current || base.current.read !== f.read)) base.current = { read: f.read, mc: live };
-  if (base.current && !base.current.mc && live) base.current.mc = live;
-  const scale = base.current?.mc && live ? live / base.current.mc : 1;
+// Token balances and supply give the current value directly, even if Fomo's snapshot is older than page load.
+export function KnownHolders({ f, mc, mint, supply, priceAgeMs }: { f: CoinFomo | null; mc: number | null; mint?: string; supply?: number | null; priceAgeMs?: number | null }) {
+  const live = priceAgeMs != null && priceAgeMs >= 0 && priceAgeMs < 30_000 ? mc : null;
   const s = Status({ f, what: "known holders" });
   if (s || !f) return s;
   if (!f.holders.length) return <Empty title="No Fomo traders hold this coin" text="Known holders are traders on Fomo who hold it now." />;
   const rows = f.holders.map((x) => {
-    const move = x.value != null ? x.value * (scale - 1) : 0;
-    const value = x.value != null ? x.value * scale : null, pnl = x.pnl != null ? x.pnl + move : null;
-    return { x, value, pnl, ret: x.cost && pnl != null ? (pnl / x.cost) * 100 : null };
+    return { x, ...markKnownHolder(x, live, supply) };
   });
   const top = Math.max(1, ...rows.map((r) => r.value || 0));
   const cell = "border-b border-rule px-4 py-3";
@@ -124,7 +116,7 @@ export function KnownHolders({ f, mc, mint, supply }: { f: CoinFomo | null; mc: 
                     </a>
                     {x.wallet && (
                       <span className="mt-1.5 ml-[68px] flex items-center gap-1">
-                        <a href={`https://solscan.io/account/${x.wallet}`} target="_blank" rel="noreferrer" title={`Their wallet ${x.wallet} on Solscan`}
+                        <a href={`#/trader/${x.wallet}`} title={`Their wallet ${x.wallet}: open its page`}
                           className="font-outlier inline-flex h-6 items-center gap-1.5 rounded-full bg-paper-4/70 px-2 text-xs text-ink-2 ring-1 ring-rule-2 transition-colors hover:text-ink hover:ring-muted">
                           <i className="size-1.5 rounded-full bg-up" />{x.wallet.slice(0, 4)}…{x.wallet.slice(-4)}</a>
                         <button onClick={() => copy(x.wallet!)} aria-label="Copy their wallet" title="Copy wallet" className="grid size-6 place-items-center rounded-full text-muted transition-colors hover:bg-paper-4 hover:text-ink"><Icon.copy className="size-3.5" /></button>
@@ -144,7 +136,7 @@ export function KnownHolders({ f, mc, mint, supply }: { f: CoinFomo | null; mc: 
                     {ret != null && <span className={cn("num mt-1 ml-auto block w-fit rounded-full px-1.5 py-px text-xs font-semibold", up ? "bg-up/10 text-up" : "bg-down/10 text-down")}>{ret >= 0 ? "+" : "−"}{Math.abs(ret).toFixed(Math.abs(ret) >= 100 ? 0 : 1)}%</span>}
                   </td>
                   <td className={cn(cell, "num text-right")}>
-                    <span className="text-[15px] font-medium text-ink">{entryMc(x, mc)}</span>
+                    <span className="text-[15px] font-medium text-ink">{entryMc(x, supply)}</span>
                     <span className="mt-1 block text-sm text-muted">{x.entry != null ? `$${x.entry.toPrecision(3)}` : ""}</span>
                   </td>
                   <td className={cn(cell, "max-w-[420px] text-sm")}>

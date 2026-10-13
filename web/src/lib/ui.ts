@@ -11,7 +11,8 @@ export const useUi = create<{ q: string; feedFocus: boolean }>(() => ({ q: "", f
 
 // Who is signed in and what their wallet holds, for the top bar. Asked again every half minute.
 export interface Me { signedIn: boolean; email?: string; name?: string | null; picture?: string | null; address?: string; needsWallet?: boolean; hosted?: boolean;
-  wallet?: { sol: number; solUsd?: number; tokens?: { mint: string; ui: number; usd?: number | null }[] } | null; onramp?: { stripe?: boolean } }
+  wallet?: { sol: number; solUsd?: number; tokens?: { mint: string; ui: number; usd?: number | null }[] } | null; onramp?: { stripe?: boolean };
+  prefs?: { presets?: unknown; pi?: unknown; at?: unknown } | null }   // the account's trade presets (lib/presets.ts)
 export const useMe = create<{ me: Me | null }>(() => ({ me: null }));
 export async function loadMe() {
   try {

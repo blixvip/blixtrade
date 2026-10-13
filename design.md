@@ -206,3 +206,9 @@ The owner sent a full-page mockup (a trading terminal in the Axiom layout, with 
 - A figure Blix has no source for (X followers, watchers, fees paid, insiders) is left out, never faked.
 
 **Shell amendment (2026-10-04, later the same day):** after seeing the top nav the owner said "I like it with the side part better". The new front end is back on the N3 side rail, in classic Blix's order (Pulse, Signals, Picks, Research, Narratives, Coins, Wallets, Briefs, Track record, Health, API, MCP, Account; Settings at the bottom with the connection state). The strip across the top of the page keeps the tape, search, Deposit and the wallet. The three-column Pulse and its rows are unchanged.
+
+## Wallet tracker palette (2026-10-12)
+
+The tracker uses a scoped, Axiom-inspired terminal palette at the user's request: graphite `#101218` / `#151820`, restrained sapphire selection `#a5baff`, mint buys `#65deb3`, and pink sells `#ff899c`. Priority groups carry blue, amber, and lilac markers plus P1/P2/P3 labels. User-selected wallet colors and emoji identify wallets consistently in Manager and the live feed; they are content, not general UI icons.
+
+The palette is defined in `web/src/components/wallet-tracker.css` under `.wt-theme`; the surrounding app retains its theme. Tracker body text stays 12–14 px regardless of the page's automatic density setting. The title bar and enlarged corner handle remain draggable; compact layouts use container queries so they respond to the window's size as well as the screen.

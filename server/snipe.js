@@ -1,4 +1,5 @@
 import { heliusFetch as fetch } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // Snipers and bundlers for any coin, from its first blocks on the chain: for coins the holder ledger did not
 // see from their first trade (holders.js genesis), which is every older coin on Discover and Fomo's lists.
 // No public API carries these (Jupiter, RugCheck, DexScreener, GeckoTerminal checked 2026-10-08); Axiom and GMGN
@@ -209,6 +210,7 @@ async function findLaunch(mint) {
   if (!spendFind()) throw new Error("daily allowance of launch reads used");
   let txs = [], token = null;
   for (let page = 0; page < 2; page++) {
+    if (!canEnrich(mint)) throw new Error('wait: coin screening');
     if (page && !spendFind()) break;
 
     const full = await call(url, "getTransactionsForAddress", [mint, { transactionDetails: "full", sortOrder: "asc", limit: 100, encoding: "json", maxSupportedTransactionVersion: 1, ...(token ? { paginationToken: token } : {}) }], 25_000);
@@ -288,7 +290,7 @@ export function snipeDebug(mint) {
 // ---------- asked by the pages ----------
 // { sn, snN, bd, bdN } for a coin (percent still held, wallet counts), or null while unknown; asking queues it.
 export function snipeFor(mint) {
-  wanted.set(mint, now());
+  if (canEnrich(mint)) wanted.set(mint, now()); else wanted.delete(mint);
   const w = who.get(mint), h = held.get(mint);
   if (w && !w.fail && !w.snipers.length && !w.bundle.length && !w.dev) return { sn: 0, snN: 0, snOut: 0, bd: 0, bdN: 0, dev: null };
   if (!w || w.fail || !h?.t || h.sn == null) return null;
@@ -303,7 +305,7 @@ function nextJob(kind) {
   const t = now(), due = [];
   let waiting = null;
   for (const [m, at] of wanted) {
-    if (t - at > WANT_MS) { wanted.delete(m); continue; }
+    if (t - at > WANT_MS || !canEnrich(m)) { wanted.delete(m); continue; }
     const w = who.get(m);
     if (kind === "find" && !inflight.has(m) && (!w || (w.fail && t - w.t > 10 * 60_000))) {
       if (now() >= freeNext || isBig(m)) return m;

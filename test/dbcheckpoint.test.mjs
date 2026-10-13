@@ -17,7 +17,7 @@ test('checkpoint worker preserves a pinned snapshot, then shrinks WAL and preser
     reader.exec('BEGIN');
     assert.equal(reader.prepare('SELECT COUNT(*) AS n FROM t').get().n, 1);
     db.exec('INSERT INTO t VALUES (2)');
-    worker = new Worker(new URL('../server/dbcheckpoint.js', import.meta.url), { workerData: { file, everyMs: 20, maxWalBytes: 1 } });
+    worker = new Worker(new URL('../server/dbcheckpoint.js', import.meta.url), { workerData: { file, everyMs: 20, maxWalBytes: 1, startupGraceMs: 0 } });
     const next = () => new Promise((resolve, reject) => {
       const timer = setTimeout(() => { clean(); reject(new Error('checkpoint timed out')); }, 5000);
       const clean = () => { clearTimeout(timer); worker.off('message', ok); worker.off('error', fail); };

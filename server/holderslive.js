@@ -1,4 +1,5 @@
-import { heliusFetch as fetch } from "./heliuskeys.js";
+import { heliusFetch as fetch, rpcStreamAllowed, noteRpcBytes } from "./heliuskeys.js";
+import { canEnrich } from './coin-screen.js';
 // Holders straight from the chain while a coin's page is open: every token account of the coin, read once
 // (getProgramAccounts by mint), then kept current by a subscription to the same accounts (programSubscribe at
 // "processed"), so the holder count, top 10 and every wallet's balance move with each trade instead of waiting
@@ -121,13 +122,14 @@ async function start(st, hint) {
   try {
     // Which token program holds it, and its decimals.
     const a = await call(coinRpcUrl(), "getAccountInfo", [st.mint, { encoding: "base64", dataSlice: { offset: 44, length: 1 } }], 10_000);
+    if (coins.get(st.mint) !== st || !canEnrich(st.mint)) return;
     if (!a?.value) throw new Error("mint not found");
     st.program = a.value.owner; st.scale = 10 ** Buffer.from(a.value.data[0], "base64")[0];
     const sub = [st.program, { encoding: "base64", commitment: "processed", filters: [{ memcmp: { offset: 0, bytes: st.mint } }] }];
     const note = (res) => { const v = res?.value; if (v?.pubkey && v.account?.data?.[0] != null) onChange(st, v.pubkey, Buffer.from(v.account.data[0], "base64"), res.context?.slot ?? null); };
     // On the per-coin socket when there is one, else its own public subscription.
     st.stop = streamSub(`holders:${st.mint}`, "programSubscribe", sub, note)
-      || startRpcStream({ url: rpcWsUrl, request: { method: "programSubscribe", params: sub }, silentMs: 300_000, onEvent: (m) => note(m.params?.result) });
+      || startRpcStream({ admit: rpcStreamAllowed, meter: noteRpcBytes, url: rpcWsUrl, request: { method: "programSubscribe", params: sub }, silentMs: 300_000, onEvent: (m) => note(m.params?.result) });
     st.hint = hint;
     const { m, slot: snapSlot } = await snapshot(st);
     st.m = m; st.ready = true;
@@ -143,6 +145,7 @@ async function start(st, hint) {
 
 // Every account of the coin, read whole: { m: maps, slot }.
 async function snapshot(st) {
+  if (!canEnrich(st.mint)) throw new Error('Coin enrichment deferred');
   const t0 = now();
   const url = coinRpcUrl();
   const r = await call(url, "getProgramAccounts", [st.program, { encoding: "base64", commitment: "processed", withContext: true, dataSlice: { offset: 32, length: 40 }, filters: [{ memcmp: { offset: 0, bytes: st.mint } }] }]);
@@ -184,6 +187,7 @@ async function reread(st) {
 // { count, top: [[wallet, tokens]] largest first (up to `n`), of(wallet), accounts, at, live }
 const asked = new Map();       // mint -> first asked, while its holder count is unknown
 export function holdersLive(mint, { hint = 0, n = 100 } = {}) {
+  if (!canEnrich(mint)) return null;
   if (hint > BIG) return null;
   if (!hint && !coins.has(mint)) {
     const t = asked.get(mint) ?? (asked.set(mint, now()), now());
@@ -206,7 +210,7 @@ export function holdersLive(mint, { hint = 0, n = 100 } = {}) {
 
 setInterval(() => {
   for (const [m, st] of coins) {
-    if (now() - st.t > IDLE_MS) { try { st.stop?.(); } catch {} clearTimeout(st.tick); coins.delete(m); continue; }
+    if (now() - st.t > IDLE_MS || !canEnrich(m)) { try { st.stop?.(); } catch {} clearTimeout(st.tick); coins.delete(m); continue; }
     if (now() - st.lastRead > ((st.accounts ?? 0) > 10_000 ? REREAD_BIG : REREAD_SMALL)) reread(st);
   }
   holderStats.coins = coins.size;

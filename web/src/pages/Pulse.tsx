@@ -91,7 +91,7 @@ function Column({ col, show, setShow, globalQ, phoneHidden }: { col: ColKey; sho
   const setPreset = (p: Preset) => { store.set(`pulse:buy:${col}`, p); setPresetState(p); };
   const q = (own || globalQ).trim().toLowerCase(), sol = preset.sizes[preset.p] || 0.25;
   const cf = useColFilters((s) => s.f[col as "new"] || {});
-  const { mints: hiddenList, showing } = useHidden();
+  const { mints: hiddenList, cleared, showing } = useHidden();
   const hidden = new Set(hiddenList);
   // A coin that was already around when this column was last cleared stays out of it (lib/hidden.ts clearedOut):
   // its creation for New Pairs and Final Stretch, its bonding for Migrated.
@@ -234,11 +234,15 @@ function RugButton() {
   );
 }
 
+let prefs0: PulsePrefs;   // the filters as of the last render, for the view's hidden count above (read inside a store selector)
 export function Pulse() {
   const globalQ = useUi((s) => s.q);
-  const [show, setShowState] = useState<Show>(() => store.get<Show>("pulse:show", "noslop"));
+  const [show, setShowState] = useState<Show>(() => store.get<Show>("pulse:show", "all"));
   const setShow = (v: Show) => { store.set("pulse:show", v); setShowState(v); };
   const prefs = usePrefs(), rowH = rowHeight(prefs), open = SHOWN.filter(([col]) => prefs.cols[col as PulseCol]);
+  prefs0 = prefs;
+  // How many coins on the board the chosen view is hiding, so a missing coin is never a mystery.
+  const hiddenByView = usePulse(useShallow((s) => { if (show === "all") return 0; let n = 0; for (const [col] of SHOWN) for (const m of s.cols[col]) { const t = s.coins[m]; if (t && !isDeadCoin(t) && !isRug(t) && !passes(t, show, "", prefs0)) n++; } return n; }));
   // A phone shows one column at a time, picked here: stacked, each column's own scroll caught every swipe and the
   // columns under New Pairs could not be reached.
   const [phoneCol, setPhoneColState] = useState<ColKey>(() => store.get<ColKey>("pulse:phone", "new"));
@@ -254,7 +258,7 @@ export function Pulse() {
           <HiddenButton />
           <RugButton />
           <i aria-hidden className="mx-1 h-5 w-px shrink-0 bg-rule-2 max-md:hidden" />
-          <div className="min-w-0 overflow-x-auto [scrollbar-width:none] max-[419px]:[&_button]:px-2 max-md:[mask-image:linear-gradient(to_right,black_82%,transparent)] max-md:pr-4"><Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" /></div>
+          <div className="min-w-0 overflow-x-auto [scrollbar-width:none] max-[419px]:[&_button]:px-2 max-md:[mask-image:linear-gradient(to_right,black_82%,transparent)] max-md:pr-4">{show !== "all" && hiddenByView > 0 && <Tip tip={`This view hides ${hiddenByView} coin${hiddenByView === 1 ? "" : "s"} that the filters let through. "All" shows every coin`}><button onClick={() => setShow("all")} className="num shrink-0 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-semibold text-warn hover:bg-warn/20">−{hiddenByView} hidden</button></Tip>}<Segmented value={show} options={SHOW} onChange={setShow} label="Which coins to show" /></div>
           <PulseSettings />
         </div>
       </header>

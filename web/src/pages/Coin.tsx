@@ -5,12 +5,15 @@
 // Data: /api/token/<mint> every 15 s, /api/coin/<mint> every 3 s, /api/coin/<mint>/trades every 2 s, and from
 // the stream, every trade the moment the radar reads it from the chain (`ctrade`) and the holder figures each
 // time the chain changes them (`cholders`).
+import { coinFlow, currentMetric, markHolder, type MarketWindows } from "@/lib/coin-numbers";
+import { useNow } from "@/lib/route";
 import { cn } from "@/lib/utils";
-import { useMetrics, metricNumber } from '@/lib/metrics';
+import { useMetrics } from '@/lib/metrics';
+import { useLivePrice, setPx } from '@/lib/livepx';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { loadPaperSizes } from "@/lib/mode";
 import { usePoll, type CoinData, type TokenDetail, type Trade, type Trades } from "@/lib/coin";
-import { onCoinRows, useCoinHolders } from "@/lib/pulse";
+import { onCoinRows, useCoinHolders, useCoinFlow, usePulse } from "@/lib/pulse";
 import type { ChartEvent, ChartPeople, Level, Mark } from "./coin/Chart";
 import { CoinHeader, InstantButton } from "./coin/Header";
 import { usePosition } from "./coin/position";
@@ -48,10 +51,19 @@ const MIGRATE_MC_SOL = 410.9;   // pump.fun market cap at migration, in SOL (see
 const NO_INFO: CoinData["info"] = { holders: null, top10: null, devPct: null, snipers: null, bundle: null, insiders: null, lpLocked: null, safety: null, traders: null, source: null, checked: null };
 
 export function Coin({ mint }: { mint: string }) {
-  const metrics = useMetrics(mint);
+  const metrics = useMetrics(mint), now = useNow();
+  const chartPrice = useLivePrice(mint), streamedFlow = useCoinFlow(mint);
+  const liveSolUsd = usePulse(s => s.live.solUsd);
+  const market = usePoll<MarketWindows>(`jup/${mint}`, 5_000);
   const token = usePoll<TokenDetail>(`token/${mint}`, 15_000);
   // Every trade arrives on the stream the moment the radar reads it (ctrade, below); these reads fill in the rest.
   const coinPolled = usePoll<CoinData>(`coin/${mint}`, 3_000);
+  const coinReadAt = useMemo(() => Date.now(), [coinPolled.data]);
+  useEffect(() => {
+    const c = coinPolled.data;
+    if (!c || c.priceAgeMs == null || c.priceAgeMs < 0 || c.priceAgeMs >= 30_000 || !(c.mcUsd! > 0) || useReplay.getState().mint === mint) return;
+    setPx([[mint, c.mcUsd!]], false, true, coinReadAt - c.priceAgeMs);
+  }, [coinPolled.data, coinReadAt, mint]);
   // Read every 2 s: a bonded coin's pool trades come only from this read (Jupiter's list, the chain's rows on top),
   // and trades the radar recovers late from a block land here, not on the stream.
   const polled = usePoll<Trades>(`coin/${mint}/trades?limit=150`, 2_000);
@@ -98,15 +110,30 @@ export function Coin({ mint }: { mint: string }) {
     // A partial answer (no `info`: a coin the server could not read yet) must not take the page down.
     const raw = coinPolled.data;
     let d = raw && !raw.info ? { ...raw, info: NO_INFO } : raw;
-    if (d && !replayEpoch && metrics) {
-      const mc = metricNumber(metrics, 'mc', d.mcUsd) ?? null, price = mc != null && d.supply > 0 ? mc / d.supply : d.priceUsd;
-      d = { ...d, mcUsd: mc, priceUsd: price, priceAgeMs: metrics.fields.mc ? Date.now() - metrics.fields.mc.observedAt : d.priceAgeMs,
-        info: { ...d.info, holders: metricNumber(metrics, 'holders', d.info.holders) ?? null, top10: metricNumber(metrics, 'top10', d.info.top10) ?? null, devPct: metricNumber(metrics, 'dev', d.info.devPct) ?? null },
-        holders: d.holders ? { ...d.holders, list: d.holders.list.map(h => h.tokens != null && price != null ? { ...h, valueUsd: h.tokens * price, valueSol: d!.solUsd ? h.tokens * price / d!.solUsd : null } : h) } : d.holders };
+    if (d && !replayEpoch) {
+      const priceAt = d.priceAgeMs == null ? 0 : coinReadAt - d.priceAgeMs;
+      const price = currentMetric(metrics, 'mc', now, priceAt);
+      const holderAt = Math.max(d.info.checked ?? 0, d.holders?.last ?? 0);
+      const holder = (key: string, fallback: number | null) => currentMetric(metrics, key, now, holderAt)?.value ?? fallback;
+      const freshChart = chartPrice && chartPrice.t >= Math.max(priceAt, price?.observedAt ?? 0) && now - chartPrice.t < 30_000 ? chartPrice : null;
+      const mc = freshChart?.mc ?? price?.value ?? d.mcUsd, priceUsd = mc != null && d.supply > 0 ? mc / d.supply : d.priceUsd;
+      const markedAt = freshChart?.t ?? price?.observedAt ?? priceAt;
+      const age = markedAt ? Math.max(0, now - markedAt) : d.priceAgeMs;
+      const solUsd = liveSolUsd && Number.isFinite(liveSolUsd) && liveSolUsd > 0 ? liveSolUsd : d.solUsd;
+      const mark = (h: CoinData['traders'][number]) => markHolder(h, priceUsd, solUsd, d!.supply, age);
+      d = { ...d, mcUsd: mc, priceUsd, solUsd, priceAgeMs: age,
+        m5: coinFlow(d.m5, market.data, now, !d.onCurve, streamedFlow),
+        info: { ...d.info, holders: holder('holders', d.info.holders), top10: holder('top10', d.info.top10), devPct: holder('dev', d.info.devPct) },
+        holders: d.holders ? { ...d.holders, list: d.holders.list.map(mark) } : d.holders,
+        traders: (d.traders || []).map(mark), early: (d.early || []).map(mark) };
+      // Delayed holder events must not pin a newer poll/metric to an older reading.
+      if (liveH && liveH.t >= holderAt && now - liveH.t <= 30_000) {
+        const value = (key: string, next: number | null, fallback: number | null) => next != null && liveH.t >= (currentMetric(metrics, key, now, holderAt)?.observedAt ?? 0) ? next : fallback;
+        d = { ...d, info: { ...d.info, holders: value('holders', liveH.holders, d.info.holders), top10: value('top10', liveH.top10, d.info.top10), devPct: value('dev', liveH.devPct, d.info.devPct) } };
+      }
     }
-    if (!d || !liveH || liveH.holders == null) return d === raw ? coinPolled : { ...coinPolled, data: d };
-    return { ...coinPolled, data: { ...d, info: { ...d.info, holders: liveH.holders, top10: liveH.top10 ?? d.info.top10, devPct: liveH.devPct ?? d.info.devPct, source: liveH.source ?? d.info.source } } };
-  }, [coinPolled, liveH, metrics, replayEpoch]);
+    return d === raw ? coinPolled : { ...coinPolled, data: d };
+  }, [coinPolled, coinReadAt, liveH, metrics, market.data, replayEpoch, now, chartPrice, streamedFlow, liveSolUsd]);
   // Trades of $1,000+ over the whole history, for the chart's big-trade bubbles.
   const big = usePoll<Trades>(`coin/${mint}/big`, 60_000);
   // Faces on the chart: pump.fun accounts and Fomo traders who traded or called this coin.
@@ -218,7 +245,7 @@ export function Coin({ mint }: { mint: string }) {
   if (c?.onCurve && c.solUsd && (mint.endsWith("pump") || /pump/i.test(c.audit?.launchpad || ""))) levels.push({ price: MIGRATE_MC_SOL * c.solUsd, buy: true, title: "Migration", migrate: true });
   const warn: [boolean, string][] = [];
   const f = r.token.fresh;
-  if (r.untracked) warn.push([false, "Not tracked yet: live trade feed only. Safety, holder history and price history appear once Blix tracks it."]);
+  if (r.untracked) warn.push([false, "Blix just started tracking this coin from its live trades. Its safety read, holder ledger and price history fill in over the next minute."]);
   // "dead" is the radar's tracking status; a coin it stopped watching can still trade, so only without a live price.
   if (f?.dead && !(c?.priceAgeMs != null && c.priceAgeMs < 5 * 60_000)) warn.push([true, "This coin is dead. The price shown is the last one read, not a live quote."]);
   if (f?.quarantine || f?.illiquid) warn.push([true, `The price shown cannot be traded at: ${f.exitWhy || f.quarantine}.`]);
@@ -242,7 +269,7 @@ export function Coin({ mint }: { mint: string }) {
           <div ref={tradesColRef} className="relative col-start-2 row-span-2 row-start-1 flex min-h-0 min-w-0 flex-col gap-2.5 self-stretch">
             <ResizeHandle axis="x" dir={-1} label="Trades width" className="-left-[10px]" start={() => tradesColRef.current?.offsetWidth || 320}
               onSize={(v) => setTradesW(v, false)} onDone={() => setTradesW(tradesW)} onReset={() => setTradesW(null)} />
-            <div ref={tradesRef} style={{ height: tradesH }} className="surface flex shrink-0 overflow-hidden [&>div]:w-full [&>div]:border-l-0"><SideTrades trades={trades.data} /></div>
+            <div ref={tradesRef} style={{ height: tradesH }} className="surface flex shrink-0 overflow-hidden [&>div]:w-full [&>div]:border-l-0"><SideTrades trades={trades.data} flow={c?.m5} /></div>
             {/* A square as wide as the trades above it; it does not stretch down with the page. */}
             <section aria-label="Bubble map" className="surface flex aspect-square w-full shrink-0 flex-col overflow-hidden"><BubbleMapTab mint={mint} compact /></section>
           </div>
@@ -260,8 +287,8 @@ export function Coin({ mint }: { mint: string }) {
         <aside ref={asideRef} className="sticky top-3 flex min-w-0 flex-col gap-2.5 max-lg:static lg:max-h-[calc(100dvh-6.75rem)] lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin] lg:[&>*]:shrink-0 lg:[grid-column:-2/-1] lg:[grid-row:1/span_2]">
           <QuickTrade docked mint={mint} symbol={symbol} sizes={sizes} pos={pos} onDone={refresh} migrating={migratingNow(c?.migrating?.since)} />
           <Flow c={c} />
-          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} migrating={migratingNow(c?.migrating?.since)} />
-          <About r={r} c={c} />
+          <TradePanel mint={mint} symbol={symbol} r={r} onDone={refresh} pos={pos} solUsd={c?.solUsd} priceUsd={c?.priceUsd} priceAgeMs={c?.priceAgeMs} migrating={migratingNow(c?.migrating?.since)} />
+          <About r={r} c={c} market={market.data} error={market.error} refresh={market.refresh} />
           <Position pos={pos} mint={mint} symbol={symbol} solUsd={c?.solUsd} />
           <Info r={r} c={c} />
           <Addresses r={r} c={c} />

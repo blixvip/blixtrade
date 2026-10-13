@@ -15,7 +15,8 @@ import { getJson, rugcheck } from "./sources.js";
 import { gtGet } from "./gtgate.js";
 import { jupAsset, jupBigTrades, jupFirstTrades, jupHolders, jupRecentTrades, jupTrades, supplyOf, knownSupply } from "./jup.js";
 import { fastMcap, focusPrice, rugFigures } from "./pulse.js";
-import { onPoolTrade } from "./pumpswap.js";
+import { onPoolTrade, swapFeed } from "./pumpswap.js";
+import { createCoinFlow } from "./coin-flow.js";
 import { levelNow, chartClose } from "./candles.js";
 // An open chart's price from its accounts (fastpx.js, set by server.js): the freshest reading there is, ahead of
 // the logs' (which trail by seconds on a busy link). USD, already on the chart's level; null when not fresh.
@@ -48,6 +49,12 @@ export const coinStats = { coins: 0, trades: 0, poolFetches: 0, poolErrors: 0 };
 // fn(mint, row) for every trade added (server.js pushes an open coin's to its page).
 const tapeFns = [];
 export const onTape = (fn) => tapeFns.push(fn);
+const flowFns = new Set();
+export const onFlow = fn => { flowFns.add(fn); return () => flowFns.delete(fn); };
+const flow = createCoinFlow({ connected: kind => kind === 'curve' ? feed.connected : kind === 'pumpswap' ? swapFeed.connected : false,
+  onUpdate: value => { for (const fn of flowFns) try { fn(value); } catch {} } });
+export const liveFlow = mint => flow.snapshot(mint);
+setInterval(() => flow.tick(), 1000).unref?.();
 
 function tapeOf(mint, since = now()) {
   let r = tapes.get(mint);
@@ -55,15 +62,17 @@ function tapeOf(mint, since = now()) {
   return r;
 }
 // A gap in what the ring heard (a pool coin's page closed for a while): the flow restarts from `t`.
-export function tapeGap(mint, t = now()) { const r = tapes.get(mint); if (r) r.since = Math.max(r.since, t); else tapeOf(mint, t); }
+export function tapeGap(mint, t = now()) { flow.gap(mint); const r = tapes.get(mint); if (r) r.since = Math.max(r.since, t); else tapeOf(mint, t); }
 
 // One trade. `sig` (+ size, for a transaction with several legs) keeps a trade read twice from counting twice.
 // `at`: when it happened, for a trade found seconds late in a block (journalfeed.js) that the live feed skipped:
 // it goes in its place in the list and its own 15-second bucket, and is not pushed to an open page as new.
 // `fast`: read from the wallet's balance change (server.js), seconds before the logs on a busy link. The logs'
 // row for the same slot and wallet is then not added again (its transaction shows once Jupiter lists it).
-export function addTape(mint, { buy, sol, tokens = null, mcSol, user = null, slot = null, sig = null, fast = false, at = null }) {
+export function addTape(mint, { buy, sol, tokens = null, mcSol, user = null, slot = null, sig = null, fast = false, at = null, flowKind = null }) {
   if (!(sol >= 0) || !(mcSol > 0)) return;
+  // Signed trades correct the totals even when the displayed tape already has a synthetic balance row.
+  if (flowKind) flow.record(mint, { sig, buy, sol, tokens, user, at, fast, kind: flowKind, solUsd: feed.solKnown ? feed.solUsd : null });
   const r = tapeOf(mint);
   if (slot != null && user) {
     const k = `${slot}|${user}`, had = r.who.get(k);
@@ -114,8 +123,8 @@ export function addTape(mint, { buy, sol, tokens = null, mcSol, user = null, slo
 // The curve reads its cap on 1B tokens; on the circulating-supply scale (knownSupply, cache only) like every
 // other figure, so the trade list, the chart and Jupiter's rows agree on a coin with burned tokens.
 const onCirc = (mint, mc) => mc * ((knownSupply(mint) ?? 1e9) / 1e9);
-onLiveTrade((mint, s, sol, buy, x) => addTape(mint, { buy, sol, tokens: x?.tokens ?? null, mcSol: onCirc(mint, s.mc), user: x?.user ?? null, slot: x?.slot ?? null, sig: x?.sig ?? null }));
-onPoolTrade((mint, e) => addTape(mint, { buy: e.buy, sol: e.sol, tokens: e.tokens ?? null, mcSol: e.mcSol, user: e.user ?? null, slot: e.slot ?? null, sig: e.sig ?? null }));
+onLiveTrade((mint, s, sol, buy, x) => addTape(mint, { buy, sol, tokens: x?.tokens ?? null, mcSol: onCirc(mint, s.mc), user: x?.user ?? null, slot: x?.slot ?? null, sig: x?.sig ?? null, flowKind: 'curve' }));
+onPoolTrade((mint, e) => addTape(mint, { buy: e.buy, sol: e.sol, tokens: e.tokens ?? null, mcSol: e.mcSol, user: e.user ?? null, slot: e.slot ?? null, sig: e.sig ?? null, flowKind: 'pumpswap' }));
 
 // A trade row as the page reads it, tagged (dev, sniper, bundle, followed). The tagger is kept a few seconds per coin.
 const taggers = new Map();
@@ -197,6 +206,7 @@ function walletLine(wallet, w, p, tagOf, mine) {
   return {
     wallet, ...tagOf(wallet),
     tokens: Math.round(w.b), pct: +((w.b / SUPPLY) * 100).toFixed(3), maxPct: +((w.max / SUPPLY) * 100).toFixed(3),
+    pnlTokens: w.b, pnlBasis: 'sol',
     boughtSol: +w.in.toFixed(4), soldSol: +w.out.toFixed(4), valueSol: value == null ? null : +value.toFixed(4),
     pnlSol: value == null ? null : +(w.out + value - w.in).toFixed(4), realizedSol: m && m[0] > 0 ? +(m[3] - m[2] * (Math.min(m[1], m[0]) / m[0])).toFixed(4) : null,
     boughtUsd: usd(w.in), soldUsd: usd(w.out), valueUsd: usd(value), pnlUsd: usd(value == null ? null : w.out + value - w.in),
@@ -271,6 +281,7 @@ function cached(key, ms, fn) {
 // a coin the radar retired stops being refreshed, and its page showed a rugged $6K coin with $532K liquidity.
 const pageRefresh = new Map();   // mint -> last refresh
 export function coinPage(mint, { top = 100 } = {}) {
+  flow.focus(mint);
   const r = tapes.get(mint);
   if (r) r.focus = now();
   if (now() - (pageRefresh.get(mint) || 0) > 20_000) {
@@ -315,6 +326,8 @@ function build(mint, top) {
   } else if (t?.vol_m5 != null) {
     m5 = { source: "tracked", buys: t.buys_m5, sells: t.sells_m5, buyUsd: null, sellUsd: null, volUsd: t.vol_m5, netUsd: null, traders: null };
   }
+  const calculatedFlow = flow.snapshot(mint);
+  if (calculatedFlow?.complete) m5 = { ...calculatedFlow.flow, calculatedAt: calculatedFlow.t, complete: true };
 
   let holders = null, traders = [], early = [];
   if (b) {
@@ -483,6 +496,7 @@ function jupLine(wallet, { held, w, supply, priceUsd, solUsd, tagOf, pool, lastA
     // lists include the curve, which read as a 30% "holder" on every coin still bonding.
     wallet, ...tagOf(wallet), ...(pool || !onCurve(wallet) ? { label: "Pool" } : {}),
     tokens: held == null ? null : Math.round(held), pct: held != null ? +((held / supply) * 100).toFixed(3) : null, maxPct: 0,
+    pnlTokens: unknown ? null : Math.min(held ?? net, net), pnlBasis: 'usd',
     boughtSol: r2(inSol), soldSol: r2(outSol), valueSol: r2(valueSol), pnlSol: pnlUsd != null && solUsd ? r2(pnlUsd / solUsd) : null, realizedSol: null,
     boughtUsd: w ? +w.inUsd.toFixed(2) : null, soldUsd: w ? +w.outUsd.toFixed(2) : null, valueUsd: valueUsd == null ? null : +valueUsd.toFixed(2), pnlUsd: pnlUsd == null ? null : +pnlUsd.toFixed(2),
     avgBuyMc, avgSellMc, trades: w?.n ?? 0, first: w?.first ?? lastActive ?? null,

@@ -470,7 +470,7 @@ export function markRepaired(gap, mint, n, full) { putRepair.run(gap, midOf(mint
 // After a gap closes: the coins that were trading just before it, and any being looked at, read back one at
 // a time (the RPC is shared with everything else), busiest first, up to `limit` coins.
 // `only`: just these coins (a chart opened on an outage), instead of the busiest ones.
-export async function repairGap(gapId, { watched = [], limit = null, only = null, ...opts } = {}) {
+export async function repairGap(gapId, { watched = [], limit = null, only = null, coinCall, ...opts } = {}) {
   const g = db.prepare("SELECT * FROM j_gaps WHERE id = ?").get(gapId);
   stats.repairStep = `gap ${gapId}: choosing coins`;
   if (!g || g.t1 == null) return 0;
@@ -492,7 +492,7 @@ export async function repairGap(gapId, { watched = [], limit = null, only = null
     if (fullQ.get(g.id, midOf(mint))) { done++; continue; }   // read back in full on an earlier run
     stats.repairing = mint; stats.repairStep = `gap ${gapId}: ${mint.slice(0, 8)} signatures`;
     try {
-      const r = await repairMint(mint, g.t0, g.t1, opts);
+      const r = await repairMint(mint, g.t0, g.t1, { ...opts, call: coinCall?.(mint) || opts.call });
       markRepaired(g.id, mint, r.n, r.full);
       stats.repaired += r.n; done++;
     } catch (e) { stats.repairErrors++; stats.lastRepairError = `${mint.slice(0, 6)}…: ${e.message}`; }

@@ -904,7 +904,8 @@ const coinPool = (since) => db.prepare(`SELECT mint, symbol, name, description, 
     WHERE first_seen > ? AND mcap > 0 AND quarantine IS NULL AND COALESCE(asset_class, 'meme') = 'meme'`).all(since)
   .map((t) => { const name = `${t.symbol} ${t.name}`, desc = t.description || ""; return { t, name, desc, text: `${name} \n ${desc}` }; });
 // `pool` lets a caller checking many narratives read the coins once instead of once per narrative.
-function matchCoins(keywords, since, pool = null) {
+// Every coin in `pool` (or the coins since `since`) that fits the keywords, with how well (`hits`), unsorted.
+function matchHits(keywords, since, pool = null) {
   const kws = keywords.filter((k) => k.length >= 3 && !GENERIC.has(k));
   if (!kws.length) return [];
   const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s_-]*");
@@ -918,31 +919,53 @@ function matchCoins(keywords, since, pool = null) {
     const hits = res.reduce((n, re) => n + (re.test(c.name) ? 2 : re.test(c.desc) ? 1 : 0), 0);
     if (hits >= 2) out.push({ ...c.t, hits });
   }
-  return out.sort((a, b) => b.hits - a.hits || (b.mcap || 0) - (a.mcap || 0)).slice(0, 12);
+  return out;
+}
+const byFit = (a, b) => b.hits - a.hits || (b.mcap || 0) - (a.mcap || 0);
+function matchCoins(keywords, since, pool = null) {
+  return matchHits(keywords, since, pool).sort(byFit).slice(0, 12);
 }
 
 // 24h after a narrative call: did it run? Best multiple among coins that fit it, and how many launched after the call.
 // The coins and prices under a thesis refresh every 10 minutes; the thesis itself does not (see NARRATIVE_EXPIRES).
 // With hundreds of open calls this used to read every recent coin once per call and held the whole radar
 // up for about a minute: the coins are now read once, and the radar gets a turn between calls.
-let scoringNarratives = false;
+// ...and the matching is incremental (2026-10-11): every open call (628 of them) tested every coin of the last
+// two days (39,000) against its keywords every ten minutes, 24 million regex tests a run, 15% of the radar's whole
+// CPU. Each call now keeps the coins it has matched; a run tests only the coins first seen since the last run,
+// and reads the matched coins' current figures back. The first run after a start is the full one.
+let scoringNarratives = false, lastScoreAt = 0;
+const matched = new Map();   // call id -> Map<mint, hits>
+const MATCH_KEEP = 60;       // coins kept per call (the best fits; the page shows 12)
 async function scoreNarratives() {
   if (scoringNarratives) return;
   scoringNarratives = true;
   try {
     const calls = db.prepare("SELECT * FROM narrative_calls WHERE status = 'open'").all();
     if (!calls.length) return;
-    const pool = coinPool(Math.min(...calls.map((c) => c.t)) - 24 * H);
+    const t0 = now(), oldest = Math.min(...calls.map((c) => c.t)) - 24 * H;
+    // The coins since the last run for calls already matched once; the whole window for the rest.
+    const fresh = lastScoreAt ? coinPool(Math.max(oldest, lastScoreAt - 60_000)) : null;
+    const full = !fresh || calls.some((c) => !matched.has(c.id)) ? coinPool(oldest) : null;
     for (const c of calls) {
       await new Promise((r) => setImmediate(r));
-      try { scoreNarrative(c, pool); } catch (e) { logEvent("error", `narrative score: ${e.message}`); }
+      try { scoreNarrative(c, matched.has(c.id) && fresh ? fresh : full); } catch (e) { logEvent("error", `narrative score: ${e.message}`); }
     }
+    lastScoreAt = t0;
+    const open = new Set(calls.map((c) => c.id));
+    for (const id of matched.keys()) if (!open.has(id)) matched.delete(id);
   } finally { scoringNarratives = false; }
 }
+// The matched coins' rows as they are now (the figures move; a coin quarantined since is dropped).
+const rowsOf = (mints) => (mints.length ? db.prepare(`SELECT mint, symbol, name, description, mcap, peak_mcap, first_seen, graduated, image, status, liquidity, dex FROM tokens WHERE quarantine IS NULL AND mint IN (${mints.map(() => "?").join(",")})`).all(...mints) : []);
 function scoreNarrative(c, pool) {
   {
     const kw = json(c.keywords, []);
-    const coins = matchCoins(kw, c.t - 24 * H, pool);
+    let m = matched.get(c.id);
+    if (!m) { m = new Map(); matched.set(c.id, m); }
+    for (const x of matchHits(kw, c.t - 24 * H, pool)) m.set(x.mint, x.hits);
+    if (m.size > MATCH_KEEP) { const keep = [...m].sort((a, b) => b[1] - a[1]).slice(0, MATCH_KEEP); m.clear(); for (const [k, v] of keep) m.set(k, v); }
+    const coins = rowsOf([...m.keys()]).map((t) => ({ ...t, hits: m.get(t.mint) })).sort(byFit).slice(0, 12);
     // The market cap each coin had when the call was made; kept from the first match onward.
     const before = new Map(json(c.matches, []).map((m) => [m.mint, "base" in m ? m.base : m.mcap]));
     let bestMult = 0, bestPeak = 0, after = 0;

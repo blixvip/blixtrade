@@ -6,6 +6,15 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
   db.exec(`CREATE TABLE IF NOT EXISTS hosted_accounts (
     sub TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     vault_id INTEGER UNIQUE, address TEXT UNIQUE, consented INTEGER NOT NULL)`);
+  // The member's trade presets (P1-P3: sizes, slippage, priority fee, bribe), kept with the account so every browser
+  // they sign in from trades the same way. JSON, written by the page (lib/presets.ts), at most PREFS_MAX bytes.
+  try { db.exec("ALTER TABLE hosted_accounts ADD COLUMN prefs TEXT"); } catch { /* already there */ }
+  const PREFS_MAX = 16384;
+  const prefsOf = (account) => { try { const p = account?.prefs ? JSON.parse(account.prefs) : null; return p && typeof p === "object" && !Array.isArray(p) ? p : null; } catch { return null; } };
+  // A fee the trader set for this trade, in SOL: a number from 0 to FEE_MAX; anything else is "not set" (the wallet
+  // service's own default, or its live estimate for the priority fee).
+  const FEE_MAX = 0.01;
+  const feeIn = (v) => { if (v == null || v === "") return undefined; const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= FEE_MAX ? n : undefined; };
   const settingUp = new Map();
   const fail = (status, message, extra = {}) => Object.assign(new Error(message), { status, ...extra });
   const send = (res, status, data, headers = {}) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers }); res.end(JSON.stringify(data)); };
@@ -37,7 +46,7 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
   return async function handle(req, res, url) {
     try {
       const p = url.pathname, method = req.method, identity = req.walletIdentity;
-      if (!/^\/api\/account\/(me|google|logout|setup|txs|buy|sell|withdraw|export|launch|rewards|claim|autoclaim|referral|referral\/claim)$/.test(p)) throw fail(404, "Not found.");
+      if (!/^\/api\/account\/(me|google|logout|setup|txs|buy|sell|withdraw|export|launch|rewards|claim|autoclaim|referral|referral\/claim|prefs)$/.test(p)) throw fail(404, "Not found.");
       if (p === "/api/account/google" && method === "GET") { res.writeHead(302, { location: "/auth/google?wallet=1", "cache-control": "no-store" }); res.end(); return true; }
       if (p === "/api/account/logout" && method === "POST") { send(res, 200, { signedIn: false }, { "set-cookie": "blix_wallet=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" }); return true; }
       if (!identity) {
@@ -55,13 +64,26 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
             if (wallet?.address !== account.address) throw Error("mismatched wallet");
           } catch { wallet = null; problem = "Wallet balance is temporarily unavailable. Try refreshing."; }
         }
-        send(res, 200, { signedIn: true, hosted: true, email: identity.email, address: account?.address || null, needsWallet: !account?.address, wallet, problem, onramp: { stripe: false } });
+        send(res, 200, { signedIn: true, hosted: true, email: identity.email, address: account?.address || null, needsWallet: !account?.address, wallet, problem, onramp: { stripe: false }, prefs: prefsOf(account) });
         return true;
       }
       const body = method === "POST" ? await readBody(req, p === "/api/account/launch" ? 6e6 : 8192) : {};   // a launch carries the coin picture
       if (p === "/api/account/setup" && method === "POST") {
         const a = await setup(identity);
         send(res, 200, { address: a.address, hosted: true }); return true;
+      }
+      if (p === "/api/account/prefs") {
+        if (!account) throw fail(409, "Create your hosted wallet before saving presets.");
+        if (method === "GET") { send(res, 200, prefsOf(account) || {}); return true; }
+        if (method === "POST") {
+          // Merged by top-level key (presets from one page, the watchlist from another), so neither write loses the other.
+          const merged = { ...(prefsOf(account) || {}), ...body };
+          const next = JSON.stringify(merged);
+          if (Buffer.byteLength(next) > PREFS_MAX) throw fail(413, "Saved settings too large.");
+          db.prepare("UPDATE hosted_accounts SET prefs = ? WHERE sub = ?").run(next, identity.sub);
+          send(res, 200, merged); return true;
+        }
+        throw fail(405, "GET or POST.");
       }
       if (!account?.address) throw fail(409, "Create your hosted wallet before using it.");
       const own = `/users/${account.vault_id}`;
@@ -88,7 +110,7 @@ export function createHostedAccounts({ db, vault, launch, rewards, refOf = () =>
         if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(body.mint || "")) throw fail(400, "Invalid coin address.");
         const held = busy(body.mint);
         if (held) throw fail(409, held, { migrating: true });
-        send(res, 200, await vault(`${own}/swap`, { side, mint: body.mint, ...(side === "buy" ? { sol: body.sol } : { pct: body.pct }), slippageBps: body.slippageBps, referrer: refOf(identity.email) || req.walletRef || undefined })); return true;
+        send(res, 200, await vault(`${own}/swap`, { side, mint: body.mint, ...(side === "buy" ? { sol: body.sol } : { pct: body.pct }), slippageBps: body.slippageBps, priorityFeeSol: feeIn(body.priorityFeeSol), tipSol: feeIn(body.tipSol), referrer: refOf(identity.email) || req.walletRef || undefined })); return true;
       }
       if (p === "/api/account/withdraw" && method === "POST") { fresh(); send(res, 200, await vault(`${own}/withdraw`, { to: body.to, sol: body.sol })); return true; }
       if (p === "/api/account/export" && method === "POST") { fresh(); send(res, 200, await vault(`${own}/export`, {})); return true; }

@@ -1,6 +1,7 @@
 // robots.txt, sitemap.xml, llms.txt and the IndexNow key for the public pages.
 import { ORIGIN, UPDATED } from "./html.js";
 import { PAGES } from "./pages.js";
+import DATES from "./dates.json" with { type: "json" };
 
 // IndexNow (Bing, Yandex, Seznam, Naver): the key is public by design; whoever can serve it at the
 // site root may submit the site's URLs. Submit with worker/indexnow.mjs after a deploy.
@@ -23,8 +24,9 @@ Sitemap: ${ORIGIN}/sitemap.xml
 
 // Blix's entries in blixvip.com's sitemap: index.js adds them to the main site's own sitemap.xml.
 export const SITEMAP_URLS = [
-  ...PUBLIC_PATHS.map((p) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${PAGES[p].updated || UPDATED}</lastmod></url>`),
-  `  <url><loc>${ORIGIN}/</loc><lastmod>2026-10-10</lastmod></url>`,
+  // lastmod is the page's own last content change (site/dates.json, kept by site/stamp.mjs), not the build date.
+  ...PUBLIC_PATHS.map((p) => `  <url><loc>${ORIGIN}${p}</loc><lastmod>${DATES.pages[p]?.modified || PAGES[p].updated || UPDATED}</lastmod></url>`),
+  `  <url><loc>${ORIGIN}/</loc><lastmod>${DATES.home.modified}</lastmod></url>`,
 ].join("\n");
 export const SITEMAP = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

@@ -3,7 +3,7 @@
 import { code, table, ext } from "./html.js";
 
 const UPDATED = "2026-10-10";
-const cta = (route, label) => `<div class="cta"><a class="btn primary" href="/app#/${route}">${label}</a><a class="btn" href="/api">Developer documentation</a></div>`;
+const cta = (route, label) => `<div class="cta"><a class="btn primary" href="/start?next=${encodeURIComponent(route ? `/app#/${route}` : "/app")}">${label}</a><a class="btn" href="/api">Developer documentation</a></div>`;
 const evidence = (...files) => `<h2 id="sources">About this guide</h2><p>Reviewed by BLIX on October 10, 2026 against the product implementation. Availability depends on your account and connected providers. Explore the <a href="/guides">BLIX guides</a> for related workflows.</p>`;
 const local = `<p class="note">Developer examples below run against your BLIX account: sign in, open <a href="/developers">Developers</a> and copy your session into <code>BLIX_SESSION</code>; every request sends it as the <code>blix_wait</code> cookie.</p>`;
 const page = (p) => ({ og: "home/og.jpg", updated: UPDATED, author: "Blix", reviewedBy: "Blix", ...p });

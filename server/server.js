@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, json, logEvent, meta, backupInBackground, backups, DB_FILE, DATA, dbStats, checkpointStats } from "./db.js";
 import { gateWait, callCounts } from "./sources.js";
-import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound, wantSafety, backfill, lookupMint } from "./engine.js";
+import { start, bus, stats, launchLog, recentLaunches, raise, adoptMint, adoptLaunch, verdict, vet, rebuildFromSnapshots, refreshVisible, adoptFound, wantSafety, backfill, lookupMint } from "./engine.js";
 import * as jupdisc from "./jupdisc.js";
 import { jupCandles, knownSupply } from "./jup.js";
 import { candlePts, downsample, holdFlat } from "./spark.js";
@@ -87,7 +87,7 @@ import { runningNarratives, runningAiIn, runningAiState } from "./running.js";
 import { xcard } from "./xcard.js";
 import { runningAiStats } from "./running-ai.js";
 import { deskView, deskStats } from "./desk.js";
-import { feedHot } from "./feedhot.js";
+import { feedHot, feedHotPosts } from "./feedhot.js";
 import { pumpBoard } from "./pumpboard.js";
 import { walletPage, warmWalletPages } from "./walletpage.js";
 import { warmBoard } from "./feedwarm.js";
@@ -1478,6 +1478,7 @@ async function handleRequest(req, res) {
     // keep=1: "Hot right now" shown away from the Feed (the Create coin page): the ledger only listens, so the feeds
     // are kept reading while it is asked for, as one Feed page with every kind of post would (the same Fomo read).
     // pump.fun's callouts are read only while someone wants them: a Hot list counting them keeps them coming.
+    if (p === "/api/feed/hot/posts") return send(res, 200, feedHotPosts({ mint: params.mint, mints: params.mints, w: params.w, src: params.src }));
     if (p === "/api/feed/hot") { if (params.keep) { try { pumpFeed(); fomoFeed(); } catch {} } else if (/pump/.test(String(params.src || ""))) { try { pumpFeed(); } catch {} } return send(res, 200, feedHot(params)); }
     // The Feed's pictures for the page server to fetch ahead (feedstream.js feedPics); the coins' logos are fetched here.
     if (p === "/api/feed/pics") { const f = feedPics(); try { images.warm(f.mints.filter((m) => !images.hasPicture(m))); } catch {} return send(res, 200, { pics: f.pics }); }
@@ -1654,6 +1655,17 @@ async function handleRequest(req, res) {
       let d = tokenDetail(m[1]);
       // Never heard of it: look it up (majors and older coins open like any other), at most a few seconds.
       if (!d && !m[2] && await Promise.race([lookupMint(m[1]), new Promise((ok) => setTimeout(ok, 6000, false))]).catch(() => false)) d = tokenDetail(m[1]);
+      // Known only from the launch feed or the live trades (the radar had not adopted it: it adopts the promising ones
+      // by itself): someone opening it is reason enough. Tracked from this moment, so the page never says "not tracked
+      // yet" for a coin on the Pulse; its safety read, holder ledger and price history fill in over the next minute.
+      if (d?.untracked && !m[2]) {
+        try {
+          const launch = recentLaunches.findLast((l) => l.mint === m[1]);
+          if (launch) adoptLaunch(launch).catch(() => {}); else adoptMint(m[1]);
+          vet(m[1]).catch(() => {});
+          d = tokenDetail(m[1]) || d;
+        } catch {}
+      }
       if (d && (res.blixAs || res.blixVisitor)) d = { ...d, walletTrades: [], wallets: [], rule: null };
       return d ? send(res, 200, d) : send(res, 404, { error: "The radar has never seen this coin." });
     }
@@ -1853,6 +1865,18 @@ coin.onTape((mint, row) => {
   if (!clients.size) return;
   rowsOut.push({ mint, ...row });
   if (!rowsTimer) rowsTimer = setImmediate(() => { rowsTimer = null; const u = rowsOut; rowsOut = []; broadcast("ctrade", { u }); });
+});
+// Calculated five-minute totals travel together; no provider read or full coin-page rebuild per trade.
+const flowOut = new Map();
+let flowTimer = null;
+coin.onFlow(value => {
+  if (!clients.size) return;
+  flowOut.set(value.mint, value);
+  if (!flowTimer) flowTimer = setTimeout(() => {
+    flowTimer = null;
+    for (const value of flowOut.values()) broadcast('cflow', value);
+    flowOut.clear();
+  }, 50);
 });
 // A person's balance of an open coin moved in a slot the fast feed priced: a trade, shown in the list and as a
 // chart mark the moment the small account feeds say so; the logs' copy (who, tx) follows. A change with no

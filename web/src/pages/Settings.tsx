@@ -13,6 +13,8 @@ import { Icon } from "@/shell/icons";
 import { Segmented } from "@/components/ui/segmented";
 import { setPrefs, usePrefs, type PulseCol } from "@/lib/prefs";
 import { unhideAll, useHidden } from "@/lib/hidden";
+import { DEFAULTS, fieldOk, MEV_TIP, pickPreset, resetPresets, savePreset, solTxt, usePresets, type Preset } from "@/lib/presets";
+import { useMe } from "@/lib/ui";
 import { store } from "@/lib/utils";
 import { GROUPS, HIDDEN, KEYS, MODEL_SUGGEST, NOTIFY, SPEC, type Spec } from "./settings/spec";
 
@@ -212,7 +214,6 @@ function PaperCard() {
 // the size of everything, the Pulse's columns and rows, the default slippage, hidden coins.
 const SIZES: [string, string][] = [["auto", "Auto"], ["0.9", "Small"], ["1", "Normal"], ["1.15", "Large"], ["1.3", "Larger"]];
 const PULSE_COLS: [PulseCol, string, string][] = [["new", "New Pairs", "Coins that just launched"], ["stretch", "Final Stretch", "Close to bonding"], ["migrated", "Migrated", "Bonded and trading in the pool"]];
-const SLIPS: [string, string][] = [["100", "1%"], ["300", "3%"], ["500", "5%"], ["1000", "10%"]];
 
 function DisplayCard() {
   const p = usePrefs();
@@ -237,9 +238,68 @@ function DisplayCard() {
   );
 }
 
+// Trade presets (lib/presets.ts): Axiom's P1 / P2 / P3, each with its slippage, priority fee, bribe and MEV
+// protection, one picked at a time. Every buy and sell button trades with the picked one. A field saves when it is
+// left or Enter is pressed, if its text is good; the recommended sets come back with one button.
+const PRESET_FIELDS: [keyof Preset, string, number, string][] = [["slip", "%", 8, "Slippage"], ["prio", "SOL", 9, "Priority"], ["tip", "SOL", 10, "Bribe"]];
+function PresetField({ p, i, k, unit, slot, name }: { p: Preset; i: number; k: keyof Preset; unit: string; slot: number; name: string }) {
+  const shown = k === "slip" ? String(p.slip / 100) : k === "prio" ? (p.prio == null ? "auto" : String(p.prio)) : String(p.tip);
+  const [text, setText] = useState(shown);
+  useEffect(() => { setText(shown); }, [shown]);
+  const ok = fieldOk(slot, text);
+  const commit = () => {
+    if (!ok) { setText(shown); return; }
+    const t = text.trim();
+    savePreset(i, { ...p, [k]: k === "slip" ? Math.round(Number(t) * 100) : k === "prio" ? (/^auto$/i.test(t) ? null : Number(t)) : Number(t) });
+  };
+  return (
+    <label className="flex min-w-0 flex-col gap-1">
+      <span className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">{name}</span>
+      <span className={cn("num flex h-9 items-center gap-1 rounded-lg border bg-[oklch(14%_0_0)] px-2 transition-colors", ok ? "border-white/[0.08] focus-within:border-white/[0.25]" : "border-down")}
+        title={ok ? undefined : slot === 8 ? "0.1 to 50 %" : slot === 9 ? "auto, or 0 to 0.01 SOL" : "0 to 0.01 SOL"}>
+        <input value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          inputMode={slot === 9 ? "text" : "decimal"} aria-label={`${name} for preset P${i + 1}`} className="w-full min-w-0 bg-transparent text-md text-ink outline-none" />
+        <span className="text-xs text-muted">{unit}</span>
+      </span>
+    </label>
+  );
+}
+function PresetsCard() {
+  const list = usePresets((s) => s.list), pi = usePresets((s) => s.pi);
+  const me = useMe((s) => s.me);
+  const changed = JSON.stringify(list) !== JSON.stringify(DEFAULTS);
+  return (
+    <Card id="presets" icon="sliders" title="Trade presets" blurb={me?.signedIn ? "Slippage, priority fee and bribe for each set. Saved to your account, so every browser you sign in from trades the same way" : "Slippage, priority fee and bribe for each set. Saved in this browser; sign in to keep them on your account"}
+      aside={changed ? <Button size="sm" onClick={() => { if (confirm("Put the recommended presets back? Your buy and sell sizes stay.")) { const keep = usePresets.getState().list; resetPresets(); keep.forEach((p, i) => savePreset(i, { ...DEFAULTS[i], buys: p.buys, buysUsdc: p.buysUsdc, sells: p.sells })); toast("Recommended presets back"); } }}>Recommended</Button> : undefined}>
+      {list.map((p, i) => (
+        <div key={i} className={cn("flex flex-col gap-3 border-t border-white/[0.05] px-5 py-4 first:border-t-0", pi === i && "bg-white/[0.02]")}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <button role="radio" aria-checked={pi === i} onClick={() => pickPreset(i)} title={pi === i ? "The set every buy and sell uses now" : "Use this set"}
+              className={cn("num flex h-7 items-center gap-2 rounded-full border px-2.5 text-sm font-bold transition-colors", pi === i ? "border-ink/40 bg-paper-4 text-ink" : "border-rule-2 text-muted hover:text-ink")}>
+              <span className={cn("size-2 rounded-full", pi === i ? "bg-up" : "bg-rule-2")} />P{i + 1}
+            </button>
+            <input value={p.name} maxLength={12} aria-label={`Name of preset P${i + 1}`} onChange={(e) => savePreset(i, { ...p, name: e.target.value || DEFAULTS[i].name })}
+              className="h-7 w-28 rounded-lg border border-transparent bg-transparent px-2 text-md font-semibold text-ink outline-none transition-colors hover:border-white/[0.08] focus:border-white/[0.2]" />
+            <span className="text-sm text-muted">
+              {i === 0 ? "Most coins: wide enough to fill on a moving curve, fees read from the coin's own trades" : i === 1 ? "Launches and migrations: the top priority fee, a bribe that opens every path, MEV protection" : "Quiet coins: tight slippage, the floor fee, no bribe"}
+            </span>
+          </div>
+          <div className="grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-4">
+            {PRESET_FIELDS.map(([k, unit, slot, name]) => <PresetField key={k} p={p} i={i} k={k} unit={unit} slot={slot} name={name} />)}
+            <div className="flex min-w-0 flex-col gap-1">
+              <span className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">MEV protection</span>
+              <span className="flex h-9 items-center gap-2.5"><Switch on={p.mev} onChange={(v) => savePreset(i, { ...p, mev: v })} label={`MEV protection for preset P${i + 1}`} /><span className="text-sm text-muted">{p.mev ? "On" : "Off"}</span></span>
+            </div>
+          </div>
+          <p className="text-xs text-muted">Priority: paid to the validator to be picked first; auto = what this coin's busiest recent trades paid, between 0.0001 and 0.003 SOL. Bribe: a tip that puts the transaction on staked connections (0.001 or more opens Jito's path too). Both apply to pump.fun coins on their curve or PumpSwap pool; other coins route through Jupiter with the priority fee only. {p.prio != null && p.tip != null && `This set pays up to ${solTxt(p.prio + (p.mev ? Math.max(p.tip, MEV_TIP) : p.tip))} SOL in fees a trade.`}</p>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 function BrowserCard() {
   const hidden = useHidden((s) => s.mints.length);
-  const [slip, setSlip] = useState(() => String(store.get<number>("trade:slip", 300)));
   const forget = () => {
     if (!confirm("Forget everything this browser remembers about Blix (display, filters, hidden coins, presets)? You stay signed in.")) return;
     try { for (const k of Object.keys(localStorage)) if (k.startsWith("blix:") && k !== "blix:role") localStorage.removeItem(k); } catch { /* storage off */ }
@@ -247,9 +307,6 @@ function BrowserCard() {
   };
   return (
     <Card id="browser" icon="eye" title="This browser" blurb="Trading defaults and what Blix remembers on this device">
-      <Row label="Default slippage" hint="How far the price may move before a trade is refused. Each coin page can change it">
-        <Segmented label="Default slippage" value={SLIPS.some(([v]) => v === slip) ? slip : "300"} options={SLIPS} onChange={(v) => { store.set("trade:slip", +v); setSlip(v); toast(`Slippage ${+v / 100}%`); }} />
-      </Row>
       <Row label="Hidden coins" hint={hidden ? `${hidden.toLocaleString()} coin${hidden === 1 ? "" : "s"} hidden from the Pulse` : "None. Press the eye on a Pulse row to hide a coin"}>
         <Button size="lg" disabled={!hidden} onClick={() => { if (confirm(`Unhide all ${hidden} hidden coins?`)) { unhideAll(); toast("All coins unhidden"); } }}>Unhide all</Button>
       </Row>
@@ -273,7 +330,7 @@ export function Settings() {
     return Object.keys(res.settings).filter((k) => !listed.has(k) && !HIDDEN.has(k) && !(k in (res.secrets || {})) && (typeof res.settings[k] !== "object" || Array.isArray(res.settings[k])));
   }, [res]);
   const groups = useMemo(() => [...GROUPS, ...(other.length ? [{ id: "other", icon: "sliders", title: "Other", parts: [{ keys: other }] }] : [])], [other]);
-  const nav: [string, string, string | undefined][] = [["paper", "Paper trading", "record"], ["display", "Display", "sliders"], ["browser", "This browser", "eye"], ...groups.map((g) => [g.id, g.title, g.icon] as [string, string, string | undefined]), ["keys", "Keys and webhooks", "key"]];
+  const nav: [string, string, string | undefined][] = [["paper", "Paper trading", "record"], ["presets", "Trade presets", "sliders"], ["display", "Display", "sliders"], ["browser", "This browser", "eye"], ...groups.map((g) => [g.id, g.title, g.icon] as [string, string, string | undefined]), ["keys", "Keys and webhooks", "key"]];
 
   // Highlight the group in view in the side list: the last card whose top has passed the top fifth of the scroller
   // (the page scrolls inside <main>, not the window).
@@ -302,7 +359,7 @@ export function Settings() {
       <header>
         <h1 className="text-3xl leading-none font-bold tracking-[-0.03em]">Settings</h1>
       </header>
-      <PaperCard /><DisplayCard /><BrowserCard />
+      <PaperCard /><PresetsCard /><DisplayCard /><BrowserCard />
       {/members can|sign in|401|403|forbidden|refused/i.test(error)
         ? <p className="flex items-center gap-2 px-1 text-sm text-muted"><Icon.shield className="size-4 shrink-0" />Radar, alert, AI and key settings belong to the owner of this Blix.</p>
         : <Problem text={error} />}
@@ -369,7 +426,7 @@ export function Settings() {
         </aside>
 
         <div className="flex min-w-0 flex-col gap-5 pb-24">
-          {!needle && <><PaperCard /><DisplayCard /><BrowserCard /></>}
+          {!needle && <><PaperCard /><PresetsCard /><DisplayCard /><BrowserCard /></>}
           {groups.map((g) => {
             const parts = g.parts.map((p) => ({ ...p, keys: p.keys.filter((k) => k in res.settings && match(k)) })).filter((p) => p.keys.length);
             if (!parts.length) return null;

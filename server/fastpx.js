@@ -9,6 +9,7 @@
 //     trade). A slot with both buys and sells nets out and gives no price; the next one does.
 // Prices go out through onFastPx at once; the trade list (who traded) still comes from the logs.
 import crypto from "node:crypto";
+import { canStream, focusCoin } from './coin-screen.js';
 import { Worker } from "node:worker_threads";
 import { fastSub, chartWsUrl, chartStream, count } from "./chartstream.js";
 import { noteSlot } from "./feedlag.js";
@@ -89,8 +90,8 @@ function startLane() {
     laneStats.on = true;
     lane.on("message", (m) => {
       if (m.op === "px") emit(m.mint, m.mcSol, m.sol, m.buy, m.slot, true);
-      else if (m.op === "meter") { if (m.bytes) count(m.bytes, m.url); noteSlot("fast", m.slot); }
-      else if (m.op === "want") watchFast(m.mint);
+      else if (m.op === "meter") { if (m.bytes) count(m.bytes, m.url); noteSlot("fast", m.slot); lane?.postMessage({ op: "cfg", url: chartWsUrl(), overBudget: chartStream.overBudget }); }
+      else if (m.op === "want") { focusCoin(m.mint); watchFast(m.mint); }
       else if (m.op === "done") { const w = watches.get(m.mint); if (w) { for (const s of w.stops) try { s?.(); } catch {} watches.delete(m.mint); } }
       else if (m.op === "error") laneStats.error = m.message;
     });
@@ -138,7 +139,7 @@ async function watchPool(mint, pool, w) {
   // 10-15% off every trade on some pools (the "k" below was the workaround); with it the ratio is the price.
   const r = await rpc("getAccountInfo", [pool, { encoding: "base64" }]);
   const d = r?.value?.data?.[0];
-  if (!d || watches.get(mint) !== w) return;
+  if (!d || watches.get(mint) !== w || !canStream(mint)) return;
   const full = Buffer.from(d, 'base64');
   // Unsupported layouts/quote tokens fall back to validated trade and provider prices.
   if (r.value.owner !== AMM || full.length < 245 || b58(full.subarray(43, 75)) !== mint || b58(full.subarray(75, 107)) !== WSOL) { w.kind = null; return; }
@@ -192,6 +193,11 @@ async function watchPool(mint, pool, w) {
 // Keep `mint`'s price feed for another 15 s (the chart asks for candles every second or so while open).
 // Returns true while a fast feed is (being) set up for it, so the caller can let it lead the chart.
 export function watchFast(mint, active = true) {
+  if (!canStream(mint)) {
+    const old = watches.get(mint);
+    for (const stop of old?.stops || []) try { stop?.(); } catch {}
+    watches.delete(mint); return false;
+  }
   let w = watches.get(mint);
   if (w) { w.t = now(); if (active) w.activeAt = now(); return w.kind != null; }
   if (watches.size >= 64) {
@@ -250,6 +256,6 @@ onLiveTrade((mint, s, sol, buy, x) => check(mint, x?.slot, s.mc));
 onPoolTrade((mint, e) => check(mint, e.slot, e.mcSol / ((supplyOf(mint) ?? 1e9) / 1e9)));
 
 setInterval(() => {
-  for (const [m, w] of watches) if (now() - w.t > 15_000) { for (const s of w.stops) try { s?.(); } catch {} watches.delete(m); }
+  for (const [m, w] of watches) if (now() - w.t > 15_000 || !canStream(m)) { for (const s of w.stops) try { s?.(); } catch {} watches.delete(m); }
   fastStats.coins = [...watches.values()].filter((x) => x.kind).length;
 }, 5_000).unref?.();

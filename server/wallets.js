@@ -151,7 +151,10 @@ async function drain(emit) {
 // Every transaction read, swap or not, goes to these too: the wallet tracker (wtrack.js) reads transfers from them.
 const txHooks = [];
 export const onTx = (fn) => txHooks.push(fn);
-async function readTx(w, job, emit, fetched = null) {
+// Stored swaps include quiet backfill and older catch-up trades, which alert subscribers do not receive.
+const tradeHooks = [];
+export const onStoredTrade = (fn) => tradeHooks.push(fn);
+export async function readTx(w, job, emit, fetched = null) {
   const key = `${w.address}:${job.sig}`;
   if (readSigs.has(key) || db.prepare("SELECT 1 FROM wallet_trades WHERE sig = ? AND wallet = ?").get(job.sig, w.address)) return;
   const tx = fetched || await sol.transaction(job.sig);
@@ -169,8 +172,10 @@ async function readTx(w, job, emit, fetched = null) {
       .run(job.sig, w.address, sw.mint, sw.side, sw.tokens, sw.sol, usd, t, payer || null);
     if (!r.changes || w.scan) continue;
     db.prepare("UPDATE wallets SET last_trade = MAX(COALESCE(last_trade, 0), ?) WHERE address = ?").run(t, w.address);
+    const event = { wallet: w, trade: { ...sw, t, usd, sig: job.sig }, lagMs: now() - t };
+    for (const fn of tradeHooks) { try { fn(event); } catch (e) { logEvent("error", `wallet trade subscriber: ${e.message}`); } }
     if (!job.quiet) lag.set(w.address, Math.round((lag.get(w.address) ?? now() - t) * 0.6 + (now() - t) * 0.4));
-    if (!job.quiet && now() - t < 30 * MIN) emit?.({ wallet: w, trade: { ...sw, t, usd, sig: job.sig }, lagMs: now() - t });
+    if (!job.quiet && now() - t < 30 * MIN) emit?.(event);
   }
 }
 
@@ -393,7 +398,7 @@ export function walletPnl(address, prices = new Map()) {
     const sellable = value == null || !exit.ok ? 0 : onCurve(t) ? value : Math.min(value, (t.liquidity || 0) * 0.25);
     const unrealized = value != null && exit.ok ? value - avg * held : null;
     return { ...p, symbol: t?.symbol || null, name: t?.name || null, image: t?.image || null, price: t?.price || null, mcap: t?.mcap || null, liquidity: t?.liquidity ?? null,
-      avg, held, value, sellable, realized, unrealized, exitable: exit.ok, exitWhy: exit.why, stale: row?.status === "dead" };
+      avg, held, value, sellable, realized, unrealized, priceAt: t?.price_t ?? null, exitable: exit.ok, exitWhy: exit.why, stale: row?.status === "dead" };
   }).sort((a, b) => b.last - a.last);
   const closed = positions.filter((p) => p.realized != null && p.sells > 0);
   const open = positions.filter((p) => p.held > 0 && (p.value == null || p.value > 1));
@@ -624,9 +629,11 @@ const BOT_MINTS_6H = 25;
 export function isBot(address) {
   return db.prepare("SELECT COUNT(DISTINCT mint) n FROM wallet_trades WHERE wallet = ? AND side = 'buy' AND t > ?").get(address, now() - 6 * 60 * MIN).n >= BOT_MINTS_6H;
 }
-function pauseBots() {
+export function pauseBots() {
   const rows = db.prepare("SELECT address, label FROM wallets WHERE watching = 1 AND source IN ('smart', 'fomo')").all();
-  for (const w of rows) if (isBot(w.address)) {
+  const tracked = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wt_wallets'").get()
+    ? new Set(db.prepare("SELECT DISTINCT address FROM wt_wallets").all().map(w => w.address)) : new Set();
+  for (const w of rows) if (!tracked.has(w.address) && isBot(w.address)) {
     db.prepare("UPDATE wallets SET watching = 0, label = ? WHERE address = ?").run(`${w.label || short(w.address)} (bot, paused)`, w.address);
     logEvent("wallet", `Paused ${short(w.address)}: buys ${BOT_MINTS_6H}+ coins every 6h, looks like a bot`);
   }

@@ -1,0 +1,15 @@
+[Unit]
+Description=Blix storage guard: checkpoint logs and bound disposable image cache
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/blix
+ExecStart=/usr/bin/node --no-warnings bin/storage-guard.mjs
+TimeoutStartSec=120
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/blix/data
+ProtectHome=true
+PrivateTmp=true

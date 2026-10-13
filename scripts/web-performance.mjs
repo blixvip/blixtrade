@@ -68,6 +68,8 @@ try {
     });
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Pulse', exact: true }).waitFor();
+    assert.equal(await page.locator('a[href*="github.com"]').count(), 0, 'Terminal must not promote repositories');
+    if (width >= 1024) assert.equal(await page.locator('a[href="https://discord.gg/3VWHBP6paA"]').count(), 1, 'Desktop terminal community link uses the live Discord invite');
     await page.waitForTimeout(6500); // Include both old automatic preload paths in the baseline.
     await page.screenshot({ path: path.join(out, `pulse-${width}.png`), fullPage: true });
     const metrics = await page.evaluate(() => ({

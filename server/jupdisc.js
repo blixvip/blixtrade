@@ -5,29 +5,18 @@
 //     coin on screen, asked in batches of up to 100 (search endpoint) at most every 4 s;
 //   - topTraded(win): the coins traded most across Solana in the window (Axiom's Trending), so Discover
 //     lists coins the radar never adopted or had retired.
-// Its own paced transport, separate from jupiter.js. lite-api's keyless allowance is shared with trade quotes
-// and Blix Vault's real swaps, and this file once helped push it into 429s (2026-10-04: 108 of 202 quote calls
-// failed), so it stays light: one search per 12 s at most (coins not on the live feed only, each re-read when
-// over 25 s old), the most-traded list every 90 s for the window on screen, and a 60 s silence after any 429.
-const BASE = "https://lite-api.jup.ag/tokens/v2";
+// Stats share the authenticated transport and quota with prices, discovery and quotes.
+import { jupiterGet } from "./jupiter.js";
 const WIN = { "5m": "stats5m", "1h": "stats1h", "24h": "stats24h" };
 const now = () => Date.now();
 export const jupStats = { calls: 0, errors: 0, limited: 0, last: 0, mints: 0 };
 
-let next = 0, cooling = 0;
 async function get(path) {
-  if (now() < cooling) return null;
-  const slot = Math.max(now(), next);
-  if (slot - now() > 10_000) return null;
-  next = slot + 2500;
-  if (slot > now()) await new Promise((r) => setTimeout(r, slot - now()));
   try {
-    const r = await fetch(`${BASE}${path}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+    const value = await jupiterGet(`/tokens/v2${path}`, { cacheMs: 5000 });
     jupStats.calls++; jupStats.last = now();
-    if (r.status === 429) { jupStats.limited++; cooling = now() + 60_000; return null; }
-    if (!r.ok) { jupStats.errors++; return null; }
-    return await r.json();
-  } catch { jupStats.errors++; return null; }
+    return value;
+  } catch (e) { if (e.status === 429) jupStats.limited++; else jupStats.errors++; return null; }
 }
 
 // ---------- per-coin figures ----------

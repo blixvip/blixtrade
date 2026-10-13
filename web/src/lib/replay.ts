@@ -18,7 +18,7 @@ import { setReplayHooks, emitCoinRows, emitCoinTrade } from "./pulse";
 import { lockPaper, useTrade, type PaperWallet } from "./mode";
 import type { CoinData, Holder, Paper, Quote, TokenDetail, Trade } from "./coin";
 import { nudgeClock, setClock } from "./route";
-import { setPx } from "./livepx";
+import { setReplayPx as setPx, clearReplayPx } from "./livepx";
 import type { CoinFomo, FomoHolder, FomoPost } from "@/pages/coin/FomoTabs";
 import type { ChartPeople } from "@/pages/coin/Chart";
 
@@ -170,6 +170,8 @@ export async function startReplay(mint: string) {
 }
 let prevPaper: { paper: boolean; wallet: PaperWallet | null } | null = null;
 export function stopReplay(redraw = true) {
+  const mint = useReplay.getState().mint;
+  if (mint) clearReplayPx(mint);
   clearTimeout(timer);
   data = null; idx = 0; liquidityNowUsd = 0; mcNowUsd = 0; positions = []; nextId = 0; ledgerMemo = null; ledgerAt = -1; fomo = null; fomoMemo = null; cutMemo = null; peopleMemo = null; devWallet = null; groups = null; bases.clear(); bigIdx = null; clearTimeout(fomoTimer); clearTimeout(walletTimer);
   lockPaper(false);

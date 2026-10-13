@@ -49,8 +49,8 @@ test("the safety policy fails unsafe, dead, unsellable and unchecked coins, and 
   const low = Q.safetyVerdict(coin({ safety_score: 18 }));
   assert.equal(low.ok, false);
   assert.match(low.reasons.join(), /18\/100, below your minimum of 60/);
-  assert.match(Q.safetyVerdict(coin({ status: "dead" })).reasons.join(), /dead/);
-  assert.match(Q.safetyVerdict(coin({ liquidity: 0 })).reasons.join(), /unsellable/);
+  assert.match(Q.safetyVerdict(coin({ status: "dead" })).reasons.join(), /activity needs rechecking/);
+  assert.match(Q.safetyVerdict(coin({ liquidity: 0 })).reasons.join(), /below your minimum/);
   assert.match(Q.safetyVerdict(coin({ safety: JSON.stringify({ danger: 1, risks: [{ level: "danger", name: "Large Amount of LP Unlocked" }] }) })).reasons.join(), /LP Unlocked/);
   const unknown = Q.safetyVerdict(coin({ safety: null, safety_score: null }));
   assert.equal(unknown.ok, false, "not checked is never a pass");
@@ -152,7 +152,7 @@ test("an alert raised without passing safety is stored as unscreened, with the r
   E.raise({ mint: "MintC", score: 0, price: 0.001, mcap: 1000 }, "wallet:Wal9", "Wal9 bought $MEME", "x", 0, { safe: false, why: v.reasons.join("; ") });
   const row = db.prepare("SELECT safe, why_unsafe FROM signals WHERE mint = 'MintC'").get();
   assert.equal(row.safe, 0);
-  assert.match(row.why_unsafe, /dead/);
+  assert.match(row.why_unsafe, /activity needs rechecking/);
 });
 
 test("outcomes and winners are rebuilt from sellable readings only", () => {
@@ -951,7 +951,8 @@ test("chart candles: one-second buckets, and a refresh that asks only for the ne
   }
 });
 
-test("paper wallet: fake SOL is limited, buys spend it, sells return it, a reset starts over", async () => {
+test("paper wallet: fake SOL is limited, buys spend it, sells return it, a reset starts over", async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const P = await import("../server/paper.js");
   const L = await import("../server/livetrades.js");
   S.saveSettings({ paperStartSol: 2 });
@@ -973,6 +974,9 @@ test("paper wallet: fake SOL is limited, buys spend it, sells return it, a reset
   P.open(mint, 1);
   const r = P.resetWallet(5);
   assert.deepEqual([r.start, r.cash, r.open, r.trades], [5, 5, 0, 0]);
+  P.open(mint, 1);
+  assert.deepEqual([P.wallet().cash, P.wallet().open, P.wallet().trades], [4, 1, 1],
+    'A new buy in the same millisecond belongs to the new wallet');
   S.saveSettings({ paperStartSol: 1000 }); P.resetWallet();
 });
 
@@ -1024,7 +1028,10 @@ test("outbound fetches: redirects and names cannot lead back to this machine or 
 // Discovery: Jupiter's newest tokens put non-pump.fun launches in the nursery (pump.fun's come from PumpPortal).
 {
   const E2 = await import("../server/engine.js");
-  test("recent feed: non-pump launches are nursed once, pump.fun ones and 429s are skipped", async () => {
+  test("recent feed: non-pump launches are nursed once, pump.fun ones and 429s are skipped", async (t) => {
+    // The quote tests use this same transport. Let their shared cooldown expire.
+    let now = Date.now() + 120_000;
+    t.mock.method(Date, 'now', () => now);
     const real = globalThis.fetch;
     const mk = (id, launchpad) => ({ id, symbol: id.slice(0, 4), name: id, launchpad, firstPool: { createdAt: new Date().toISOString() } });
     let status = 200;
@@ -1039,6 +1046,7 @@ test("outbound fetches: redirects and names cannot lead back to this machine or 
       await E2.scanRecent();
       assert.equal(E2.recentFeed.nursed - before.nursed, 2, "already nursed coins are not added twice");
       status = 429;
+      now += 25_000; // expire the shared recent-list cache before testing the provider cooldown
       const calls = E2.recentFeed.calls;
       await E2.scanRecent();
       assert.equal(E2.recentFeed.error, null, "a 429 is a pause, not an error");

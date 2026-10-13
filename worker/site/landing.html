@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BLIX: AI Solana Memecoin Trading Terminal &amp; pump.fun Tracker</title>
-<meta name="description" content="Free AI memecoin terminal for Solana: every pump.fun launch live, AI coin ratings, narratives, Fomo and X tracking, wallet tracking and fast trading with your own Solana wallet. Paper mode to practise. Sign in with Google.">
-<link rel="icon" href="/_pub/icon.svg?v=eye2" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye2">
+<title>BLIX: AI Solana Memecoin Terminal &amp; pump.fun Tracker</title>
+<meta name="description" content="Free AI memecoin terminal for Solana: every pump.fun launch live, AI coin ratings, narratives, wallet and X tracking, one-click trading. Sign in with Google.">
+<link rel="icon" href="/_pub/icon.svg?v=eye3" type="image/svg+xml">
+<link rel="icon" href="/_pub/icon-96.png?v=eye3" sizes="96x96" type="image/png">
+<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye3">
 <link rel="canonical" href="https://blixvip.com/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="BLIX">
@@ -125,7 +126,7 @@
     background: var(--accent); border: 2px solid var(--tile);
   }
   .chip .tk { font: 600 12px/1 "Inter Tight"; color: #cfd6e4; }
-  .chip .pct { font: 500 11px/1 "JetBrains Mono", monospace; }
+  .chip .pct { font: 500 12px/1 ui-monospace, Consolas, monospace; }
   .chip .pct.up { color: var(--green); }
   .chip .pct.dn { color: var(--red); }
 
@@ -147,7 +148,9 @@
     pointer-events: none;
   }
   nav > * { pointer-events: auto; }
-  .brand { display: flex; align-items: center; gap: 10px; position: relative; z-index: 2; }
+  .brand { display: flex; align-items: center; gap: 10px; position: relative; z-index: 2; min-height: 44px; }
+  .skip { position: absolute; left: -999px; top: 8px; z-index: 9; background: #f4f6fa; color: #050608; padding: 10px 14px; border-radius: 999px; font-weight: 600; }
+  .skip:focus { left: 8px; }
   .brand img { height: 44px; width: auto; }
   .brand .mark { border-radius: 11px; }
   .brand .word { height: 58px; }
@@ -248,7 +251,7 @@
   }
   .right p.lead b { color: #dfe5ef; font-weight: 500; }
   .right .sub { color: var(--muted); font-size: 16px; margin-top: 22px; }
-  .right .scroll { color: #a0a8b7; font-size: 16px; margin-top: 18px; display: inline-flex; gap: 6px; transition: color .2s; }
+  .right .scroll { color: #a0a8b7; font-size: 16px; margin-top: 12px; display: inline-flex; align-items: center; min-height: 32px; padding: 6px 0; gap: 6px; transition: color .2s; }
   .right .scroll:hover { color: #c9cfdb; }
 
   /* Floating coins */
@@ -316,7 +319,7 @@
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
     color: #e6e8ec;
   }
-  .feat h4 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin: 22px 0 8px; }
+  .feat h3 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin: 22px 0 8px; }
   .feat p { color: var(--muted); font-size: 16px; line-height: 1.5; }
 
   .cta {
@@ -340,7 +343,7 @@
     color: #a0a8b7; font-size: 14px;
   }
   footer .links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
-  footer a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: underline; text-underline-offset: 4px; }
+  footer a { display: inline-flex; align-items: center; min-height: 44px; min-width: 24px; justify-content: center; padding: 0 4px; margin: 0 -4px; text-decoration: underline; text-underline-offset: 4px; }
   a:focus-visible { outline: 2px solid #f4f6fa; outline-offset: 5px; }
   footer .disc { max-width: 620px; line-height: 1.5; }
 
@@ -382,7 +385,7 @@
     .feat { display: grid; grid-template-columns: 36px minmax(0, 1fr); column-gap: 14px; padding: 20px 0; border: 0; border-bottom: 1px solid #20242c; border-radius: 0; background: none; }
     .feat:hover { transform: none; }
     .feat .fi { width: 36px; height: 36px; border-radius: 10px; grid-row: span 2; }
-    .feat h4 { font-size: 20px; margin: 0 0 6px; }
+    .feat h3 { font-size: 20px; margin: 0 0 6px; }
     .feat p { font-size: 16px; }
     .feat-head { margin-top: 64px; }
     .steps { margin-top: 32px; }
@@ -400,6 +403,7 @@
 </style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 
 <header class="hero" id="hero">
   <div class="grid" id="grid" aria-hidden="true"></div>
@@ -414,7 +418,7 @@
 
     <div class="center">
       <div class="laptop-wrap">
-        <img class="laptop" width="1448" height="1086" fetchpriority="high" src="/_pub/home/laptop.webp" srcset="/_pub/home/laptop-800.webp 800w, /_pub/home/laptop.webp 1448w" sizes="(max-width: 860px) 100vw, 680px" alt="The BLIX trading terminal showing New Pairs, Final Stretch and Migrated columns">
+        <picture><source type="image/avif" srcset="/_pub/home/laptop-800.avif 800w, /_pub/home/laptop.avif 1448w" sizes="(max-width: 860px) 100vw, 680px"><img class="laptop" width="1448" height="1086" fetchpriority="high" src="/_pub/home/laptop.webp" srcset="/_pub/home/laptop-800.webp 800w, /_pub/home/laptop.webp 1448w" sizes="(max-width: 860px) 100vw, 680px" alt="The BLIX trading terminal showing New Pairs, Final Stretch and Migrated columns"></picture>
       </div>
     </div>
 
@@ -430,9 +434,9 @@
   </div>
 
   <nav>
-    <a class="brand" href="#" aria-label="BLIX home">
-      <img class="mark" src="/_pub/home/eye-logo.webp" alt="" width="140" height="140" decoding="async">
-      <img class="word" src="/_pub/home/blix-logo.webp" alt="BLIX">
+    <a class="brand" href="/" aria-label="BLIX home">
+      <img class="mark" src="/_pub/home/eye-logo.webp" alt="" width="88" height="88" decoding="async">
+      <img class="word" src="/_pub/home/blix-logo.webp" alt="BLIX" width="128" height="128">
     </a>
     <div class="nav-r">
       <a class="icon-btn" href="https://x.com/blix_vip" target="_blank" rel="noopener" aria-label="BLIX on X">
@@ -451,7 +455,7 @@
   <div class="coin m-hide" style="left:63%;top:84%;--s:40px;--rx:66deg;--rz:-30deg;--d:12s;--dl:-2s;--fx:-8px;--fy:-14px"><div class="coin-scene"><div class="face"></div></div></div>
 </header>
 
-
+<main id="main">
 <section class="block" id="how">
   <div class="eyebrow">How it works</div>
   <h2 >Your AI copilot <span>for every meme.</span></h2>
@@ -483,54 +487,54 @@
   <div class="features">
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-4 3 3 5-6"/></svg></div>
-      <h4>AI narrative tracking</h4>
+      <h3>AI narrative tracking</h3>
       <p>Tracks the stories moving the market, like AI agents, cats or political coins, and shows which coins ride each narrative as it heats up.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z"/></svg></div>
-      <h4>Daily AI picks</h4>
+      <h3>Daily AI picks</h3>
       <p>Every day BLIX's AI picks the coins worth watching and tells you why, so you start with a shortlist, not a firehose.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M8.5 11h5M11 8.5v5"/></svg></div>
-      <h4>AI research</h4>
+      <h3>AI research</h3>
       <p>One click for a full breakdown: dev history, holders, socials, red flags and how the coin compares to its narrative.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.8 3.1 1.1-6.5L2.5 9.4l6.6-1z"/></svg></div>
-      <h4>Live coin ratings</h4>
+      <h3>Live coin ratings</h3>
       <p>Every coin gets a rating that updates as it trades, built from liquidity, holders, volume and risk signals.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 10h18"/><circle cx="16.5" cy="15" r="1.2" fill="currentColor"/></svg></div>
-      <h4>Wallet tracking</h4>
+      <h3>Wallet tracking</h3>
       <p>Follow top traders and smart wallets and see their buys and sells the moment they hit the chain.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></div>
-      <h4>Twitter tracking</h4>
+      <h3>Twitter tracking</h3>
       <p>Watch the accounts that move memes. When they tweet a ticker or contract, you see it alongside the chart.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.2" fill="currentColor"/></svg></div>
-      <h4>Live trader feed</h4>
+      <h3>Live trader feed</h3>
       <p>Every pump.fun callout and every big Fomo buy, sell and thesis in one live feed, with each position's profit moving as the coin trades.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg></div>
-      <h4>Every thesis on every coin</h4>
+      <h3>Every thesis on every coin</h3>
       <p>Why people bought, from pump.fun and Fomo together: the market cap they called it at, how many times it's run since and what they hold now.</p>
     </div>
     <div class="feat">
       <div class="fi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m5 15 4-5 4 3 6-7"/><circle cx="9" cy="10" r="2.2"/><circle cx="19" cy="6" r="2.2"/></svg></div>
-      <h4>See who's trading on the chart</h4>
+      <h3>See who's trading on the chart</h3>
       <p>Real faces of known traders right where they bought and sold, plus the dev and every callout. Flip to All for a coin's whole life, launch to now.</p>
     </div>
   </div>
 </section>
 
 <div class="cta">
-  <img src="/_pub/home/bx-logo.webp" alt="" width="140" height="140" decoding="async">
+  <img src="/_pub/home/bx-logo.webp" alt="" width="140" height="140" decoding="async" loading="lazy">
   <h2>BLIX is live.</h2>
   <p>The AI-powered memecoin terminal. Open it now and start trading.</p>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
@@ -538,6 +542,7 @@
     <a class="btn lg ghost" href="/login">Log in</a>
   </div>
 </div>
+</main>
 
 <footer>
   <div class="links"><span>© 2026 BLIX</span> <a href="/pump-fun-tracker">pump.fun tracker</a> <a href="/solana-memecoin-screener">Memecoin screener</a> <a href="/memecoin-paper-trading">Paper trading</a> <a href="/ai-memecoin-picks">AI picks</a> <a href="/create-pump-fun-coin">Create a coin</a> <a href="/developers">Developers</a> <a href="/api">API</a> <a href="/mcp">MCP</a> <a href="/guides">Guides</a> <a href="/compare">Compare</a> <a href="/tools">Everything BLIX does</a> <a href="https://discord.gg/3VWHBP6paA" rel="noopener">Discord</a></div>
@@ -546,6 +551,9 @@
 
 <script>
 (() => {
+  // The tile lift follows a cursor: a touch device has none, so it keeps the static grid and skips the 112 tiles,
+  // 16 logo decodes and the layout work (480 ms of blocked main thread on a mid-range phone, site audit 2026-10-12).
+  if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
   // Real Solana coins, logos served from /_pub/home/coins (96 px webp, about 40 KB together).
   const TOKENS = [
     ["BONK", "#f6a623"], ["WIF", "#c98a5a"], ["POPCAT", "#e46a9b"], ["MEW", "#8f7ae6"],
@@ -554,10 +562,11 @@
     ["PENGU", "#4fb4ff"], ["GIGA", "#9aa3b4"], ["TRUMP", "#e8c55a"], ["AI16Z", "#e46a9b"],
   ];
   const logo = (tk) => `/_pub/home/coins/${tk.toLowerCase()}.webp`;
-  // Every logo is fetched and decoded up front; a tile only shows its coin once that logo is ready,
-  // so a raised tile never shows an empty circle.
+  // A tile only shows its coin once that logo is decoded, so a raised tile never shows an empty circle. The logos
+  // are fetched on the first pointer movement, not at load, so they never compete with the laptop picture.
   const ready = new Set();
-  TOKENS.forEach(([tk]) => { const im = new Image(); im.src = logo(tk); (im.decode ? im.decode() : Promise.resolve()).then(() => ready.add(tk), () => {}); });
+  const warm = () => TOKENS.forEach(([tk]) => { const im = new Image(); im.src = logo(tk); (im.decode ? im.decode() : Promise.resolve()).then(() => ready.add(tk), () => {}); });
+  window.addEventListener("pointermove", warm, { once: true, passive: true });
 
   const grid = document.getElementById("grid");
   const hero = document.getElementById("hero");
@@ -592,13 +601,12 @@
     measure();
   }
 
+  // Two passes: every rect is read first, then every style written, so one loop does not invalidate layout for
+  // the next read (138 style recalculations a load became 2).
   function measure() {
-    for (const t of tiles) {
-      const b = t.el.getBoundingClientRect();
-      t.cx = b.left + b.width / 2;
-      t.cy = b.top + b.height / 2 + window.scrollY;
-      t.el.style.setProperty("--g", ambient(t).toFixed(3));
-    }
+    const sy = window.scrollY;
+    for (const t of tiles) { const b = t.el.getBoundingClientRect(); t.cx = b.left + b.width / 2; t.cy = b.top + b.height / 2 + sy; }
+    for (const t of tiles) t.el.style.setProperty("--g", ambient(t).toFixed(3));
   }
 
   // pointer state (page coords)
@@ -651,8 +659,11 @@
 
   build();
   // hero height changes once the laptop image/fonts load -> re-measure so the effect stays under the cursor
-  new ResizeObserver(() => measure()).observe(hero);
-  window.addEventListener("load", measure);
+  // (once per frame, however many size changes arrive together)
+  let mq = 0;
+  const remeasure = () => { if (!mq) mq = requestAnimationFrame(() => { mq = 0; measure(); }); };
+  new ResizeObserver(remeasure).observe(hero);
+  window.addEventListener("load", remeasure);
   let rt;
   window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(build, 150); });
 

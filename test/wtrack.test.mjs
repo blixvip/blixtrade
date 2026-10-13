@@ -121,6 +121,69 @@ test.after(() => { wt.stop(); try { db.close(); } catch {} try { fs.rmSync(proce
 
 // ---------- the fast lane and the confirmation sweep ----------
 const wl = await import("../server/wallets.js");
+const D = "4p7SeR6361WJ4T4icgsYTnzAUzfA5NwM4CwYD9kMBjuM";
+
+test("a newly tracked wallet's quiet backfill reaches its feed without sending trade alerts", async (t) => {
+  const who = "backfill@example.com";
+  t.after(() => wt.remove(who, D));
+  wt.start();
+  wt.add(who, { address: D, name: "Backfill" });
+  t.mock.method(globalThis, "fetch", async () => Response.json([]));
+  const time = Math.floor((Date.now() - 3600_000) / 1000);
+  const tx = { blockTime: time, meta: { err: null, fee: 5000,
+    preBalances: [5e9, 1e9], postBalances: [4e9 - 5000, 2e9], preTokenBalances: [],
+    postTokenBalances: [{ mint: MINT, owner: D, uiTokenAmount: { amount: "1000000000", decimals: 6 } }] },
+    transaction: { message: { accountKeys: [D, B] } } };
+  const alerts = [];
+  await wl.readTx({ address: D }, { sig: "quiet-backfill", t: time * 1000, quiet: true }, ev => alerts.push(ev), tx);
+  assert.ok(db.prepare("SELECT 1 FROM wallet_trades WHERE sig = 'quiet-backfill'").get());
+  const trade = wt.overview(who).feed.find(r => r.sig === "quiet-backfill");
+  assert.ok(trade, "initial history must appear after the chain reader finishes");
+  assert.equal(trade.side, "buy");
+  assert.equal(trade.tokens, 1000);
+  assert.equal(trade.t, time * 1000);
+  assert.equal(alerts.length, 0, "backfill must stay quiet for alert subscribers");
+  wt.remove(who, D);
+});
+
+test("member-tracked smart wallets stay watched when the bot sweep runs", (t) => {
+  t.after(() => { wt.remove("active@example.com", D); db.prepare("DELETE FROM wallet_trades WHERE wallet = ?").run(D); db.prepare("DELETE FROM wallets WHERE address = ?").run(D); });
+  db.prepare("INSERT OR REPLACE INTO wallets (address, source, watching) VALUES (?, 'smart', 1)").run(D);
+  wt.add("active@example.com", { address: D, name: "Active trader" });
+  const ins = db.prepare("INSERT OR REPLACE INTO wallet_trades (sig, wallet, mint, side, t) VALUES (?, ?, ?, 'buy', ?)");
+  for (let i = 0; i < 25; i++) ins.run(`bot-${i}`, D, `mint-${i}`, Date.now());
+  assert.equal(wl.isBot(D), true);
+  wl.pauseBots();
+  assert.equal(db.prepare("SELECT watching FROM wallets WHERE address = ?").get(D).watching, 1);
+  assert.ok(wl.fastWallets().includes(D));
+  wt.remove("active@example.com", D);
+  wl.pauseBots();
+  assert.equal(db.prepare("SELECT watching FROM wallets WHERE address = ?").get(D).watching, 0);
+});
+
+test("restart restores paused tracked wallets and history collected before the tracker subscribed", (t) => {
+  t.after(() => wt.remove("restart@example.com", D));
+  wt.add("restart@example.com", { address: D, name: "Restored" });
+  db.prepare("UPDATE wallets SET watching = 0 WHERE address = ?").run(D);
+  db.prepare("INSERT INTO wallet_trades (sig, wallet, mint, side, tokens, sol, usd, t) VALUES ('restart-history', ?, ?, 'buy', 5, 1, 100, ?)").run(D, MINT, Date.now());
+  wt.start();
+  assert.equal(db.prepare("SELECT watching FROM wallets WHERE address = ?").get(D).watching, 1);
+  assert.ok(wt.overview("restart@example.com").feed.some(r => r.sig === "restart-history"));
+  wt.remove("restart@example.com", D);
+});
+
+test("trade history is newest first even when older backfill was inserted later", (t) => {
+  const who = "ordering@example.com";
+  wt.add(who, { address: D, name: "Ordered" });
+  t.after(() => wt.remove(who, D));
+  const time = Date.now();
+  const trade = { wallet: { address: D }, trade: { sig: "order-new", mint: MINT, side: "buy", sol: 1, usd: 100, tokens: 5, t: time } };
+  wt.fromEngine(trade);
+  const cursor = wt.overview(who).feed.find(r => r.sig === "order-new").id;
+  wt.fromEngine({ ...trade, trade: { ...trade.trade, sig: "order-old", t: time - 3600_000 } });
+  assert.equal(wt.overview(who, { limit: 1 }).feed[0].sig, "order-new");
+  assert.equal(wt.feedSince(who, cursor).rows[0].sig, "order-old", "catch-up keeps insertion cursors");
+});
 
 test("fast lane: a transaction read at once, retried while the node has it only at processed, handed to the public reader when the key will not", async () => {
   const waits = [];

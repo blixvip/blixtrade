@@ -5,6 +5,7 @@
 // The docs live at the root of blixvip.com (index.js routes these exact paths here); trade.blixvip.com and
 // blixvip.com/trade/<page> send them on with a 301 so all the ranking goes to one address.
 import { PAGE_TOPIC, PAGE_ALIASES, canonicalLinks } from './clusters.js';
+import DATES from "./dates.json" with { type: "json" };   // per-page published / modified dates (site/stamp.mjs)
 export const ORIGIN = "https://blixvip.com";
 export const UPDATED = "2026-10-08"; // when the facts on these pages were last checked
 export const UPDATED_TEXT = "October 8, 2026";
@@ -13,7 +14,7 @@ export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", 
 
 // A code block with a copy button (the button only appears once the script has run).
 export const code = (text, lang = "") => `<div class="code"${lang ? ` data-lang="${lang}"` : ""}><pre><code>${esc(text.trim())}</code></pre></div>`;
-export const table = (head, rows, cls = "") => `<div class="table-wrap"><table${cls ? ` class="${cls}"` : ""}><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+export const table = (head, rows, cls = "") => `<div class="table-wrap"><table${cls ? ` class="${cls}"` : ""}><thead><tr>${head.map((h) => `<th scope="col">${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => i === 0 && head[0] === "" ? `<th scope="row">${c}</th>` : `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 export const facts = (pairs) => `<dl class="facts">${pairs.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
 export const ext = (href, text) => `<a href="${href}" rel="noopener" target="_blank">${text}</a>`;
 
@@ -46,21 +47,22 @@ const CSS = `
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-padding-top:72px}
 body{margin:0;background:var(--paper);color:var(--ink);font:400 1rem/1.65 var(--body);overflow-x:hidden}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}p a,li a,dd a,td a,.callout a{text-decoration:underline;text-underline-offset:3px;text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}p a:hover,li a:hover,dd a:hover,td a:hover{text-decoration-color:var(--accent)}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
 .top{position:sticky;top:0;z-index:5;background:rgba(5,6,8,.95);border-bottom:1px solid var(--rule)}
 .top-in{max-width:1320px;margin:0 auto;padding:0 28px;height:90px;display:flex;align-items:center;gap:20px}
-.brand{display:flex;align-items:center;gap:9px;color:var(--ink);font:600 1.125rem/1 var(--display);letter-spacing:-.02em;flex:none}
+.brand{display:flex;align-items:center;gap:9px;min-height:44px;color:var(--ink);font:600 1.125rem/1 var(--display);letter-spacing:-.02em;flex:none}
+.skip{position:absolute;left:-999px;top:8px;z-index:9;background:var(--ink);color:var(--paper);padding:10px 14px;border-radius:999px;font-weight:600}.skip:focus{left:8px;text-decoration:none}
 .brand:hover{text-decoration:none}
 .nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
 .nav::-webkit-scrollbar{display:none}
-.nav a{color:var(--ink-2);font-size:.875rem;padding:6px 10px;border-radius:6px;white-space:nowrap}
+.nav a{display:inline-flex;align-items:center;min-height:32px;color:var(--ink-2);font-size:.875rem;padding:6px 10px;border-radius:6px;white-space:nowrap}
 .nav a:hover{color:var(--ink);background:var(--paper-4);text-decoration:none}
 .nav a[aria-current]{color:var(--ink);background:var(--paper-4)}
 .gh{display:flex;align-items:center;gap:7px;color:var(--ink);font-size:.875rem;font-weight:600;padding:7px 12px;border:1px solid var(--rule-2);border-radius:6px;background:var(--paper-4);flex:none}
 .gh:hover{text-decoration:none;border-color:var(--muted)}
 main{max-width:1280px;margin:0 auto;padding:32px 28px 88px}
-.crumbs{font-size:.8125rem;color:var(--muted);margin:0 0 18px}.crumbs a{color:var(--muted)}.crumbs span{margin:0 6px}
+.crumbs{font-size:.8125rem;color:var(--muted);margin:0 0 18px}.crumbs a{display:inline-block;padding:4px 0;color:var(--muted)}.crumbs span{margin:0 6px}
 .eyebrow{font-size:.75rem;font-weight:600;letter-spacing:.045em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
 h1{font:600 clamp(2.5rem,4.4vw,4.5rem)/1.03 var(--display);letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance}
 h2{font:600 1.5rem/1.25 var(--display);letter-spacing:-.02em;margin:52px 0 12px;padding-top:22px;border-top:1px solid var(--rule)}
@@ -81,7 +83,7 @@ code{font:500 .875em/1.5 var(--mono);color:var(--ink);background:var(--paper-4);
 .code{position:relative;margin:0 0 16px}
 .code pre{margin:0;background:var(--paper-3);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;overflow-x:auto;font:400 .8125rem/1.6 var(--mono);color:var(--ink)}
 .code pre code{background:none;padding:0;font:inherit;overflow-wrap:normal}
-.code[data-lang]::before{content:attr(data-lang);position:absolute;top:8px;right:62px;font:600 .6875rem/1 var(--body);letter-spacing:.045em;text-transform:uppercase;color:var(--muted)}
+.code[data-lang]::before{content:attr(data-lang);position:absolute;top:8px;right:62px;font:600 .75rem/1 var(--body);letter-spacing:.045em;text-transform:uppercase;color:var(--muted)}
 .copy{position:absolute;top:6px;right:6px;font:600 .75rem/1 var(--body);color:var(--ink-2);background:var(--paper-4);border:1px solid var(--rule-2);border-radius:6px;padding:6px 9px;cursor:pointer}
 .copy:hover{color:var(--ink)}
 .table-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:8px;margin:0 0 18px;background:var(--paper-3)}
@@ -92,7 +94,7 @@ th{font-size:.75rem;font-weight:600;letter-spacing:.045em;text-transform:upperca
 td{color:var(--ink-2)}td:first-child{color:var(--ink)}
 .ref td:first-child{font:600 .75rem/1.6 var(--mono);color:var(--muted);white-space:nowrap}
 .ref td:nth-child(2){min-width:220px}.ref td:nth-child(2) code{background:none;padding:0;color:var(--ink)}
-.cmp td:first-child{font-weight:600;white-space:nowrap}
+tbody th{font-size:inherit;letter-spacing:0;text-transform:none;color:var(--ink);background:transparent;font-weight:600;white-space:nowrap}.cmp td:first-child{font-weight:600;white-space:nowrap}
 .yes{color:var(--up)}.no{color:var(--down)}
 .faq section{border-bottom:1px solid var(--rule);padding:4px 0 10px}.faq section:last-child{border-bottom:0}
 .related{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:8px 0 0}
@@ -106,7 +108,7 @@ td{color:var(--ink-2)}td:first-child{color:var(--ink)}
 footer{border-top:1px solid var(--rule);background:var(--paper-2)}
 .foot{max-width:860px;margin:0 auto;padding:28px 16px 40px;font-size:.8125rem;color:var(--muted)}
 .foot p{color:var(--muted);font-size:.8125rem}
-.foot nav{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 14px}.foot nav a{color:var(--ink-2)}
+.foot nav{display:flex;flex-wrap:wrap;gap:0 10px;margin:0 0 14px}.foot nav a{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;color:var(--ink-2)}
 @media (max-width:720px){.gh span{display:none}.top-in{gap:12px}h2{margin-top:40px}.lede{font-size:1.0625rem}}
 @media (prefers-reduced-motion:no-preference){.btn,.gh,.nav a,.related a{transition:border-color .16s,background .16s,color .16s}}
 .brand{gap:10px}.brand img{object-fit:contain;flex:none}.brand .mark{border-radius:11px}.brand .word{width:86px;height:58px}
@@ -120,11 +122,11 @@ footer{border-top:1px solid var(--rule);background:var(--paper-2)}
 .account-note{font-size:.84rem;color:var(--muted);margin:16px 0 0}.hero-preview{display:block;color:var(--muted);text-align:center;border-radius:24px;background:repeating-linear-gradient(90deg,transparent 0 109px,#14171c 110px 111px),repeating-linear-gradient(0deg,#080a0d 0 109px,#14171c 110px 111px);padding:22px 0 20px;box-shadow:inset 0 0 65px 28px #050608}
 .hero-preview img{display:block;width:100%;height:auto;filter:drop-shadow(0 16px 28px #000)}.hero-preview span{font-size:.8rem}.hero-preview:hover{text-decoration:none;color:var(--ink)}
 .article-content{max-width:860px;margin:0 auto}.article-content>.meta{padding:22px 0 4px;border-top:1px solid var(--rule)}.article-content>h2:first-of-type{margin-top:28px}
-.contents{margin:22px 0 32px;padding:20px 24px;border:1px solid var(--rule);border-radius:16px;background:var(--paper-2)}.contents summary{cursor:pointer;font-weight:600}.contents ol{margin:12px 0 0;padding-left:0;list-style:none;columns:2;column-gap:32px}.contents li{break-inside:avoid;font-size:.9rem}.contents a{display:inline-block;padding:3px 0}@media(max-width:640px){.contents ol{columns:1}}
+.contents{margin:22px 0 32px;padding:20px 24px;border:1px solid var(--rule);border-radius:16px;background:var(--paper-2)}.contents summary{cursor:pointer;font-weight:600}.contents ol{margin:12px 0 0;padding-left:0;list-style:none;columns:2;column-gap:32px}.contents li{break-inside:avoid;font-size:.9rem}.contents a{display:inline-flex;align-items:center;min-height:32px;padding:4px 6px;margin-left:-6px}@media(max-width:640px){.contents ol{columns:1}}
 .closing-cta{max-width:860px;margin:76px auto 0;padding:42px;border:1px solid var(--rule-2);border-radius:24px;background:radial-gradient(ellipse at top right,rgba(174,180,191,.12),transparent 65%),#0c0e12}.closing-cta h2{border:0;padding:0;margin:0 0 12px;font:600 clamp(2rem,4vw,3rem)/1.06 var(--display);letter-spacing:-.035em}.closing-cta p{margin-bottom:24px}
 .foot{max-width:1280px;padding:34px 28px}.foot-brand{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:30px}.foot nav{gap:14px 22px}.foot p{max-width:860px}
-@media(max-width:900px){.nav{display:none}.top-in{justify-content:space-between}.hero-grid{gap:20px;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.hero-copy h1{font-size:48px}}
-@media(max-width:640px){.top-in{padding:0 20px;height:78px;gap:12px}.brand{gap:6px}.brand .mark{width:34px;height:34px}.brand .word{width:64px;height:44px}.top-actions{gap:12px}.top-actions>.site-open{display:none}.top-actions>.btn{padding:12px 16px;font-size:.83rem}main{padding:22px 20px 60px}.hero-grid{grid-template-columns:minmax(0,1fr);gap:24px;padding:22px 0 36px}.hero-copy h1{font-size:44px;max-width:15ch}.hero-copy .lede{font-size:1.05rem}.hero-preview{max-width:480px;width:100%;margin:0 auto}.hero-preview img{max-height:270px;object-fit:contain}.join-actions{gap:10px}.join-actions .btn{padding:14px 18px;font-size:.9rem}.closing-cta{padding:28px 22px;margin-top:48px}.foot{padding:28px 20px}.foot-brand{align-items:flex-start;flex-direction:column}.facts{grid-template-columns:minmax(0,1fr)}.related{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:900px){.top-in{flex-wrap:wrap;height:auto;padding-top:10px;padding-bottom:6px;justify-content:space-between;row-gap:0}.nav{order:3;flex-basis:100%;margin:0 -28px;padding:0 24px 8px;-webkit-overflow-scrolling:touch}.hero-grid{gap:20px;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.hero-copy h1{font-size:48px}}
+@media(max-width:640px){.top-in{padding:10px 20px 6px;gap:12px}.nav{margin:0 -20px;padding:0 16px 8px}.brand{gap:6px}.brand .mark{width:34px;height:34px}.brand .word{width:64px;height:44px}.top-actions{gap:12px}.top-actions>.site-open{display:none}.top-actions>.btn{padding:12px 16px;font-size:.83rem}main{padding:22px 20px 60px}.hero-grid{grid-template-columns:minmax(0,1fr);gap:24px;padding:22px 0 36px}.hero-copy h1{font-size:44px;max-width:15ch}.hero-copy .lede{font-size:1.05rem}.hero-preview{max-width:480px;width:100%;margin:0 auto}.hero-preview img{max-height:270px;object-fit:contain}.join-actions{gap:10px}.join-actions .btn{padding:14px 18px;font-size:.9rem}.closing-cta{padding:28px 22px;margin-top:48px}.foot{padding:28px 20px}.foot-brand{align-items:flex-start;flex-direction:column}.facts{grid-template-columns:minmax(0,1fr)}.related{grid-template-columns:minmax(0,1fr)}}
 
 `;
 
@@ -134,7 +136,8 @@ export const SCRIPT = `document.querySelectorAll(".code").forEach(function(b){va
 // p: { path, title, description, h1, eyebrow, lede, body, faq?, related?, crumb, og, schema? }
 export function layout(p) {
   const url = ORIGIN + p.path;
-  const updated = p.updated || UPDATED;
+  const dates = DATES.pages[p.path] || {};
+  const published = dates.published || p.updated || UPDATED, updated = dates.modified || p.updated || UPDATED;
   const topic = PAGE_TOPIC.get(p.path);
   const sections = [...p.body.matchAll(/<h2\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)];
   const contents = sections.length >= 4 ? `<details class="contents" open><summary>On this page</summary><ol>${sections.map(([, id, heading]) => `<li><a href="#${esc(id)}">${esc(plain(heading))}</a></li>`).join("")}</ol></details>` : "";
@@ -142,12 +145,12 @@ export function layout(p) {
     { "@type": "Organization", "@id": `${ORIGIN}/#org`, name: "Blix", url: `${ORIGIN}/`, logo: `${ORIGIN}/_pub/icon-512.png`, sameAs: ["https://blixvip.com"] },
     { "@type": "WebSite", "@id": `${ORIGIN}/#site`, url: `${ORIGIN}/`, name: "BLIX", alternateName: ["Blix", "Blix VIP", "blixvip"], publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "TechArticle", "@id": `${url}#article`, headline: p.h1, description: p.description, url, mainEntityOfPage: url, image: `${ORIGIN}/_pub/${p.og}`,
-      dateModified: updated, inLanguage: "en", author: { "@id": `${ORIGIN}/#org` }, publisher: { "@id": `${ORIGIN}/#org` }, isPartOf: { "@id": `${ORIGIN}/#site` },
+      datePublished: published, dateModified: updated, inLanguage: "en", author: { "@id": `${ORIGIN}/#org` }, publisher: { "@id": `${ORIGIN}/#org` }, isPartOf: { "@id": `${ORIGIN}/#site` },
       about: { "@id": `${ORIGIN}/#software` } },
     { "@type": "SoftwareApplication", "@id": `${ORIGIN}/#software`, name: "Blix Trade", alternateName: ["Blix", "Blix API", "Blix MCP"],
       description: "BLIX is an AI-powered Solana memecoin terminal for discovery, research, wallet tracking and trading. Create an account to access the site.",
       applicationCategory: "FinanceApplication", applicationSubCategory: "Crypto trading terminal and API", operatingSystem: "Web",
-      url: `${ORIGIN}/`,
+      url: `${ORIGIN}/`, offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
       publisher: { "@id": `${ORIGIN}/#org` } },
     { "@type": "BreadcrumbList", itemListElement: [
       { "@type": "ListItem", position: 1, name: "BLIX", item: `${ORIGIN}/` },
@@ -178,14 +181,15 @@ export function layout(p) {
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="${esc(p.h1)}">
+<meta property="article:published_time" content="${published}">
 <meta property="article:modified_time" content="${updated}">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${esc(p.ogTitle || p.title)}">
 <meta name="twitter:description" content="${esc(p.description)}">
 <meta name="twitter:image" content="${ORIGIN}/_pub/${p.og}">
-<link rel="icon" href="/_pub/icon.svg?v=eye2" type="image/svg+xml">
-<link rel="icon" href="/_pub/icon-96.png?v=eye2" sizes="96x96" type="image/png">
-<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye2">
+<link rel="icon" href="/_pub/icon.svg?v=eye3" type="image/svg+xml">
+<link rel="icon" href="/_pub/icon-96.png?v=eye3" sizes="96x96" type="image/png">
+<link rel="apple-touch-icon" href="/_pub/icon-180.png?v=eye3">
 <link rel="alternate" type="text/plain" title="LLM summary" href="/llms.txt">
 <link rel="preload" href="/_pub/fonts/inter-tight.woff2" as="font" type="font/woff2" crossorigin>
 <style>@font-face{font-family:'Inter Tight';font-style:normal;font-weight:400 700;font-display:swap;src:url(/_pub/fonts/inter-tight.woff2) format('woff2')}@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/_pub/fonts/jetbrains-mono.woff2) format('woff2')}</style>
@@ -193,19 +197,20 @@ export function layout(p) {
 <script type="application/ld+json">${ld}</script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="top"><div class="top-in">
 <a class="brand" href="/" aria-label="BLIX home">${ICON}</a>
 <nav class="nav" aria-label="Docs">${nav}</nav>
 <div class="top-actions"><a class="site-open" href="/">Open BLIX ↗</a><a class="btn primary" href="/start">Create account ↗</a></div>
 </div></header>
-<main>
+<main id="main">
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/">BLIX</a>${p.path === "/api" ? "<span>/</span>API" : `<span>/</span>${esc(p.crumb)}`}</nav>
 <article>
 <section class="hero-grid" aria-label="${esc(p.crumb)}">
 <div class="hero-copy"><p class="eyebrow">AI-powered memecoin terminal</p>
 <h1>${p.h1}</h1><p class="lede">${p.lede}</p>
 ${JOIN}<p class="account-note">Create a BLIX account to access the terminal, tools and research. Already a member? <a href="/login">Log in</a>.</p></div>
-<a class="hero-preview" href="/" aria-label="Explore the main BLIX site"><img src="/_pub/home/laptop-800.webp" width="800" height="600" alt="The BLIX memecoin trading terminal" fetchpriority="high"><span>Explore the BLIX terminal ↗</span></a>
+<a class="hero-preview" href="/"><picture><source type="image/avif" srcset="/_pub/home/laptop-800.avif"><img src="/_pub/home/laptop-800.webp" width="800" height="600" alt="The BLIX memecoin trading terminal" fetchpriority="high"></picture><span>Explore the BLIX terminal ↗</span></a>
 </section>
 <div class="article-content"><p class="meta">By <a href="/about">BLIX</a> · Updated <time datetime="${updated}">${updated}</time>${topic ? ` · <a href="/guides#${topic.id}">${esc(topic.title)}</a>` : ''}</p>
 ${contents}
