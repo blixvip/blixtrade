@@ -263,7 +263,10 @@ const capFromFill = (sol, tokens, supply, solUsd, near = null, mint = null) => {
   if (!sup && mint && !mint.endsWith("pump")) { sup = supplyOf(mint); if (!(sup > 0)) return near > 0 ? near : null; }
   sup = sup || 1e9;
   let picks = [tokens, tokens / 1e6].map((tk) => (sol / tk) * solUsd * sup).filter((c) => c >= 300 && c <= 5e10);
-  if (near > 0) picks = picks.filter((c) => Math.abs(Math.log(c / near)) <= Math.log(4)).sort((a, b) => Math.abs(Math.log(a / near)) - Math.abs(Math.log(b / near)));
+  // A pump.fun coin's fill is the truth (the cap on record may be hours stale); the cap on record only decides
+  // between the two token readings, a million apart. Any other coin's reading must sit within 4x of its record.
+  const pump = Boolean(mint && mint.endsWith("pump")), span = pump ? Math.log(300) : Math.log(4);
+  if (near > 0) picks = picks.filter((c) => Math.abs(Math.log(c / near)) <= span).sort((a, b) => Math.abs(Math.log(a / near)) - Math.abs(Math.log(b / near)));
   return picks[0] ?? (near > 0 ? near : null);
 };
 function fromLive(mint, s, solAmt, buy, x = {}) {
