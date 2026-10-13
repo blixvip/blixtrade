@@ -2,6 +2,8 @@
 // Three tabs instead of one long scroll: Rug guard, Display, Filters. Every change applies at once.
 import { useState, type ReactNode } from "react";
 import { FILTER_KEYS, PREFS0, RUG_CHECKS, setPrefs, usePrefs, type PulseCol, type PulsePrefs } from "@/lib/prefs";
+import { applyRecommendedSetup, SETUP_LINES } from "@/lib/setup";
+import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
 
@@ -12,7 +14,7 @@ const FILTERS: [FilterKey, string, string][] = [
   ["minMcap", "Market cap min", "$"], ["maxMcap", "Market cap max", "$"], ["minVol", "Volume min", "$"], ["minHolders", "Holders min", ""],
   ["maxTop10", "Top 10 max", "%"], ["maxDev", "Dev holds max", "%"], ["maxAgeMin", "Age max", "min"],
 ];
-type Tab = "rug" | "display" | "filters";
+type Tab = "setup" | "rug" | "display" | "filters";
 
 function Switch({ on }: { on: boolean }) {
   return (
@@ -50,6 +52,7 @@ function Tabs({ tab, setTab, p }: { tab: Tab; setTab: (t: Tab) => void; p: Pulse
   const filters = FILTER_KEYS.filter((k) => p[k] != null).length + (p.socials ? 1 : 0);
   const checks = RUG_CHECKS.filter(([k]) => p.rugChecks[k]).length;
   const tabs: [Tab, string, string, ReactNode, ReactNode][] = [
+    ["setup", "Recommended setup", "One click: presets, guard, tracker", <Icon.bolt className="size-4" />, null],
     ["rug", "Rug guard", "Hide likely rugs", <Icon.shield className="size-4" />,
       <span className={cn("num rounded-full px-1.5 py-px text-[10px] font-bold", p.rug ? "bg-up/15 text-up" : "bg-white/[0.06] text-muted")}>{p.rug ? `${checks}/${RUG_CHECKS.length}` : "Off"}</span>],
     ["display", "Display", "Size, rows and columns", <Icon.sliders className="size-4" />, null],
@@ -76,6 +79,27 @@ function Tabs({ tab, setTab, p }: { tab: Tab; setTab: (t: Tab) => void; p: Pulse
         );
       })}
     </div>
+  );
+}
+
+// The one-click setup: what it sets, and the button. Applies at once; everything stays editable afterwards.
+function SetupTab() {
+  const [done, setDone] = useState(false);
+  const apply = () => { applyRecommendedSetup(); setDone(true); toast("Recommended setup applied: presets, Rug guard, columns, tracker and the quick trade panel."); };
+  return (
+    <>
+      <Card title="What it sets">
+        {SETUP_LINES.map(([k, v]) => (
+          <div key={k} className="flex items-start gap-3 px-3.5 py-3"><span className="w-24 shrink-0 text-sm font-semibold text-ink">{k}</span><span className="text-sm leading-snug text-muted">{v}</span></div>
+        ))}
+      </Card>
+      <button onClick={apply}
+        className={cn("flex h-11 items-center justify-center gap-2 rounded-xl text-md font-semibold transition-[background-color,transform] duration-150 active:scale-[0.98]",
+          done ? "bg-up/15 text-up" : "bg-ink text-paper hover:bg-white")}>
+        <Icon.bolt className="size-4" />{done ? "Applied" : "Apply the recommended setup"}
+      </button>
+      <p className="px-1 text-xs text-muted">Presets and hidden coins are saved to your account when signed in, so every device gets them. Display and filters stay per browser: press this once on each.</p>
+    </>
   );
 }
 
@@ -203,13 +227,13 @@ function FiltersTab({ p }: { p: PulsePrefs }) {
 
 export function SettingsPanel({ onDone }: { onDone?: () => void }) {
   const p = usePrefs();
-  const [tab, setTab] = useState<Tab>("rug");
+  const [tab, setTab] = useState<Tab>("setup");
   return (
     <div className="flex min-h-0 flex-col gap-5">
       <div className="grid min-h-0 gap-4 md:grid-cols-[15rem_minmax(0,1fr)] md:gap-6">
         <Tabs tab={tab} setTab={setTab} p={p} />
         <div key={tab} className="-mr-2 flex h-[min(62dvh,560px)] animate-row-in flex-col gap-4 overflow-y-auto pr-2 [scrollbar-gutter:stable] [scrollbar-width:thin] [&>*]:shrink-0">
-          {tab === "rug" ? <RugTab p={p} /> : tab === "display" ? <DisplayTab p={p} /> : <FiltersTab p={p} />}
+          {tab === "setup" ? <SetupTab /> : tab === "rug" ? <RugTab p={p} /> : tab === "display" ? <DisplayTab p={p} /> : <FiltersTab p={p} />}
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-5">
