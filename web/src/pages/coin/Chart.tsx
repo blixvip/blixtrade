@@ -220,7 +220,7 @@ export function CoinChart({ mint, marks, people, events, paper, ownPaper, signal
   const panel = useRef<HTMLDivElement>(null), attentive = useRef(true);
   const metricRef = useMetricVisibility(mint, true);
   useEffect(() => panel.current ? observeAttention(panel.current, value => { attentive.current = value; }) : undefined, [mint]);
-  const watching = () => attentive.current && !document.hidden;
+  const watching = () => attentive.current;   // on screen, in a front or a background tab alike
   const [pick, setTfState] = useState<number>(() => store.get("coin:tf", 0) || defaultTf);
   // All's candle size: from the coin's launch time (fixed while it is open, so a coin ageing past a boundary does
   // not rebuild the chart; set again when the real launch time arrives). If the first answer fills the server's

@@ -42,7 +42,7 @@ const interests = new Map<symbol, { mint: string; active: boolean }>();
 let timer: number | undefined, soon: number | undefined, busy = false, pending = false;
 async function refresh() {
   soon = undefined; if (busy) { pending = true; return; }
-  const rows = document.hidden ? [] : [...interests.values()];
+  const rows = [...interests.values()];   // a background tab keeps its interests: its coin stays collected
   const mints = [...new Set(rows.sort((a, b) => Number(b.active) - Number(a.active)).map(x => x.mint))].slice(0, 200), active = rows.find(x => x.active)?.mint || '';
   busy = true;
   try { receiveMetrics(await api(`metrics?session=${metricSession}&m=${mints.join(',')}&active=${active}`), replayed); } catch {} finally {
@@ -54,8 +54,8 @@ let replayed: (mint: string) => boolean = () => false;
 export const metricReplayGuard = (fn: (mint: string) => boolean) => { replayed = fn; };
 function changed() {
   if (!soon) soon = window.setTimeout(refresh, 150);
-  if (interests.size && !document.hidden && !timer) timer = window.setInterval(refresh, 5000);
-  if ((!interests.size || document.hidden) && timer) { clearInterval(timer); timer = undefined; }
+  if (interests.size && !timer) timer = window.setInterval(refresh, 5000);
+  if (!interests.size && timer) { clearInterval(timer); timer = undefined; }
 }
 document.addEventListener('visibilitychange', changed);
 // Ref-counted by component, intersection-observed, and shared through one browser request.

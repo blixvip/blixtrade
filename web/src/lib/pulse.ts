@@ -304,14 +304,14 @@ export function onCoinTrade(mint: string, fn: (x: CoinTrade) => void, stream = t
 // chart never steps back to an older price.
 const fast = new Map<string, { es: EventSource; last: number; stop: () => void }>();
 function openFast(mint: string) {
-  if (typeof EventSource === "undefined" || document.hidden || !streaming.has(mint)) return;
+  if (typeof EventSource === "undefined" || !streaming.has(mint)) return;
   closeFast(mint);
   const es = new EventSource(streamUrl(`api/fast/stream?mint=${mint}`), streamInit()), f = { es, last: 0, stop: () => {} };
   let opened = false;
   es.onopen = () => { opened = true; };
   fast.set(mint, f);
   es.addEventListener("trade", (e) => {
-    if (document.hidden || fast.get(mint) !== f) return;
+    if (fast.get(mint) !== f) return;
     let batch: unknown;
     try { batch = JSON.parse((e as MessageEvent).data)?.u; } catch { return; }
     if (!Array.isArray(batch)) return;
@@ -332,11 +332,10 @@ function openFast(mint: string) {
   };
 }
 function closeFast(mint: string) { fast.get(mint)?.stop(); fast.delete(mint); }
-// Keep listener/cache state, release paid demand immediately in background tabs.
-// The server's 15-second lease absorbs brief tab switches without subscription churn.
+// The open chart's own price stream stays up in a background tab (it used to close there), so the price in the
+// tab's title keeps moving; a tab coming back only fills in any stream it lost.
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) for (const mint of [...fast.keys()]) closeFast(mint);
-  else for (const mint of streaming.keys()) if (!fast.has(mint)) openFast(mint);
+  if (!document.hidden) for (const mint of streaming.keys()) if (!fast.has(mint)) openFast(mint);
 });
 // A coin's market cap from its latest trade (null until one comes in while the page is open), once a frame.
 export function useTradeMc(mint: string, stream = true) {
@@ -425,7 +424,9 @@ export function startPulse() {
       }
       lastEvent = Date.now();
       if (!usePulse.getState().connected) usePulse.setState({ connected: true });
-      if (fn && !document.hidden) fn(data);
+      // Taken in the background too: a tab left open while trading keeps its prices, chart and tab title current,
+      // so coming back never meets a frozen page (the user, 2026-10-12).
+      if (fn) fn(data);
     });
     on("hello"); on("tick");
     on("live", (d) => { for (const r of d.u) queue.live.push(r); later(); });
@@ -467,22 +468,19 @@ export function startPulse() {
     };
   };
   open();
-  // A tab left in the background stops taking the stream after a minute (everything on it was being dropped
-  // anyway, see `on` above); on coming back the stream opens again and the board is read once, at once.
-  let parked = false, parkTimer = 0;
+  // A tab in the background keeps the stream (it used to park it after a minute); on coming back, a stream that
+  // went quiet meanwhile is opened again and the board read once, at once.
+  const parked = false, parkTimer = 0;
   const onShow = () => {
-    clearTimeout(parkTimer);
-    if (document.hidden) {
-      parkTimer = window.setTimeout(() => { if (!document.hidden || stopped) return; parked = true; clearTimeout(retry); const s = es; es = null; s?.close(); usePulse.setState({ connected: false }); }, 60_000);
-    } else if (!stopped && (parked || Date.now() - lastEvent >= 10_000)) {
-      parked = false; lastEvent = 0;
+    if (!document.hidden && !stopped && Date.now() - lastEvent >= 10_000) {
+      lastEvent = 0;
       open();
       loadPulse().catch(() => {});
     }
   };
   document.addEventListener("visibilitychange", onShow);
   const watchdog = setInterval(() => {
-    if (parked || document.hidden || !lastEvent || Date.now() - lastEvent < 10_000) return;
+    if (parked || !lastEvent || Date.now() - lastEvent < 10_000) return;
     lastEvent = Date.now();
     usePulse.setState({ connected: false });
     open();
@@ -495,7 +493,7 @@ export function startPulse() {
   let pollTimer = 0;
   const poll = async () => {
     if (stopped) return;
-    if (!document.hidden && Date.now() - boardAt >= 5000) {
+    if (Date.now() - boardAt >= 5000) {
       const ok = await loadPulse().then(() => true, () => false);
       const s = usePulse.getState(), polling = ok && !s.connected;
       if (s.polling !== polling) usePulse.setState({ polling });
