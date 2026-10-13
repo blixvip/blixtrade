@@ -7,9 +7,12 @@ export const pct = (n: number | null | undefined) =>
 
 // How old a coin is, coloured like Axiom: green for its first 10 minutes, orange to an hour, red after.
 export const ageTone = (ms: number) => (ms < 10 * 60_000 ? "text-up" : ms < 60 * 60_000 ? "text-caution" : "text-down");
-// How old a post (a tweet) is, coloured like Axiom's X cards: green under an hour, yellow to six hours, red after.
-// (The user, 2026-10-13: "the older they are they should be red ... kinda old yellow and green newer".)
-export const postTone = (ms: number) => (ms < 60 * 60_000 ? "text-up" : ms < 6 * 60 * 60_000 ? "text-warn" : "text-down");
+// How old a post (a tweet) is, coloured like Axiom: green for its first 10 minutes, yellow to an hour, red after,
+// the same clock as a coin's age (ageTone). (The user, 2026-10-13: "the older they are they should be red ... kinda
+// old yellow and green newer"; an hour for green left every tweet on a minutes-old coin green.)
+export const postTone = (ms: number) => (ms < 10 * 60_000 ? "text-up" : ms < 60 * 60_000 ? "text-warn" : "text-down");
+// The same as a tinted tag (text and a faint fill of the colour).
+export const postTag = (ms: number) => (ms < 10 * 60_000 ? "text-up bg-up/12" : ms < 60 * 60_000 ? "text-warn bg-warn/12" : "text-down bg-down/12");
 export const ageStr = (ms: number) => {
   const s = ms / 1000;
   return s < 60 ? `${Math.max(0, Math.floor(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;

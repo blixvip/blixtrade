@@ -9,7 +9,7 @@ import { previewHandlers } from "@/components/PicPreview";
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
-import { ageStr, ageTone, compact, pct, postTone, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
+import { ageStr, ageTone, compact, pct, postTag, providerOf, safeHref, shortAddr, tone } from "@/lib/format";
 import { usePulse, type Coin, type ColKey } from "@/lib/pulse";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
@@ -44,7 +44,7 @@ const tweetTime = (href: string) => { const m = /\/status(?:es)?\/(\d{15,20})/.e
 function TweetAge({ href }: { href: string }) {
   const now = useNow(), t = tweetTime(href);
   if (!t || t > now + 60_000) return null;
-  return <span className={cn("num -ml-1 text-xs font-semibold", postTone(now - t))} title={`Tweeted ${new Date(t).toLocaleString()}`}>{ageStr(Math.max(0, now - t))}</span>;
+  return <span className={cn("num -ml-1 rounded-[4px] px-1 py-px text-xs leading-none font-bold", postTag(now - t))} title={`Tweeted ${new Date(t).toLocaleString()}`}>{ageStr(Math.max(0, now - t))}</span>;
 }
 function Age({ born }: { born: number }) {
   const now = useNow();
