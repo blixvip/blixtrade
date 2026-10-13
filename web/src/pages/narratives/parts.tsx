@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { ago, CoinImg, money, Tag } from "@/components/page";
 import { cn } from "@/lib/utils";
-import { safeHref } from "@/lib/format";
+import { postTone, safeHref } from "@/lib/format";
 import { LiveMc } from "@/components/Live";
 import { thumb } from "@/lib/thumb";
 
@@ -73,7 +73,7 @@ export function PostCard({ p, big }: { p: Post; big?: boolean }) {
         <span className="relative size-9 shrink-0 overflow-hidden rounded-full bg-paper-4">{p.author.avatar && <img src={thumb(p.author.avatar, 36)} alt="" loading="lazy" className="size-full object-cover" />}</span>
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="flex items-center gap-1"><b className="truncate font-semibold text-ink">{p.author.name || p.author.handle}</b>{p.author.verified && <svg viewBox="0 0 24 24" className="size-3.5 shrink-0 fill-info" aria-label="verified"><path d="M22.5 12.5c0-1.6-.9-2.9-2.2-3.6.5-1.4.2-3-.9-4.1s-2.7-1.4-4.1-.9C14.6 2.6 13.3 1.7 11.7 1.7s-2.9.9-3.6 2.2c-1.4-.5-3-.2-4.1.9s-1.4 2.7-.9 4.1C1.8 9.6.9 10.9.9 12.5s.9 2.9 2.2 3.6c-.5 1.4-.2 3 .9 4.1s2.7 1.4 4.1.9c.7 1.3 2 2.2 3.6 2.2s2.9-.9 3.6-2.2c1.4.5 3 .2 4.1-.9s1.4-2.7.9-4.1c1.3-.7 2.2-2 2.2-3.6zm-12.4 4.6L6 13l1.4-1.4 2.7 2.7 6.4-6.4L18 9.3z" /></svg>}</span>
-          <span className="truncate text-sm text-muted">@{p.author.handle}{p.author.followers != null ? ` · ${compact(p.author.followers)} followers` : ""}{p.t ? ` · ${ago(p.t)}` : ""}</span>
+          <span className="truncate text-sm text-muted">@{p.author.handle}{p.author.followers != null ? ` · ${compact(p.author.followers)} followers` : ""}{p.t ? <> · <span className={cn("font-medium", postTone(Date.now() - p.t))}>{ago(p.t)}</span></> : ""}</span>
         </span>
         <span className="ml-auto text-muted"><XLogo /></span>
       </div>

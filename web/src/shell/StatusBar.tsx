@@ -11,7 +11,7 @@ import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/coin";
-import { ageStr, compact, pct, shortAddr, tone } from "@/lib/format";
+import { ageStr, compact, pct, postTone, shortAddr, tone } from "@/lib/format";
 import { loadPaperWallet, useTrade } from "@/lib/mode";
 import { usePulse } from "@/lib/pulse";
 import { useRoute, useRouteArg, pageHref } from "@/lib/route";
@@ -207,7 +207,7 @@ function XRows({ open }: { open: boolean }) {
         {p.avatar ? <img src={thumb(p.avatar, 24)} alt="" className="size-6 shrink-0 rounded-full" /> : <span className="size-6 shrink-0 rounded-full bg-paper-4" />}
         <span className="min-w-0 flex-1"><b className="font-semibold">@{p.handle}</b>{p.mints.length > 0 && <em className="ml-1.5 rounded bg-up/15 px-1 text-2xs font-semibold not-italic text-up">COIN</em>}
           <span className="line-clamp-2 text-xs text-ink-2">{p.text}</span></span>
-        <span className="num shrink-0 text-2xs text-muted">{ageStr(Date.now() - p.t)}</span>
+        <span className={cn("num shrink-0 text-2xs font-medium", postTone(Date.now() - p.t))}>{ageStr(Date.now() - p.t)}</span>
       </a>
     ))}
     <a href="#/x" className="block px-3 py-2 text-sm text-accent hover:bg-paper-3">Open X tracker ›</a>

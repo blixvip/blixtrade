@@ -10,6 +10,7 @@ import { Isolate } from "@/components/ui/isolate";
 import { api } from "@/lib/api";
 import { thumb } from "@/lib/thumb";
 import { cn } from "@/lib/utils";
+import { postTone } from "@/lib/format";
 
 type Person = { handle: string; name: string; avatar: string | null; banner: string | null; bio: string; followers: number | null; following: number | null; posts: number | null; joined: number | null; verified: boolean; verifiedType: string | null };
 type Seen = { seen?: number; gone?: string; missing?: boolean; reason?: string; retry?: boolean };
@@ -153,7 +154,7 @@ function Post({ c }: { c: Extract<Card, { kind: "post" }> }) {
           <div className="num mt-0.5 truncate text-sm text-muted">@{a?.handle || c.handle}{a?.followers != null ? <> · <span className="text-ink-2">{n(a.followers)}</span> followers</> : null}</div>
         </div>
         <span className="flex shrink-0 items-center gap-2 pt-0.5 text-sm text-muted">
-          {c.t ? <span className="num" title={new Date(c.t).toLocaleString()}>{when(c.t)}</span> : null}
+          {c.t ? <span className={cn("num font-medium", postTone(Date.now() - c.t))} title={new Date(c.t).toLocaleString()}>{when(c.t)}</span> : null}
           <XMark className="size-4 text-ink-2" />
         </span>
       </div>

@@ -9,7 +9,7 @@ import { toast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post } from "@/lib/api";
 import { usePoll } from "@/lib/coin";
-import { ageStr, compact, pct, safeHref, shortAddr, tone } from "@/lib/format";
+import { ageStr, compact, pct, postTone, safeHref, shortAddr, tone } from "@/lib/format";
 import { useTrade } from "@/lib/mode";
 import { trade } from "@/lib/trade";
 import { cn, store } from "@/lib/utils";
@@ -100,7 +100,7 @@ function PostCard({ p, coins, live }: { p: XPost; coins: Resp["coins"]; live: Re
             <b className="truncate font-semibold text-ink">{author.name}</b>
             <span className="truncate text-muted">@{author.handle}</span>
             <span className="text-muted">·</span>
-            <a href={`https://x.com/${p.handle}/status/${p.id}`} target="_blank" rel="noopener noreferrer" className="num shrink-0 text-muted hover:underline" title={new Date(p.t).toLocaleString()}>{ageStr(Date.now() - p.t)}</a>
+            <a href={`https://x.com/${p.handle}/status/${p.id}`} target="_blank" rel="noopener noreferrer" className={cn("num shrink-0 font-medium hover:underline", postTone(Date.now() - p.t))} title={new Date(p.t).toLocaleString()}>{ageStr(Date.now() - p.t)}</a>
           </div>
           {p.data.replyTo && !shown && <p className="text-xs text-muted">Replying to <a href={`https://x.com/${p.data.replyTo}`} target="_blank" rel="noopener noreferrer" className="text-accent">@{p.data.replyTo}</a></p>}
           <div className="mt-1"><Rich text={text} mints={p.mints} /></div>
