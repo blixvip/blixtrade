@@ -25,6 +25,7 @@ import * as sol from "./solana.js";
 import * as wallets from "./wallets.js";
 import { onLiveTrade, onPoolLedger, feed as liveFeed, live as liveStats } from "./livetrades.js";
 import * as images from "./images.js";
+import { supplyOf } from "./jup.js";
 import { handleOf } from "./fomo.js";
 import { pumpProfile } from "./walletpage.js";
 import { nameOf as coinName } from "./coinindex.js";
@@ -253,27 +254,37 @@ function fromLive(mint, s, solAmt, buy, x = {}) {
 // cap already carries it). Tokens come in whole tokens from the live feeds; the chain reader's may be raw units
 // (six decimals), so both readings are tried and the one in a believable range wins, nearest the cap on record.
 // (The user, 2026-10-12: "showing false information and a wrong market cap".)
-const capFromFill = (sol, tokens, supply, solUsd, near = null) => {
+// A coin that is not a pump.fun one (a tokenized stock, say: 3 SOL bought 27 HIMS) has nothing like a 1B supply:
+// its supply comes from Jupiter (jup.js, cached); unknown, the cap on record stands, and with none the cap is left
+// blank rather than invented. A reading that lands more than 4x from the cap on record is not believed either.
+const capFromFill = (sol, tokens, supply, solUsd, near = null, mint = null) => {
   if (!(sol > 0) || !(tokens > 0) || !(solUsd > 0)) return null;
-  const sup = supply > 0 ? supply : 1e9;
-  const picks = [tokens, tokens / 1e6].map((tk) => (sol / tk) * solUsd * sup).filter((c) => c >= 300 && c <= 5e10);
-  if (!picks.length) return null;
-  return near > 0 ? picks.sort((a, b) => Math.abs(Math.log(a / near)) - Math.abs(Math.log(b / near)))[0] : picks[0];
+  let sup = supply > 0 ? supply : null;
+  if (!sup && mint && !mint.endsWith("pump")) { sup = supplyOf(mint); if (!(sup > 0)) return near > 0 ? near : null; }
+  sup = sup || 1e9;
+  let picks = [tokens, tokens / 1e6].map((tk) => (sol / tk) * solUsd * sup).filter((c) => c >= 300 && c <= 5e10);
+  if (near > 0) picks = picks.filter((c) => Math.abs(Math.log(c / near)) <= Math.log(4)).sort((a, b) => Math.abs(Math.log(a / near)) - Math.abs(Math.log(b / near)));
+  return picks[0] ?? (near > 0 ? near : null);
 };
+function fromLive(mint, s, solAmt, buy, x = {}) {
+  const user = x.user;
+  if (!user || !tracked.has(user)) return;
+  const solUsd = liveFeed.solUsd || 150;
+  const supply = s.supply > 0 ? s.supply : 1e9;
   wtStats.live++; wtStats.lastLive = now();
   health.ok("wtrack");
+  // The live feed's cap (SOL) is already on the coin's supply; it is the fallback when the trade's tokens are unknown.
+  const onRecord = s.mc > 0 ? s.mc * solUsd : null;
   record({ wallet: user, sig: x.sig || `slot:${x.slot ?? now()}:${mint}:${buy ? "b" : "s"}`, mint, side: buy ? "buy" : "sell", solAmt, usd: solAmt * solUsd, tokens: x.tokens ?? null,
-    mcUsd: capFromFill(solAmt, x.tokens, supply, solUsd, onRecord) ?? onRecord, t: now(), src: s.pool ? "pool" : "curve" });
+    mcUsd: capFromFill(solAmt, x.tokens, supply, solUsd, onRecord, mint) ?? onRecord, t: now(), src: s.pool ? "pool" : "curve" });
 }
 
 // A swap the chain reader decoded (engine.js bus "walletTrade"): { wallet: row, trade: { mint, side, tokens, sol, usd, t, sig } }.
-  // The live feed's cap (SOL) is already on the coin's supply; it is the fallback when the trade's tokens are unknown.
-  const onRecord = s.mc > 0 ? s.mc * solUsd : null;
 export function fromEngine(ev) {
   const a = ev?.wallet?.address, tr = ev?.trade;
   if (!a || !tr?.sig || !tracked.has(a)) return;
   const near = mcOf(tr.mint), sup = liveStats.get(tr.mint)?.supply;
-  if (record({ wallet: a, sig: tr.sig, mint: tr.mint, side: tr.side, solAmt: tr.sol, usd: tr.usd ?? null, tokens: tr.tokens ?? null, mcUsd: capFromFill(tr.sol, tr.tokens, sup, liveFeed.solUsd || 150, near) ?? near, t: tr.t || now(), src: "chain" })) {
+  if (record({ wallet: a, sig: tr.sig, mint: tr.mint, side: tr.side, solAmt: tr.sol, usd: tr.usd ?? null, tokens: tr.tokens ?? null, mcUsd: capFromFill(tr.sol, tr.tokens, sup, liveFeed.solUsd || 150, near, tr.mint) ?? near, t: tr.t || now(), src: "chain" })) {
     wtStats.chain++; wtStats.lastChain = now();
   }
 }
@@ -482,18 +493,21 @@ export function start(emitFn) {
     try {
       const upd = db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?");
       for (const r of db.prepare("SELECT id, mint, sol, tokens, mc_usd FROM wt_feed WHERE t > ? AND sol > 0 AND tokens > 0 AND src != 'history'").all(now() - FEED_KEEP_DAYS * 86400_000)) {
-        const c = capFromFill(r.sol, r.tokens, liveStats.get(r.mint)?.supply, liveFeed.solUsd, r.mc_usd);
+        // Against the cap on record for the coin (the index), never the row's own figure, which may be the wrong one.
+        const c = capFromFill(r.sol, r.tokens, liveStats.get(r.mint)?.supply, liveFeed.solUsd, mcOf(r.mint), r.mint);
         if (c && (r.mc_usd == null || Math.abs(Math.log(c / r.mc_usd)) > 0.03)) upd.run(c, r.id);
       }
     } catch (e) { logEvent("error", `wallet tracker caps: ${e.message}`); }
   };
   { const t = setTimeout(() => fixCaps(), 20_000); t.unref?.(); }
-  // Rows kept before caps came from the fill: a week's worth get theirs once (whole-token reading, believable range).
-  try {
-    const upd = db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?");
-    for (const r of db.prepare("SELECT id, mint, sol, tokens, mc_usd FROM wt_feed WHERE t > ? AND sol > 0 AND tokens > 0 AND src != 'history'").all(now() - FEED_KEEP_DAYS * 86400_000)) {
-      const c = capFromFill(r.sol, r.tokens, liveStats.get(r.mint)?.supply, liveFeed.solUsd || 150, r.mc_usd);
-      if (c && (r.mc_usd == null || Math.abs(Math.log(c / r.mc_usd)) > 0.03)) upd.run(c, r.id);
-    }
-  } catch (e) { logEvent("error", `wallet tracker caps: ${e.message}`); }
+  const prune = () => {
+    try {
+      db.prepare("DELETE FROM wt_feed WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
+      db.prepare("DELETE FROM wt_transfers WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
+    } catch (e) { logEvent("error", `wallet tracker prune: ${e.message}`); }
+  };
+  timers.push(setTimeout(prune, 60_000), setInterval(prune, 6 * 3600_000));
+  const sweep = () => { if (tracked.size) confirmSweep().catch(() => {}); };
+  timers.push(setInterval(sweep, 10_000));
+  for (const t of timers) t.unref?.();
 }
