@@ -7,11 +7,17 @@ import { assertBackupSpace, freeBytes } from './storage-guard.mjs';
 
 const [src, dest] = process.argv.slice(2);
 if (!src || !dest) { console.error("usage: backup.mjs <database> <copy>"); process.exit(2); }
+const partial = `${dest}.${process.pid}.partial`;
 try {
   assertBackupSpace(fs.statSync(src).size, freeBytes(path.dirname(dest)));
-  if (fs.existsSync(dest)) fs.rmSync(dest);
-  const db = new DatabaseSync(src);
-  db.exec("PRAGMA busy_timeout = 15000");
-  db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
-  db.close();
-} catch (e) { console.error(e.message); process.exit(1); }
+  const db = new DatabaseSync(src, { readOnly: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 15000");
+    db.exec(`VACUUM INTO '${partial.replace(/'/g, "''")}'`);
+  } finally { db.close(); }
+  fs.renameSync(partial, dest);
+} catch (e) {
+  // Only this run's incomplete copy. A previously completed destination survives.
+  try { fs.rmSync(partial, { force: true }); } catch {}
+  console.error(e.message); process.exit(1);
+}

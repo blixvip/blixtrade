@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { superviseCheckpoint } from './checkpoint-watch.js';
+import { createEventLogger } from './event-log.js';
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -184,9 +185,14 @@ export const q = {
   event: db.prepare("INSERT INTO events (t, kind, text) VALUES (?, ?, ?)"),
 };
 
-export function logEvent(kind, text) {
-  q.event.run(Date.now(), kind, text);
-}
+const eventLogger = createEventLogger((t, kind, text) => {
+  // A diagnostic write must never hold every live feed behind a 15-second lock wait.
+  const timeout = db.prepare('PRAGMA busy_timeout').get().timeout;
+  db.exec('PRAGMA busy_timeout=0');
+  try { q.event.run(t, kind, text); } finally { db.exec(`PRAGMA busy_timeout=${timeout}`); }
+});
+dbStats.eventLog = eventLogger.stats;
+export const logEvent = eventLogger.log;
 
 export const json = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
@@ -254,9 +260,12 @@ export function backupInBackground(keep = 2) {
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code !== 0) return reject(new Error(err.trim().slice(0, 200) || `backup exited with ${code}`));
-      for (const b of backups().slice(keep)) fs.rmSync(b.file);
-      meta.set("backup_t", Date.now());
-      resolve({ file, bytes: fs.statSync(file).size });
+      try {
+        const bytes = fs.statSync(file).size;
+        meta.set("backup_t", Date.now());
+        for (const b of backups().slice(keep)) fs.rmSync(b.file);
+        resolve({ file, bytes });
+      } catch (error) { reject(error); }
     });
   }).finally(() => { backingUp = null; });
   return backingUp;

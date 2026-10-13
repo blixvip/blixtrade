@@ -410,3 +410,119 @@ header .btn { white-space: nowrap; }
   #copyBtn, #dlBtn { display: none; }   /* both stay in the Export tab */
   header .btn { padding-left: 10px; padding-right: 10px; }
 }
+
+/* ==== Forge v2 skin (2026-10-13, the user: "make it a lot better") =========================================
+   Blix's terminal look, as on the trade panels: 6 px corners, hairline rules, small uppercase labels, one white
+   primary button, quiet greys so the picture is the only colour. Overrides the rules above, kept in one block. */
+:root {
+  --bg: oklch(15% 0 0); --panel: oklch(18.5% 0 0); --panel2: oklch(22.5% 0 0); --panel3: oklch(26% 0 0);
+  --line: oklch(25% 0 0); --line2: oklch(31% 0 0); --txt: oklch(96% 0 0); --dim: oklch(70% 0 0); --dim2: oklch(55% 0 0);
+  --sel: oklch(88% 0 0); --selbg: oklch(28% 0 0); --rail: 64px; --panelw: 312px; --dock: 236px; --r: 6px;
+}
+body { font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif; }
+
+/* top bar */
+#app { grid-template-rows: 48px 1fr; }
+header { gap: 10px; padding: 0 12px; background: var(--panel); }
+.brand { font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; }
+.brand b { font-weight: 700; color: var(--dim2); }
+#presetChips { display: flex; gap: 2px; padding: 3px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+#presetChips .chip { padding: 4px 10px; border-radius: 5px; font-size: 12px; font-weight: 500; border: 0; color: var(--dim2); }
+#presetChips .chip:hover { background: var(--panel2); color: var(--txt); }
+#presetChips .chip[aria-pressed="true"] { background: var(--panel3); color: var(--txt); box-shadow: inset 0 0 0 1px var(--line2); }
+.iconbtn { width: 30px; height: 30px; border-radius: var(--r); font-size: 15px; }
+.btn { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 13px; border-radius: var(--r); font-size: 12.5px; font-weight: 500;
+  background: var(--panel2); border: 1px solid var(--line2); color: var(--txt); transition: background-color .12s, border-color .12s; }
+.btn:hover { background: var(--panel3); border-color: oklch(38% 0 0); }
+.btn.pri, .btn.go { background: var(--txt); border-color: var(--txt); color: oklch(14% 0 0); font-weight: 650; }
+.btn.pri:hover, .btn.go:hover { background: #fff; border-color: #fff; }
+.btn.wide { height: 36px; justify-content: center; font-size: 13px; }
+.badge { border-radius: 4px; }
+
+/* rail */
+#rail { gap: 3px; padding: 8px 0; background: var(--panel); }
+.tool { position: relative; padding: 8px 0 6px; border-radius: var(--r); gap: 4px; font-size: 8.5px; font-weight: 600; letter-spacing: .04em; color: var(--dim2); }
+.tool svg { width: 19px; height: 19px; stroke-width: 1.7; }
+.tool:hover { background: var(--panel2); color: var(--txt); }
+.tool[aria-pressed="true"] { background: var(--panel3); color: var(--txt); }
+.tool[aria-pressed="true"]::before { content: ""; position: absolute; left: -4px; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--txt); }
+
+/* panel */
+#panel { padding: 16px 14px 32px; scrollbar-gutter: stable; }
+.sec { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 16px; }
+.shead { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--dim); margin-bottom: 10px; }
+.hint { font-size: 12px; color: var(--dim2); line-height: 1.55; }
+.chip { border-radius: var(--r); padding: 6px 10px; font-size: 12px; font-weight: 500; }
+.chip[aria-pressed="true"] { background: var(--panel3); border-color: var(--line2); }
+.g2, .g3 { gap: 6px; }
+.g2 > .chip, .g3 > .chip { border: 1px solid var(--line2); background: var(--panel2); color: var(--txt); text-align: center; }
+.g2 > .chip:hover, .g3 > .chip:hover { background: var(--panel3); }
+.g2 > .chip[aria-pressed="true"], .g3 > .chip[aria-pressed="true"] { background: var(--txt); border-color: var(--txt); color: oklch(14% 0 0); }
+
+/* controls */
+.sl { gap: 5px; }
+.sl > .lab { font-size: 12px; }
+input[type=range] { height: 18px; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: var(--line2); }
+input[type=range]::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -5px; background: var(--txt); box-shadow: 0 1px 4px #0009; }
+input[type=text], input[type=number], select, textarea { background: var(--bg); border-radius: var(--r); padding: 7px 9px; border-color: var(--line2); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: oklch(55% 0 0); }
+.remSearch, .findq { height: 34px; border-radius: var(--r); background: var(--bg); padding: 0 11px; font-size: 12.5px; }
+.findprompt { border-radius: var(--r); background: var(--bg); padding: 9px 11px; font-size: 12.5px; }
+
+/* backgrounds: three across, the name on hover, a white ring on the one in use */
+.remGrid, #bgGrid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.bgc { border-radius: var(--r); border: 0; box-shadow: inset 0 0 0 1px var(--line2); background: var(--panel2); }
+.bgc img, .bgc canvas { transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.bgc:hover img, .bgc:hover canvas { transform: scale(1.05); }
+.bgc::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; box-shadow: inset 0 0 0 1px #ffffff14; }
+.bgc:hover::after { box-shadow: inset 0 0 0 1px #ffffff55; }
+.bgc[aria-pressed="true"]::after { box-shadow: inset 0 0 0 2px var(--txt); }
+.remName { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 6px 5px; font-size: 10.5px; font-weight: 600; line-height: 1.2; text-align: left;
+  color: #fff; background: linear-gradient(transparent, #000c); opacity: 0; transition: opacity .15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.bgc:hover .remName, .bgc[aria-pressed="true"] .remName { opacity: 1; }
+.palc { border-radius: 5px; width: 22px; height: 22px; }
+
+/* looks: square previews, the name over the bottom of the picture */
+#lookGrid { gap: 8px; }
+.lookc { position: relative; border-radius: 8px; border: 0; background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line2); }
+.lookc canvas { aspect-ratio: 1; object-fit: cover; }
+.lookc b, .lookc i { position: absolute; left: 0; right: 0; padding-left: 9px; padding-right: 9px; }
+.lookc b { bottom: 0; font: 650 12px Inter, "Segoe UI", system-ui, sans-serif; color: #fff; padding-top: 24px; padding-bottom: 9px; background: linear-gradient(transparent, #000b); text-shadow: 0 1px 2px #000; }
+.lookc b:not(:last-child) { padding-bottom: 22px; }
+.lookc i { bottom: 0; font: 500 10.5px Inter, "Segoe UI", system-ui, sans-serif; color: #ffffffb8; padding-bottom: 7px; }
+.lookc:hover { box-shadow: inset 0 0 0 1px #ffffff66; }
+.lookc[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--txt); }
+.tpc, .fontc, .aurac, .packc { border-radius: var(--r); background: var(--bg); }
+
+/* stage */
+#stage { background: var(--bg) radial-gradient(oklch(23% 0 0) 1px, transparent 1.2px) 0 0 / 22px 22px; }
+#hud { left: 50%; transform: translateX(-50%); bottom: 14px; gap: 2px; padding: 4px; border-radius: 9px; background: color-mix(in oklch, var(--panel) 92%, transparent);
+  backdrop-filter: blur(8px); box-shadow: 0 10px 30px -12px #000c; }
+#hud .chip { padding: 4px 8px; }
+#hud b { min-width: 42px; text-align: center; }
+#toast { bottom: 64px; border-radius: 8px; padding: 9px 14px; box-shadow: 0 12px 34px -10px #000d; font-weight: 500; }
+#drop { border-radius: 12px; padding: 26px 24px 22px; }
+#drop .big { font-size: 16px; }
+
+/* layers */
+#layers { grid-template-rows: 44px auto 1fr auto; }
+.ldhead { padding: 0 8px 0 14px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--dim); }
+#layerList { padding: 8px; gap: 4px; }
+.lrow { grid-template-columns: 16px 40px 1fr; gap: 9px; padding: 6px 8px 6px 4px; border-radius: 8px; }
+.lrow:hover { background: var(--panel2); }
+.lrow[aria-pressed="true"] { background: var(--panel3); border-color: var(--line2); }
+.lrow canvas { width: 40px; height: 40px; border-radius: var(--r); box-shadow: inset 0 0 0 1px var(--line2); }
+.lname { font-size: 12.5px; font-weight: 600; }
+.lmeta { font-size: 10.5px; }
+#layerProps { padding: 12px; gap: 10px; }
+#layerProps .g4 { gap: 4px; }
+#layerProps .chip { padding: 6px 0; border: 1px solid var(--line2); background: var(--panel2); color: var(--txt); font-size: 11.5px; }
+#layerProps .chip:hover { background: var(--panel3); }
+#layerProps .chip[aria-pressed="true"] { background: var(--txt); color: oklch(14% 0 0); border-color: var(--txt); }
+@media (max-width: 1240px) { :root { --panelw: 276px; --dock: 210px; } }
+@media (max-width: 800px) { :root { --panelw: 232px; --rail: 58px; } }
+#packGrid { grid-template-columns: 1fr 1fr; gap: 8px; }
+.packc { border-radius: 8px; border: 0; box-shadow: inset 0 0 0 1px var(--line2); }
+.packc b { padding-top: 6px; color: var(--txt); font-size: 11.5px; }
+.tool { font-size: 7.8px; letter-spacing: 0; }

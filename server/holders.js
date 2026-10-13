@@ -106,7 +106,11 @@ const isPartial = (b) => b.seeded ? b.over > 0 : !b.genesis || b.unknownSells > 
 export function holdersFor(mint, { top = 10 } = {}) {
   const b = books.get(mint);
   if (!b) return null;
-  if (b.sum && now() - b.sumT < 400) return b.sum;
+  // Every change to the ledger clears b.sum, so a picture still there is current (kept up to 10 s for the creator
+  // and supply lookups it also reads). It used to be rebuilt (every wallet scanned and sorted) every 400 ms whether
+  // or not anything traded, for each coin in the 200 ms live push: 2 s of the radar's thread per 40 s (2026-10-12).
+  const fits = (s) => (b.sumTop || 10) >= top ? (top < s.top.length ? { ...s, top: s.top.slice(0, top) } : s) : null;
+  if (b.sum && now() - b.sumT < 10_000) { const s = fits(b.sum); if (s) return s; }
   const creator = launchIndex.get(mint)?.creator || null;
   const held = [];
   let holders = 0;
@@ -131,7 +135,7 @@ export function holdersFor(mint, { top = 10 } = {}) {
     dev: creator ? { wallet: creator, pct: dev ? pct(dev.b) : 0, maxPct: dev ? pct(dev.max) : 0, sol: dev ? +(dev.in - dev.out).toFixed(3) : 0, sold: devSold, seen: Boolean(dev) } : null,
     snipers: b.genesis ? group(b.snipers) : null, bundle: b.genesis ? group(b.bundle) : null,
   };
-  b.sumT = now();
+  b.sumT = now(); b.sumTop = top;
   return b.sum;
 }
 
@@ -188,7 +192,7 @@ async function saveState() {
     let n = 0;
     for (const b of books.values()) {
       if (t - b.last >= QUIET) continue;
-      out.push(JSON.stringify({ ...b, sum: undefined, seeding: undefined, seedFail: undefined, bal: [...b.bal], snipers: [...b.snipers], bundle: [...b.bundle] }));
+      out.push(JSON.stringify({ ...b, sum: undefined, sumTop: undefined, seeding: undefined, seedFail: undefined, bal: [...b.bal], snipers: [...b.snipers], bundle: [...b.bundle] }));
       if (++n % 40 === 0) await new Promise((go) => setImmediate(go));
     }
     await fs.promises.writeFile(STATE_FILE + ".tmp", `{"t":${t},"books":[${out.join(",")}]}`);

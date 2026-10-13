@@ -15,6 +15,7 @@ export function createFeedHistory(db, { maxRows = 50_000 } = {}) {
   const insert = db.prepare('INSERT INTO feed_events(id,source,kind,mint,sender,t,timeline,received,rev,body,fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
   const update = db.prepare('UPDATE feed_events SET body=?,fingerprint=?,rev=? WHERE id=?');
   const meta = db.prepare('SELECT * FROM feed_meta WHERE id=1');
+  const stored = new Map();   // id -> fingerprint already in the table (or dropped as seen)
   const unpack = r => ({ ...JSON.parse(r.body), id: r.id, source: r.source, seq: r.seq, t: r.t, timelineAt: r.timeline, receivedAt: r.received });
   function ingest(source, items, received = Date.now()) {
     if (!['fomo', 'pump'].includes(source) || !Array.isArray(items)) return;
@@ -34,14 +35,20 @@ export function createFeedHistory(db, { maxRows = 50_000 } = {}) {
     let revision = meta.get().revision;
     let timeline = db.prepare('SELECT timeline FROM feed_events ORDER BY seq DESC LIMIT 1').get()?.timeline || 0;
     let added = false;
+    const done = [];   // into `stored` once the transaction has committed
     db.exec('BEGIN');
     try {
       for (const item of candidates) {
-        const old = find.get(item.id);
-        if (!old && seen.get(item.id)) continue;
         // Quote/engagement refreshes belong to the shared quote view, not the conversation journal.
         const fingerprint = JSON.stringify([item.comment, item.media, item.quoted, item.user, item.pinned, item.text, item.notes]);
-        if (old?.fingerprint === fingerprint) continue;
+        // Already stored as it is (or deliberately dropped): no database read. Every pump.fun refresh re-sent the whole
+        // list with each post's replies, and each was read back and compared row by row: 1.5 s of the radar's thread
+        // per 40 s (2026-10-12 profile).
+        if (stored.get(item.id) === fingerprint) continue;
+        const old = find.get(item.id);
+        if (!old && seen.get(item.id)) { done.push([item.id, fingerprint]); continue; }
+        if (old?.fingerprint === fingerprint) { done.push([item.id, fingerprint]); continue; }
+        done.push([item.id, fingerprint]);
         const body = { ...item, late: old ? JSON.parse(old.body).late : item.t < timeline, updates: undefined };
         if (old) { update.run(JSON.stringify(body), fingerprint, ++revision, item.id); continue; }
         timeline = Math.max(timeline, item.t);
@@ -60,6 +67,8 @@ export function createFeedHistory(db, { maxRows = 50_000 } = {}) {
       }
       db.prepare('UPDATE feed_meta SET revision=? WHERE id=1').run(revision);
       db.exec('COMMIT');
+      if (stored.size > 200_000) stored.clear();
+      for (const [id, f] of done) stored.set(id, f);
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
   function page(params = {}) {

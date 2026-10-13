@@ -16,6 +16,51 @@ const B = "BTmCme13XXrD3VLxXFChL9VnmicJ5PjkVUpAsjrooEYh";
 const C = "9VQ3dtwAxUAxNPdD86ExhC1XsL1hiUcqEvzS4sAhUU1A";
 const MINT = "GTNHLKQWKZHaHpd6PjfMgfFZUDEuCviwXMwYbCcepump";
 
+test("developer labels and notes persist without leaking between members or being erased by re-add", () => {
+  const who = 'dev-organizer@example.com';
+  wt.add(who, {address:A,name:'Builder',kind:'dev',notes:'  Watch launches  '});
+  wt.add(who, {address:A,grp:2});
+  assert.equal(wt.list(who)[0].kind,'dev');assert.equal(wt.list(who)[0].notes,'Watch launches');
+  assert.equal(wt.list('other-organizer@example.com').length,0);
+  wt.update(who,A,{kind:'trader',notes:''});assert.equal(wt.list(who)[0].kind,'trader');assert.equal(wt.list(who)[0].notes,null);
+  wt.update(who,A,{kind:'dev',notes:'x'.repeat(900)});assert.equal(wt.list(who)[0].notes.length,400);
+  wt.remove(who,A);
+});
+
+test("named groups are private, validate names and fall back safely on removal", () => {
+  const who='groups@example.com',other='groups-other@example.com';
+  const g=wt.saveGroup(who,{name:'Favourite devs'});assert.equal(g.id,4);
+  assert.equal(wt.groupList(other).some(x=>x.name===g.name),false);
+  wt.add(who,{address:A,name:'Builder',grp:g.id,kind:'dev'});
+  assert.equal(wt.overview(who).groupLabels.find(x=>x.id===4).name,g.name);
+  assert.equal(wt.list(who)[0].grp,4);
+  assert.throws(()=>wt.saveGroup(who,{name:'favourite DEVS'}),/already/);
+  assert.throws(()=>wt.saveGroup(who,{name:' '}),/name/);
+  assert.throws(()=>wt.removeGroup(other,g.id),/not found/i);
+  wt.saveGroup(who,{id:4,name:'Builders'});assert.equal(wt.groupList(who).find(x=>x.id===4).name,'Builders');
+  wt.removeGroup(who,4);assert.equal(wt.list(who)[0].grp,1);
+  assert.throws(()=>wt.removeGroup(who,1),/Default/);
+  wt.remove(who,A);
+});
+
+test("bulk organizing validates the whole selection before changing any wallet",()=>{
+ const who='bulk@example.com';wt.add(who,{address:A,name:'A'});wt.add(who,{address:B,name:'B'});
+ const g=wt.saveGroup(who,{name:'Watch closely'});
+ assert.throws(()=>wt.organize(who,{addresses:[A,C],grp:g.id}),/Not on your list/);
+ assert.equal(wt.list(who).find(x=>x.address===A).grp,1);
+ assert.throws(()=>wt.organize(who,{addresses:[A],grp:12}),/group/i);
+ assert.equal(wt.organize(who,{addresses:[A,B,A],grp:g.id}).updated,2);
+ assert.ok(wt.list(who).every(x=>x.grp===g.id));wt.remove(who,A);wt.remove(who,B);
+});
+
+test("tracker export/import preserves developer classification, notes and custom group names",()=>{
+ const who='export-dev@example.com',copy='import-dev@example.com',g=wt.saveGroup(who,{name:'Builders'});
+ wt.add(who,{address:A,name:'Builder',kind:'dev',notes:'Follow launches',grp:g.id});
+ wt.importText(copy,JSON.stringify(wt.exportList(who)));const w=wt.list(copy)[0];
+ assert.equal(w.kind,'dev');assert.equal(w.notes,'Follow launches');assert.equal(wt.groupList(copy).find(x=>x.id===w.grp).name,'Builders');
+ wt.remove(who,A);wt.remove(copy,A);
+});
+
 test("a member's list: add, name, emoji, colour, group; edit; the chain reader follows it; remove lets it go", () => {
   const w = wt.add("alice@example.com", { address: A, name: "  Bot   whale ", emoji: "🐋", color: "blue", grp: 2 });
   assert.equal(w.name, "Bot whale");

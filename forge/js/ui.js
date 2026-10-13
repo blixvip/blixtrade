@@ -90,7 +90,7 @@ function remilioGrid(list, id = 'remGrid') {
   return el('div', { id, class: 'remGrid' }, ...list.map(b => el('button', {
     class: 'bgc rem', title: b.name, 'aria-pressed': doc.bg.kind === 'image' && doc.bg.remilio === b.id,
     onclick: () => pickRemilio(b),
-  }, el('img', { src: `/forge/thumb/${b.id}.webp`, alt: '', loading: 'lazy', draggable: 'false' }))),
+  }, el('img', { src: `/forge/thumb/${b.id}.webp`, alt: '', loading: 'lazy', draggable: 'false' }), el('span', { class: 'remName' }, b.name))),
   list.length ? null : el('div', { class: 'hint', style: 'grid-column:1/-1' }, 'No background by that name.'));
 }
 // A dozen of them for the Looks tab, drawn once a session.
@@ -1037,7 +1037,7 @@ const PANELS = {
     return [
       sec('Pick a look',
         el('div', { class: 'hint', style: 'margin-bottom:9px' },
-          'Each one is previewed on your photo. Click to apply — then fine-tune in Aura, Backdrop or Style.'),
+          'Each one is previewed on your photo. Click to apply — then fine-tune in Aura, Backgrounds or Style.'),
         grid),
       sec('Remilio backgrounds',
         el('div', { class: 'hint', style: 'margin-bottom:8px' }, `The subject on one of the ${REMILIO.length} template backgrounds; the aura and placement stay.`),

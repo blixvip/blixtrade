@@ -100,11 +100,20 @@ async function run() {
     }
     for (const name of FILES) { const src = path.join(DATA, name); if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, name)); }
     for (const dir of DIRS) { const src = path.join(DATA, dir); if (fs.existsSync(src)) fs.cpSync(src, path.join(tmp, dir), { recursive: true }); }
-    const archive = path.join(OUT, `blix-${stamp}.tgz.enc`);
+    const archive = path.join(OUT, `blix-${stamp}.tgz.enc`), partial = `${archive}.${process.pid}.partial`;
     // tar | gzip | openssl in one pipe: the plain archive never touches the disk.
-    execFileSync("sh", ["-c", `tar -C "${tmp}" -cf - . | gzip -6 | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:${KEY}" -out "${archive}"`], { stdio: ["ignore", "inherit", "inherit"] });
-    const size = fs.statSync(archive).size;
-    if (size < 1000) throw new Error("archive came out empty");
+    let size;
+    try {
+      // pipefail catches tar/gzip errors too; otherwise openssl could successfully
+      // encrypt a truncated stream and the job would publish it as a good backup.
+      execFileSync("bash", ["-o", "pipefail", "-c", 'tar -C "$BLIX_BACKUP_STAGE" -cf - . | gzip -6 | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$BLIX_BACKUP_KEY" -out "$BLIX_BACKUP_ARCHIVE"'], {
+        stdio: ["ignore", "inherit", "inherit"], timeout: 15 * 60_000,
+        env: { ...process.env, BLIX_BACKUP_STAGE: tmp, BLIX_BACKUP_KEY: KEY, BLIX_BACKUP_ARCHIVE: partial },
+      });
+      size = fs.statSync(partial).size;
+      if (size < 1000) throw new Error("archive came out empty");
+      fs.renameSync(partial, archive);
+    } catch (error) { try { fs.rmSync(partial, { force: true }); } catch {} throw error; }
     log("wrote", archive, `${(size / 1e6).toFixed(1)} MB`);
     // Local keep: KEEP_DAYS, and never more than the newest KEEP_LOCAL archives.
     const cutoff = Date.now() - KEEP_DAYS * 86400_000;
