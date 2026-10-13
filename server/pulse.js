@@ -276,17 +276,49 @@ export const migStats = { calls: 0, moved: 0, last: 0, paused: 0 };
 // A bonded coin whose page is open is priced with them, Pulse open or not (coin.js calls this while it builds).
 const focusMints = new Map();   // mint -> last asked
 export const focusPrice = (mint) => { focusMints.set(mint, now()); };
+// A coin the open page needs priced but neither Jupiter nor DexScreener could: GeckoTerminal's token price, at most
+// one coin every 4 s and each coin every 20 s (its free allowance is shared with discovery: gtgate.js).
+const geckoAskedAt = new Map();
+let geckoLast = 0;
+async function priceFromGecko(m) {
+  if (now() - geckoLast < 4000 || now() - (geckoAskedAt.get(m) || 0) < 20_000) return null;
+  geckoLast = now(); geckoAskedAt.set(m, now());
+  if (geckoAskedAt.size > 500) for (const [k, t] of geckoAskedAt) if (now() - t > 10 * MIN) geckoAskedAt.delete(k);
+  try {
+    const j = await gtGet(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${m}`, { timeout: 6000, rank: "normal", keyed: false });
+    const a = j?.data?.attributes || {};
+    const circ = supplyOf(m);
+    const px = +a.price_usd;
+    // The chart's own scale first (Jupiter's circulating supply), then GeckoTerminal's own cap, then 1B for pump.fun.
+    const mc = px > 0 && circ ? px * circ : +a.market_cap_usd > 0 ? +a.market_cap_usd : px > 0 && /pump$/.test(m) ? px * 1e9 : +a.fdv_usd > 0 ? +a.fdv_usd : null;
+    return mc > 0 ? mc : null;
+  } catch { return null; }
+}
 async function priceMigrated() {
   for (const [m, t] of focusMints) if (now() - t > 15_000) focusMints.delete(m);
   const pulseOpen = now() - cache.t <= 15_000;
   // Coins the chain priced in the last 20 s need no Jupiter call (a quiet pool falls back to it).
   const ids = [...new Set([...focusMints.keys(), ...(pulseOpen ? migMints : [])])].filter((m) => !chainFresh(m)).slice(0, 50);
-  if (migBusy || now() < migPause || !ids.length) return;
+  if (migBusy || !ids.length) return;
+  // Jupiter cooling down (it refused, or the shared allowance deferred the read): the open pages are still priced
+  // from DexScreener and GeckoTerminal below. Before (2026-10-12) a refused Jupiter call skipped the fallbacks too, and
+  // with the shared limiter turning most background reads away an open bonded coin's price sat 7-30 minutes old.
+  const jupFree = now() >= migPause;
+  if (!jupFree && !focusMints.size && now() - migDexT < 8000) return;
   migBusy = true;
   try {
-    const got = await jupiterGet(`/price/v3?ids=${ids.join(",")}`, { timeout: 5000 });
-    migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes (one call, 50 coins, every ~6 s; 2.5 s hit 429s, 4 s a few an hour).
-    migStats.calls++; migStats.last = now();
+    let got = {};
+    if (jupFree) {
+      try {
+        got = (await jupiterGet(`/price/v3?ids=${ids.join(",")}`, { timeout: 5000 })) || {};
+        migPause = now() + 6000; // Leave room in the shared allowance for interactive quotes (one call, 50 coins, every ~6 s; 2.5 s hit 429s, 4 s a few an hour).
+        migStats.calls++; migStats.last = now();
+      } catch (e) {
+        // A real 429 rests 30 s; a read the shared limiter deferred (to keep room for trades) tries again in 6 s.
+        if (e.status === 429 && !e.deferred) { migPause = now() + 30_000; migStats.paused++; } else migPause = now() + 6000;
+        migStats.jupMissed = (migStats.jupMissed || 0) + 1;
+      }
+    }
     const out = [];
     for (const m of ids) {
       const usd = got[m]?.usdPrice;
@@ -312,8 +344,9 @@ async function priceMigrated() {
       if (circ || t) priceTick(m, mc);
       if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
     }
-    // A pool Jupiter cannot price yet (it indexes new pools within minutes): DexScreener's reading, at most
-    // every 8 s for up to 30 coins, so a just-bonded coin does not sit on a minutes-old price.
+    // A pool Jupiter cannot price yet (it indexes new pools within minutes), or Jupiter not asked or refused this
+    // round: DexScreener's reading, at most every 8 s for up to 30 coins (open pages first), so a coin does not sit
+    // on a minutes-old price.
     const missing = ids.filter((m) => !(got[m]?.usdPrice > 0) && now() - (migPx.get(m)?.t || 0) > 8000);
     if (missing.length && now() - migDexT > 8000) {
       migDexT = now();
@@ -325,6 +358,19 @@ async function priceMigrated() {
         migPx.set(m, { mcap: mc, liq: pr.liquidity?.usd ?? null, t: now(), src: "dex" });
         priceTick(m, mc);
         if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([m, Math.round(mc)]);
+      }
+    }
+    // An open coin still unpriced after both (DexScreener answers some PumpSwap pools with no cap at all: GIGA
+    // CasxAc…pump 2026-10-12, 71 trades in 5 minutes, price 30 minutes old on its page): GeckoTerminal, one at a time.
+    const stillOpen = [...focusMints.keys()].find((m) => now() - (migPx.get(m)?.t || 0) > 15_000 && !chainFresh(m));
+    if (stillOpen) {
+      const mc = await priceFromGecko(stillOpen);
+      if (mc) {
+        const prev = migPx.get(stillOpen);
+        migPx.set(stillOpen, { mcap: mc, t: now(), src: "gecko" });
+        priceTick(stillOpen, mc);
+        migStats.gecko = (migStats.gecko || 0) + 1;
+        if (!prev || Math.round(prev.mcap) !== Math.round(mc)) out.push([stillOpen, Math.round(mc)]);
       }
     }
     migStats.moved += out.length;

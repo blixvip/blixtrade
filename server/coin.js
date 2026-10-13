@@ -294,7 +294,9 @@ function build(mint, top) {
   let m5 = null;
   const ring = tapes.get(mint);
   const bonded = Boolean(t?.graduated) || (L?.progress ?? 0) >= 0.995;
-  if (bonded) focusPrice(mint);   // its pool price every few seconds while this page is open (pulse.js)
+  // Its market price every few seconds while this page is open (pulse.js): a bonded coin, and a curve coin the live
+  // feed is not hearing (a quiet one: FaukaqW…pump 2026-10-12 showed $0 and an empty header while Jupiter had $3K).
+  if (bonded || !curveLive(L, t)) focusPrice(mint);
   // The ring has every trade of the last five minutes (it has been hearing the coin that long): exact and live,
   // curve or pool. Otherwise the tracked figures (DexScreener's) for a bonded coin.
   const covered = ring?.trades.length && ring.since <= now() - FLOW_BUCKETS * BUCKET;
@@ -386,14 +388,14 @@ function build(mint, top) {
   const viaJup = holders?.source === "jupiter", viaChain = holders?.source === "chain";
   return {
     mint, symbol: t?.symbol || launchIndex.get(mint)?.symbol || coinIndex.nameOf(mint)?.symbol || null, name: t?.name || launchIndex.get(mint)?.name || coinIndex.nameOf(mint)?.name || null,
-    solUsd, live: curveLive(L, t), onCurve: Boolean(L) && !t?.graduated,
+    solUsd, live: curveLive(L, t), onCurve: (Boolean(L) || t?.dex === "pumpfun") && !t?.graduated,
     // Curve full, pool not trading yet: pump.fun is migrating it and trades fail meanwhile ({ since } or null).
     migrating: t?.graduated && t?.pair_created ? null : migrationOf(mint),
     // Live readings on the chart's level (candles.js levelNow), so the header and the chart's last candle agree.
     // Off the curve with no live price, the chart's newest close (seconds old while it is open) before the stored
     // DexScreener reading (minutes old: it showed $21K for a coin that had dumped to $2.4K).
     // While its chart is open the header shows what the chart shows: the fast feed, else the newest candle.
-    mcUsd: L?.suspect ? Math.round(L.mc) : fastMcUsd(mint) != null ? Math.round(fastMcUsd(mint)) : chartClose(mint) != null ? Math.round(chartClose(mint)) : curveLive(L, t) ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : (fastMcap(mint) != null ? Math.round(fastMcap(mint) * levelNow(mint)) : null) ?? (chartClose(mint) != null ? Math.round(chartClose(mint)) : null) ?? onScale(mint, t, t?.mcap) ?? (L ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : null),
+    mcUsd: L?.suspect ? Math.round(L.mc) : fastMcUsd(mint) != null ? Math.round(fastMcUsd(mint)) : chartClose(mint) != null ? Math.round(chartClose(mint)) : curveLive(L, t) ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : (fastMcap(mint) != null ? Math.round(fastMcap(mint) * levelNow(mint)) : null) ?? (chartClose(mint) != null ? Math.round(chartClose(mint)) : null) ?? (t?.mcap > 0 ? onScale(mint, t, t.mcap) : null) ?? (L ? Math.round(onCirc(mint, L.mc) * levelNow(mint)) : null),
     // How old the market cap above is: under a few seconds while it trades on the curve or the Pulse prices it.
     priceAgeMs: curveLive(L, t) ? now() - L.last : fastMcap(mint) != null ? 0 : t?.price_t ? now() - t.price_t : null,
     priceUsd: p.sol != null && solUsd ? p.sol * solUsd : t?.price ?? null,

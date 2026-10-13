@@ -315,6 +315,9 @@ export function applyPair(mint, p) {   // exported for test/migrated-column.test
   for (const l of links) if (/twitter|x\.com/i.test(`${l.type} ${l.url}`)) warmX(l.url);   // the X card, ahead of any hover (once per link)
   const t = q.getToken.get(mint);
   const mcap = p.marketCap || p.fdv || 0, liq = p.liquidity?.usd || 0;
+  // DexScreener lists some curve coins with no price at all (FaukaqW…pump 2026-10-12: price 0, cap 0, while Jupiter
+  // had it at $3K): a reading like that says nothing, and writing it set the coin's cap to $0 on every scan.
+  if (!(mcap > 0) && !(+p.priceUsd > 0)) return;
   // A pump.fun graduate's pool (migrated_at: the migration itself was seen) holds locked liquidity from the curve,
   // tens of SOL that nobody can pull: a reading with under $2K of liquidity or no market cap is DexScreener not
   // having indexed the pool yet (it said $1 / $0.97 liquidity for 10-16 minutes on 2026-10-11, then $1,962, then
