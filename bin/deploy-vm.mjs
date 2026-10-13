@@ -148,7 +148,7 @@ if (!NO_WEB && fs.existsSync(path.join(dist, "index.html"))) {
 // editor's own files by content. --no-web leaves it alone too. forge/setup.mjs fetches the runtime here first.
 if (!NO_WEB && fs.existsSync(path.join(ROOT, "forge", "index.html"))) {
   const FORGE_HEAVY = /^(vendor|models|bg|thumb|fonts)\//;
-  const walk = (dir, base = "") => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name), base + e.name + "/") : [base + e.name]);
+  const walk = (dir, base = "") => fs.readdirSync(dir).flatMap((n) => fs.statSync(path.join(dir, n)).isDirectory() ? walk(path.join(dir, n), base + n + "/") : [base + n]);   // statSync: follows linked folders
   const mine = walk(path.join(ROOT, "forge")).filter((f) => !/^(setup\.mjs|UPSTREAM)$/.test(f) && !/(^|\/)\./.test(f));
   const out = ssh(`cd ${REMOTE}/forge 2>/dev/null || exit 0; find . -type f -printf '%P %s\\n'; echo '--hashes--'; find . -type f -not -path './vendor/*' -not -path './models/*' -not -path './bg/*' -not -path './thumb/*' -not -path './fonts/*' -exec sh -c 'printf "%s " "$1"; tr -d "\\r" < "$1" | sha256sum | cut -c1-16' _ {} \\;`);
   const [sizes, hashes] = out.split("--hashes--");
