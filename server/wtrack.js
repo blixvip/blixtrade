@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS wt_transfers (
 CREATE UNIQUE INDEX IF NOT EXISTS wtt_sig ON wt_transfers(wallet, sig, COALESCE(mint, ''));
 CREATE INDEX IF NOT EXISTS wtt_t ON wt_transfers(t);
 `);
+// The wallet's picture (its pump.fun profile image), fetched once in the background; shown on every row of its trades.
+try { db.exec("ALTER TABLE wt_wallets ADD COLUMN pic TEXT"); } catch { /* already there */ }
 
 export const wtStats = { live: 0, chain: 0, transfers: 0, pushed: 0, lastLive: 0, lastChain: 0, dropped: 0, checked: 0 };
 let emit = () => {};
@@ -89,17 +91,17 @@ export function list(who) {
 }
 
 // Add (or edit, when already on the list). Nameless wallets get their Fomo handle or pump.fun name in the background.
-export function add(who, { address, name, emoji, color, grp } = {}) {
+export function add(who, { address, name, emoji, color, grp, pic } = {}) {
   address = String(address || "").trim();
   if (!sol.validAddress(address)) throw fail(400, "That doesn't look like a Solana wallet address.");
   const cur = row(who, address);
   if (!cur && db.prepare("SELECT COUNT(*) n FROM wt_wallets WHERE who = ?").get(who).n >= MAX_WALLETS) throw fail(400, `At most ${MAX_WALLETS} wallets.`);
   if (cur) {
-    db.prepare("UPDATE wt_wallets SET name = COALESCE(?, name), emoji = COALESCE(?, emoji), color = COALESCE(?, color), grp = ? WHERE who = ? AND address = ?")
-      .run(cleanName(name), cleanEmoji(emoji), cleanColor(color), grp == null ? cur.grp : cleanGrp(grp), who, address);
+    db.prepare("UPDATE wt_wallets SET name = COALESCE(?, name), emoji = COALESCE(?, emoji), color = COALESCE(?, color), grp = ?, pic = COALESCE(?, pic) WHERE who = ? AND address = ?")
+      .run(cleanName(name), cleanEmoji(emoji), cleanColor(color), grp == null ? cur.grp : cleanGrp(grp), cleanPic(pic), who, address);
   } else {
-    db.prepare("INSERT INTO wt_wallets (who, address, name, emoji, color, grp, added) VALUES (?, ?, ?, ?, ?, ?, ?)").run(who, address, cleanName(name), cleanEmoji(emoji), cleanColor(color), cleanGrp(grp), now());
-    reload();
+    db.prepare("INSERT INTO wt_wallets (who, address, name, emoji, color, grp, added, pic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(who, address, cleanName(name), cleanEmoji(emoji), cleanColor(color), cleanGrp(grp), now(), cleanPic(pic));
+    reload(); if (cleanName(name) && !cleanPic(pic)) autoName(who, address);   // a named wallet still gets its picture
     // The shared chain reader follows it from now on (its stream and poll); what it already read shows at once.
     try { wallets.addWallet(address, "", "tracker"); wallets.resyncFast(); } catch {}
     seedHistory(address);
@@ -162,13 +164,23 @@ export const exportList = (who) => db.prepare("SELECT address trackedWalletAddre
 async function autoName(who, address) {
   try {
     let name = handleOf(address);
-    if (!name) name = (await pumpProfile(address))?.name || null;
+// The name and the picture, from its Fomo handle (name) and its pump.fun profile (name and picture), filled in
+// only where the member left them blank.
+    const p = await pumpProfile(address);
+    if (!name) name = p?.name || null;
     if (name && !row(who, address)?.name) db.prepare("UPDATE wt_wallets SET name = ? WHERE who = ? AND address = ? AND name IS NULL").run(cleanName(name), who, address);
   } catch {}
 }
 
+    const pic = cleanPic(p?.pic);
+    if (pic) db.prepare("UPDATE wt_wallets SET pic = ? WHERE address = ? AND pic IS NULL").run(pic, address);
 // What the chain reader already knows of the wallet (the owner followed it, or another member did): into the feed.
 function seedHistory(address) {
+// Wallets tracked before pictures were kept: one profile read each, spaced out, after a start.
+function backfillPics() {
+  const rows = db.prepare("SELECT DISTINCT address FROM wt_wallets WHERE pic IS NULL LIMIT 100").all();
+  rows.forEach((r, i) => { const t = setTimeout(() => autoName("", r.address), 3000 + i * 1500); t.unref?.(); });
+}
   const rows = db.prepare("SELECT sig, mint, side, tokens, sol, usd, t FROM wallet_trades WHERE wallet = ? ORDER BY t DESC LIMIT 60").all(address);
   const ins = db.prepare("INSERT OR IGNORE INTO wt_feed (wallet, sig, mint, side, sol, usd, tokens, mc_usd, t, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'history')");
   for (const r of rows) ins.run(address, r.sig, r.mint, r.side, r.sol, r.usd, r.tokens, null, r.t);
@@ -302,7 +314,7 @@ function transferRows({ who = null, ids = null, limit = 150 } = {}) {
 }
 const named = (who, rows) => {
   const by = new Map(list(who).map((w) => [w.address, w]));
-  return rows.map((r) => { const w = by.get(r.wallet); return { ...r, name: w?.name || short(r.wallet), emoji: w?.emoji || null, color: w?.color || null, grp: w?.grp || 1 }; });
+  return rows.map((r) => { const w = by.get(r.wallet); return { ...r, name: w?.name || short(r.wallet), emoji: w?.emoji || null, color: w?.color || null, grp: w?.grp || 1, pic: w?.pic || null }; });
 };
 
 export function overview(who, { grp = null, limit = FEED_LIMIT } = {}) {
@@ -406,7 +418,12 @@ export function start(emitFn) {
   onPoolLedger(fromLive);
   wallets.onTx(fromTx);
   // Every wallet on a member's list is followed by the chain reader (a restart, or lists made before this ran).
-  for (const a of tracked.keys()) if (!db.prepare("SELECT 1 FROM wallets WHERE address = ?").get(a)) { try { wallets.addWallet(a, "", "tracker"); } catch {} }
+  for (const a of tracked.keys()) {
+    wallets.addWallet(a, "", "tracker");
+    seedHistory(a);
+  }
+  wallets.resyncFast();
+  backfillPics();
   const prune = () => {
     try {
       db.prepare("DELETE FROM wt_feed WHERE t < ?").run(now() - FEED_KEEP_DAYS * 86400_000);
