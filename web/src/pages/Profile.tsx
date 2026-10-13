@@ -1,6 +1,7 @@
 // People (#/u) and one person's page (#/u/<username>): banner, picture, bio, follow button, then what their
 // wallet holds, what it traded, who they follow (Blix accounts, Fomo traders, wallets) and who follows them.
 // Talks to /api/account/* (server/social.js).
+import { useMarkedHoldings } from "@/lib/live-wallet";
 import { SiteLogo } from "@/components/logos";
 import { useCallback, useEffect, useState } from "react";
 import { ago, CoinImg, Empty, Page, Problem, td, tdR, th, thR } from "@/components/page";
@@ -94,7 +95,7 @@ export function UserView({ username, onMine }: { username: string; onMine?: bool
 const Private = () => <p className={cn(panel, "px-4 py-12 text-center text-md text-muted")}>This person keeps their holdings and trades private.</p>;
 
 function HoldingsTable({ d }: { d: UserPage }) {
-  const h = d.holdings, names = useCoinNames(h?.tokens.map((t) => t.mint) || []);
+  const h = useMarkedHoldings(d.holdings), names = useCoinNames(h?.tokens.map((t) => t.mint) || []);
   if (!h) return <p className={cn(panel, "px-4 py-12 text-center text-md text-muted")}>{d.problem ? `The wallet could not be read right now (${d.problem}).` : "No wallet yet."}</p>;
   const tokens = [...h.tokens].sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0)), total = h.solUsd + h.tokensUsd;
   return (

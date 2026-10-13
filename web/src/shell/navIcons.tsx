@@ -33,6 +33,8 @@ export const NavIcon = {
   feed: N(<path d={BUBBLE_A} />, <><path d={BUBBLE_A} /><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" /></>),
   // A newspaper: the day's narratives.
   narratives: N(<path d={PAPER} />, <><path d={PAPER} /><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z" /></>),
+  // A hammer: the devs whose coins did best.
+  devs: N(<path d="M14.5 4.5 19.5 9.5 11 18l-5-5z" />, <><path d="M14.5 4.5 19.5 9.5 11 18l-5-5z" /><path d="M6 13 3 16l5 5 3-3M14.5 4.5 16 3l5 5-1.5 1.5" /></>),
   // A trophy: the best traders.
   traders: N(<path d={CUP} />, <><path d={CUP} /><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" /></>),
   // A rocket: launch a coin.

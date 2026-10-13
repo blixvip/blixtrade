@@ -62,7 +62,7 @@ export function Coin({ mint }: { mint: string }) {
   useEffect(() => {
     const c = coinPolled.data;
     if (!c || c.priceAgeMs == null || c.priceAgeMs < 0 || c.priceAgeMs >= 30_000 || !(c.mcUsd! > 0) || useReplay.getState().mint === mint) return;
-    setPx([[mint, c.mcUsd!]], false, true, coinReadAt - c.priceAgeMs);
+    setPx([[mint, c.mcUsd!, c.supply]], false, true, coinReadAt - c.priceAgeMs);
   }, [coinPolled.data, coinReadAt, mint]);
   // Read every 2 s: a bonded coin's pool trades come only from this read (Jupiter's list, the chain's rows on top),
   // and trades the radar recovers late from a block land here, not on the stream.

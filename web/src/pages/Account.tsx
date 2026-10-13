@@ -1,6 +1,7 @@
 // Portfolio (#/account): sign in with Google, then your wallet as a trader sees it: balance, profit and
 // loss, open positions with quick sells, and history. Deposits, withdrawals, buying by contract and the
 // key export open as small windows. Real money. Talks to /api/account/* (server/accounts.js).
+import { useMarkedHoldings } from "@/lib/live-wallet";
 import { SiteLogo } from "@/components/logos";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { openExchange, openWelcome } from "@/lib/modals";
@@ -195,7 +196,7 @@ export function Account() {
     load();
   }, [load]);
 
-  const w = me?.wallet, solPrice = w && w.sol > 0 ? w.solUsd / w.sol : usePulse.getState().live.solUsd || 0;
+  const w = useMarkedHoldings(me?.wallet), solPrice = w && w.sol > 0 ? w.solUsd / w.sol : usePulse.getState().live.solUsd || 0;
   const names = useNames(useMemo(() => (w?.tokens || []).map((t) => t.mint), [w]));
   // What each coin cost and returned, from the wallet's own confirmed trades.
   const book = useMemo(() => {

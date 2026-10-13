@@ -1,3 +1,4 @@
+import { useMarkedHoldings } from "@/lib/live-wallet";
 import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 import { AccountAvatar } from "@/components/AccountAvatar";
 import { SolanaLogo } from "@/components/brand";
@@ -48,13 +49,14 @@ const fmt = (n: number, max = 2) => n.toLocaleString(undefined, { maximumFractio
 
 export function WalletMenu() {
   const me = useMe((s) => s.me);
+  const markedWallet = useMarkedHoldings(me?.wallet);
   const liveSolUsd = usePulse((s) => s.live.solUsd) || 0;
   const { open, setOpen, box } = usePopover();
   const [unit, setUnitState] = useState<Unit>(() => store.get<Unit>("wallet:unit", "SOL"));
   const setUnit = (u: Unit) => { store.set("wallet:unit", u); setUnitState(u); };
   if (!me?.signedIn) return <a href="#/account" aria-label="Sign in" className={pillCls}><Icon.wallets className="size-4 text-muted" />Sign in</a>;
 
-  const w = me.wallet, sol = w?.sol ?? 0;
+  const w = markedWallet, sol = w?.sol ?? 0;
   const solPrice = w && w.sol > 0 && w.solUsd ? w.solUsd / w.sol : liveSolUsd;
   const usdc = w?.tokens?.find((t) => t.mint === USDC)?.ui ?? 0;
   const totalUsd = w ? (w.solUsd ?? sol * solPrice) + (w.tokens || []).reduce((a, t) => a + (t.usd ?? 0), 0) : null;

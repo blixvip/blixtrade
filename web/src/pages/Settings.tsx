@@ -1,3 +1,4 @@
+import { useMarkedPaperWallet } from "@/lib/live-wallet";
 // Settings (#/settings): every radar setting in plain words, grouped, each with what it does, its unit and a
 // control that fits it (switch, number with unit, menu, time, alert chips, model with suggestions). A side
 // list jumps between groups, a search box narrows them, and a bar at the bottom saves or discards the changes.
@@ -159,7 +160,7 @@ const Sub = ({ title }: { title: string }) => (
 
 // Paper trading: the switch, what is in the fake wallet, and starting it over.
 function PaperCard() {
-  const paper = useTrade((s) => s.paper), w = useTrade((s) => s.wallet);
+  const paper = useTrade((s) => s.paper), w = useMarkedPaperWallet();
   const [start, setStart] = useState(""), [busy, setBusy] = useState(false), [add, setAdd] = useState("");
   // Add fake SOL without starting over: positions and history stay.
   const deposit = async (amount: number) => {

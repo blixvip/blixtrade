@@ -1,4 +1,4 @@
-export interface LivePrice { mc: number; t: number; revision: number }
+export interface LivePrice { mc: number; t: number; revision: number; supply?: number }
 // Commit every price in a batch before notifying any header or portfolio subscriber.
 export function createLivePrices(now = () => Date.now()) {
   const prices = new Map<string, LivePrice>(), strong = new Map<string, number>(), canonical = new Map<string, number>();
@@ -11,19 +11,20 @@ export function createLivePrices(now = () => Date.now()) {
       let set = listeners.get(mint); if (!set) listeners.set(mint, set = new Set());
       set.add(fn); return () => { set.delete(fn); if (!set.size) listeners.delete(mint); };
     },
-    set(rows: [string, number][], weak = false, authoritative = false, observedAt = now()) {
+    set(rows: [string, number, number?][], weak = false, authoritative = false, observedAt = now()) {
       const t = now(), notify = new Set<() => void>();
       if (!Number.isFinite(observedAt) || observedAt > t + 1000 || observedAt < 0) return;
       const next = ++revision;
-      for (const [mint, mc] of rows) {
+      for (const [mint, mc, supplied] of rows) {
         if (!mint || !Number.isFinite(mc) || mc <= 0 || observedAt < (prices.get(mint)?.t ?? 0)) continue;
         if (!authoritative && t - (canonical.get(mint) ?? -Infinity) < 10_000) continue;
         if (weak && t - (strong.get(mint) ?? -Infinity) < 30_000) continue;
         if (authoritative) canonical.set(mint, t);
         if (!weak) strong.set(mint, t);
         const old = prices.get(mint);
-        if (old?.mc === mc && old.t === observedAt) continue;
-        prices.set(mint, { mc, t: observedAt, revision: next });
+        const supply = supplied != null && Number.isFinite(supplied) && supplied > 0 ? supplied : old?.supply;
+        if (old?.mc === mc && old.t === observedAt && old.supply === supply) continue;
+        prices.set(mint, { mc, t: observedAt, revision: next, ...(supply ? { supply } : {}) });
         listeners.get(mint)?.forEach(fn => notify.add(fn));
       }
       if (prices.size > 30_000) for (const mint of prices.keys()) {

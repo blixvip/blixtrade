@@ -6,7 +6,8 @@ import { store } from "./utils";
 // Paper trading: a wallet of fake SOL kept by Blix. Buys are filled at the real quote and take fake SOL
 // out; sells put back what the sale would really have returned. Nothing touches the chain or real money.
 // The switch is remembered in this browser; the wallet itself lives on the Blix server.
-export interface PaperWallet { start: number; cash: number; equity: number; pnl: number; realized: number; open: number; trades: number; unpriced: number; solUsd: number }
+export interface PaperWallet { start: number; cash: number; equity: number; pnl: number; realized: number; open: number; trades: number; unpriced: number; solUsd: number;
+  valuationPositions?: { mint: string; valueSol: number | null; mcap: number | null; priceAt?: number | null }[] }
 
 export const useTrade = create<{ paper: boolean; wallet: PaperWallet | null }>(() => ({ paper: store.get<boolean>("trade:paper", true), wallet: null }));
 

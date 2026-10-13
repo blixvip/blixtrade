@@ -15,7 +15,9 @@ export function receiveMetrics(data: { boot?: number; coins?: MetricCoin[] }, ex
     values.set(coin.mint, { ...coin, fields: { ...values.get(coin.mint)?.fields, ...coin.fields } });
     const mc = coin.fields.mc?.value;
     const field = coin.fields.mc;
-    if (Number.isFinite(mc) && mc > 0 && Date.now() - field.observedAt <= field.maxAgeMs) setPx([[coin.mint, mc]], false, true, field.observedAt);
+    const unit = coin.fields.priceUsd;
+    const supply = unit?.value > 0 && unit.observedAt === field?.observedAt ? mc / unit.value : undefined;
+    if (Number.isFinite(mc) && mc > 0 && Date.now() - field.observedAt <= field.maxAgeMs) setPx([[coin.mint, mc, supply]], false, true, field.observedAt);
     listeners.get(coin.mint)?.forEach(fn => fn());
   }
   if (values.size > 30_000) for (const mint of values.keys()) { if (!listeners.has(mint)) values.delete(mint); if (values.size <= 20_000) break; }
@@ -59,6 +61,15 @@ function changed() {
   if (!interests.size && timer) { clearInterval(timer); timer = undefined; }
 }
 document.addEventListener('visibilitychange', changed);
+// Wallet totals need every held mint, including positions below the fold. Reuse the shared batch/budget.
+export function useMetricInterests(mints: string[]) {
+  const key = [...new Set(mints.filter(m => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m)))].sort().join(',');
+  useEffect(() => {
+    const keys = key ? key.split(',').map(mint => { const id = Symbol(mint); interests.set(id, { mint, active: false }); return id; }) : [];
+    if (keys.length) changed();
+    return () => { keys.forEach(id => interests.delete(id)); if (keys.length) changed(); };
+  }, [key]);
+}
 // Ref-counted by component, intersection-observed, and shared through one browser request.
 export function useMetricVisibility(mint?: string | null, active = false) {
   const ref = useRef<HTMLElement | null>(null);

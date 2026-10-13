@@ -1,3 +1,4 @@
+import { usePulse } from "@/lib/pulse";
 import { TrackWalletButton } from "@/components/TrackWalletButton";
 // A trader page for any Solana wallet (#/trader/<wallet>): pump.fun's leaderboard traders, Feed callers and anyone
 // Blix has no Fomo profile for. Built by the server from the chain (server/walletpage.js): pump.fun's public
@@ -10,7 +11,7 @@ import { ago, Problem } from "@/components/page";
 import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/coin";
-import { useLivePrices } from '@/lib/livepx';
+import { useWalletPrices as useLivePrices } from '@/lib/live-wallet';
 import { markPortfolio } from '@/lib/wallet-values';
 import { cn } from "@/lib/utils";
 import { Icon } from "@/shell/icons";
@@ -36,7 +37,8 @@ const hue = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>
 export function WalletTrader({ wallet }: { wallet: string }) {
   const { data: snapshot, error, refresh } = usePoll<Page>(`wallet-page/${wallet}`, 15_000);
   const prices = useLivePrices(snapshot?.positions.map(p => p.mint) || []);
-  const p = snapshot ? markPortfolio(snapshot, prices, Date.now()) : null;
+  const liveSolUsd = usePulse(s => s.live.solUsd);
+  const p = snapshot ? markPortfolio(snapshot, prices, Date.now(), liveSolUsd) : null;
   const [busy, setBusy] = useState(false);
   const [dust, setDust] = useState(false);
   const [showAll, setShowAll] = useState(false);

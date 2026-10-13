@@ -1,3 +1,4 @@
+import { LiveMc } from "@/components/Live";
 // AI picks (#/ai-picks): what the AI's deep reads said today (buy, watch or avoid, with its reason), its buy calls
 // this week, and how its picks have done. Read-only: nothing is bought.
 import { useState, type ReactNode } from "react";
@@ -76,7 +77,7 @@ function Picks() {
               <td className={cn(td, "font-semibold capitalize", actionTone(w.trade?.action))}>{w.trade?.action || "—"}</td>
               <td className={tdR}>{w.trade?.pWin != null ? `${w.trade.pWin}%` : "—"}</td>
               <td className={cn(td, "max-w-[34rem] whitespace-normal text-ink-2")}>{w.trade?.why || w.verdict}</td>
-              <td className={tdR}>{money(w.mcap)}</td>
+              <td className={tdR}><LiveMc mint={w.mint} value={w.mcap} fmt={money} /></td>
               <td className={cn(tdR, "text-muted")}>{ago(w.t)}</td>
             </tr>))
             : <tr><td colSpan={7}><Empty>{d.watch.length ? "No reads match." : "No deep reads yet today."}</Empty></td></tr>}

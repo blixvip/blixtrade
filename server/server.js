@@ -88,6 +88,7 @@ import { xcard } from "./xcard.js";
 import { runningAiStats } from "./running-ai.js";
 import { deskView, deskStats } from "./desk.js";
 import { feedHot, feedHotPosts } from "./feedhot.js";
+import { devBoard } from "./devboard.js";
 import { pumpBoard } from "./pumpboard.js";
 import { walletPage, warmWalletPages } from "./walletpage.js";
 import { warmBoard } from "./feedwarm.js";
@@ -1478,6 +1479,8 @@ async function handleRequest(req, res) {
     // keep=1: "Hot right now" shown away from the Feed (the Create coin page): the ledger only listens, so the feeds
     // are kept reading while it is asked for, as one Feed page with every kind of post would (the same Fomo read).
     // pump.fun's callouts are read only while someone wants them: a Hot list counting them keeps them coming.
+    // Top devs (devboard.js): the wallets behind the window's best coins, with their coins.
+    if (p === "/api/devs") return send(res, 200, await devBoard({ range: params.range }));
     if (p === "/api/feed/hot/posts") return send(res, 200, feedHotPosts({ mint: params.mint, mints: params.mints, w: params.w, src: params.src }));
     if (p === "/api/feed/hot") { if (params.keep) { try { pumpFeed(); fomoFeed(); } catch {} } else if (/pump/.test(String(params.src || ""))) { try { pumpFeed(); } catch {} } return send(res, 200, feedHot(params)); }
     // The Feed's pictures for the page server to fetch ahead (feedstream.js feedPics); the coins' logos are fetched here.

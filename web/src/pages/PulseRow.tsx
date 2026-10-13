@@ -1,3 +1,4 @@
+import { useLiveMc } from "@/lib/livepx";
 import { XHover, XLinkIcon, xKind, xKindLabel } from "@/components/XCard";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { padOf, PadLogo, PADS } from "@/components/logos";
@@ -123,8 +124,9 @@ function AiCall({ coin }: { coin: Coin }) {
 
 function PulseRowInner({ mint, col, sol }: { mint: string; col: ColKey; sol: number }) {
   const raw = usePulse((s) => s.coins[mint]);
+  const sharedMc = useLiveMc(mint);
   const metrics = useMetrics(mint), visibleRef = useMetricVisibility(mint);
-  const t = raw ? { ...raw, mcap: metricNumber(metrics, 'mc', raw.mcap), liq: metricNumber(metrics, 'liq', raw.liq), progress: metricNumber(metrics, 'progress', raw.progress),
+  const t = raw ? { ...raw, mcap: sharedMc ?? metricNumber(metrics, 'mc', raw.mcap), liq: metricNumber(metrics, 'liq', raw.liq), progress: metricNumber(metrics, 'progress', raw.progress),
     vol: metricNumber(metrics, 'vol1h', raw.vol), buys: metricNumber(metrics, 'buys1h', raw.buys) ?? undefined, sells: metricNumber(metrics, 'sells1h', raw.sells) ?? undefined,
     hl: { ...raw.hl, h: metricNumber(metrics, 'holders', raw.hl?.h ?? raw.holders), t10: metricNumber(metrics, 'top10', raw.hl?.t10 ?? raw.top10), dev: metricNumber(metrics, 'dev', raw.hl?.dev ?? raw.dev) } } : raw;
   const hover = useRef(0);

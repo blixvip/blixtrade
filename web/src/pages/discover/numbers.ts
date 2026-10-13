@@ -17,7 +17,10 @@ export function discoverNumbers(raw: Row, tf: Tf, metrics?: MetricCoin, liveMc?:
       devPct: number('dev', raw.safety?.devPct) ?? undefined, insiderPct: number('insiders', raw.safety?.insiderPct) ?? undefined } };
   const buys = number(`buys${tf}`, raw[`buys_${k}`]), sells = number(`sells${tf}`, raw[`sells_${k}`]);
   const tx = buys != null && sells != null ? buys + sells : null;
-  return { row, mc: liveMc ?? number('mc', raw.mc_live ?? raw.mcap), price: number('priceUsd'),
+  const mc = liveMc ?? number('mc', raw.mc_live ?? raw.mcap), unit = number('priceUsd'), base = number('mc');
+  const paired = metrics?.fields.mc?.observedAt === metrics?.fields.priceUsd?.observedAt;
+  const price = mc != null && base != null && base > 0 && unit != null && paired ? unit * mc / base : unit;
+  return { row, mc, price,
     vol: number(`vol${tf}`, raw[`vol_${k}`]), chg: number(`chg${tf}`, raw.spark_chg ?? raw[`chg_${k}`], true), buys, sells, tx,
     buyShare: tx != null && tx > 0 ? buys! / tx : null };
 }

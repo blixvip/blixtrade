@@ -30,7 +30,7 @@ function AccountIcon({ className }: SVGProps<SVGSVGElement>) {
   return <AccountAvatar me={me} className={cn(className, "size-5 ring-1 ring-rule-2")} />;
 }
 const MAIN: Item[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse], ["feed", "Feed", NavIcon.feed], ["narratives", "Narratives", NavIcon.narratives],
-  ["traders", "Top traders", NavIcon.traders], ["tracker", "Tracker", NavIcon.tracker], ["launch", "Create", NavIcon.launch], ["ai-picks", "AI early picks", NavIcon.picks], ["account", "Portfolio", AccountIcon]];
+  ["traders", "Top wallets", NavIcon.traders], ["tracker", "Tracker", NavIcon.tracker], ["launch", "Create", NavIcon.launch], ["ai-picks", "AI early picks", NavIcon.picks], ["account", "Portfolio", AccountIcon]];
 const MORE: Item[] = [["health", "Health", NavIcon.health], ["api", "API", NavIcon.api], ["mcp", "MCP", NavIcon.mcp], ["settings", "Settings", NavIcon.settings]];
 // Every page, for anything that needs a page's name (main.tsx).
 export const NAV: { group: string; items: Item[] }[] = [{ group: "Main", items: MAIN }, { group: "More", items: MORE }];
@@ -133,7 +133,7 @@ const paperSol = (n: number) => { const a = Math.abs(n); return a >= 1e6 ? `${(n
 // The rail: Discover, Pulse and Feed first (the owner's order), then the rest, Narratives under Create. API, MCP, Account and
 // Settings sit apart at the bottom. Health is off the rail (still at #/health).
 const SIDE: (Item | [...Item, string])[] = [["coins", "Discover", NavIcon.discover], ["", "Pulse", NavIcon.pulse, "LIVE"], ["feed", "Feed", NavIcon.feed],
-  ["traders", "Top traders", NavIcon.traders],
+  ["traders", "Top wallets", NavIcon.traders],
   ["tracker", "Tracker", NavIcon.tracker, "NEW"],
   ["launch", "Create", NavIcon.launch, "NEW"],
   ["ai-picks", "AI early picks", NavIcon.picks],

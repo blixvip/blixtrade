@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { discoverNumbers, metricPrefix } from '../web/src/pages/discover/numbers.ts';
 const row = { mint: 'coin', mcap: 100, liquidity: 20, vol_h24: 300, vol_h1: 30, buys_h1: 4, sells_h1: 2, fees: .1, safety: { top10: 9, totalHolders: 20 } };
 const field = (value, extra = {}) => ({ value, ...extra });
+test('Discover unit price follows live cap only when its supply basis is paired', () => {
+ const fields={mc:field(100,{observedAt:1000}),priceUsd:field(2,{observedAt:1000})};
+ assert.equal(discoverNumbers(row,'24h',{fields},200).price,4);
+ fields.priceUsd.observedAt=900;
+ assert.equal(discoverNumbers(row,'24h',{fields},200).price,2);
+});
 test('Discover rows and cards use the selected window and current shared fields', () => {
   const got = discoverNumbers(row, '24h', { fields: { mc: field(200), priceUsd: field(.003), liq: field(40), vol24h: field(900), buys24h: field(80), sells24h: field(10), holders: field(51), top10: field(8), fees: field(.2) } });
   assert.equal(got.mc, 200); assert.equal(got.price, .003); assert.equal(got.vol, 900); assert.equal(got.tx, 90);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';import {mkdirSync,writeFileSync} from 'node:fs';
+import {createRequire} from 'node:module';import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
+import {resolve,extname} from 'node:path';
 const require=createRequire(import.meta.url),{chromium}=require('../../note-overlay/node_modules/playwright');
 const base=process.env.BLIX_URL||'http://127.0.0.1:45427',out='data/coin-live-check';mkdirSync(out,{recursive:true});
 const M='BW4oQngRVLWSwfA76Xhm28boPE3rbqomTGMV34Bnpump',N='A'.repeat(32);
@@ -10,15 +11,16 @@ try{for(const width of [1920,390]){
  let version=0,txVersion=0,jupFail=false,coinFail=false,knownReady=false;const errors=[],calls={jup:0,coin:0,quote:0,monitor:0};page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{localStorage.setItem('blix:wtrack:float','true');localStorage.setItem('blix:wtrack:tab','"monitor"');localStorage.setItem('blix:wtrack:docked','false')});
  await page.addInitScript(()=>{window.EventSource=class extends EventTarget{static CLOSED=2;readyState=1;constructor(){super();(window.__coinStreams||=[]).push(this);queueMicrotask(()=>this.onopen?.())}close(){this.readyState=2}}});
- await page.route('**/*',async route=>{const u=new URL(route.request().url());if(u.origin!==new URL(base).origin)return route.abort();if(process.env.BLIX_ORIGIN_HOST){const response=await route.fetch({headers:{...route.request().headers(),host:process.env.BLIX_ORIGIN_HOST}});return route.fulfill({response})}return route.continue()});
+ await page.route('**/*',async route=>{const u=new URL(route.request().url());if(u.origin!==new URL(base).origin)return route.abort();if(process.env.BLIX_ASSETS){const root=resolve(process.env.BLIX_ASSETS),file=resolve(root,'.'+(u.pathname==='/'?'/index.html':u.pathname));if(file.startsWith(root)&&existsSync(file)&&['.html','.js','.css'].includes(extname(file)))return route.fulfill({body:readFileSync(file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[extname(file)]});}if(process.env.BLIX_ORIGIN_HOST){const response=await route.fetch({headers:{...route.request().headers(),host:process.env.BLIX_ORIGIN_HOST}});return route.fulfill({response})}return route.continue()});
  await page.route('**/api/**',async route=>{
   if(route.request().method()!=='GET'){errors.push(route.request().postData()||route.request().url());return route.fulfill({status:403,json:{error:'Writes disabled in test'}});}const u=new URL(route.request().url()),p=u.pathname.slice(5),mint=p.includes(N)?N:M,now=Date.now();let json={};
   if(p==='me')json={member:true,email:'numbers@fixture.invalid',liveWallets:true};
-  else if(p==='account/me')json={signedIn:true,email:'numbers@fixture.invalid',wallet:{sol:5,solUsd:500,tokens:[]}};
+  else if(p==='account/me')json={signedIn:true,hosted:true,email:'numbers@fixture.invalid',address:N,wallet:{sol:5,solUsd:500,tokensUsd:1000,tokens:[{mint:M,ui:1e7,usd:1000}]}};
   else if(p==='account/txs')json=[{kind:'buy',mint:N,sol:txVersion?.75:.5,tokens:'1000000',status:'confirmed',t:now-1000}];
   else if(p===`wallet-page/${N}`)json={wallet:N,name:'Sync wallet',solUsd:100,sol:5,value:1500,tokensUsd:1000,positions:[{mint:M,symbol:'CNLeaks',amount:1e7,price:.0001,value:1000,mcap:100000,cost:500}],best:[],recent:[],ranks:{},volume:0,tradesRead:2,read:now,updating:false};
+  else if(p==='account/u/fixture')json={profile:{id:1,username:'fixture',display:'Fixture profile',showHoldings:true,followers:0,follows:0,isMe:false},holdings:{sol:5,solUsd:500,tokensUsd:1000,tokens:[{mint:M,ui:1e7,usd:1000}]},activity:[]};
   else if(p==='pulse')json={newPairs:[],running:[],stretch:[],migrated:[],live:{solUsd:100,tradesPerSec:1}};
-  else if(p==='paper/wallet')json={start:100,cash:99.5,equity:100,pnl:0,realized:0,open:1,trades:1,unpriced:0,solUsd:100};
+  else if(p==='paper/wallet')json={start:100,cash:99,equity:100,pnl:0,realized:0,open:1,trades:1,unpriced:0,solUsd:100,valuationPositions:[{mint:M,valueSol:1,mcap:100000,priceAt:now-10000}]};
   else if(p==='paper')json={sizes:[.1,.25,.5,1]};
   else if(p.startsWith('token/'))json={token:{mint,name:mint===M?'The Cartoon Network Leaks':'Second coin',symbol:'CNLeaks',mcap:100000,price:.0001,graduated:true,first_seen:now-3600000},paper:[{id:1,mint,sol:.5,tokens:1000000,mcap0:50000,status:'open',valueSol:1}],verdict:{ok:true},research:{status:'idle'}};
   else if(p===`coin/${mint}`){calls.coin++;if(coinFail)return route.fulfill({status:503,json:{error:'Delayed fixture'}});json={mint,name:'The Cartoon Network Leaks',symbol:'CNLeaks',supply:1e9,solUsd:100,mcUsd:100000,priceUsd:.0001,priceAgeMs:2000,live:true,onCurve:false,traders:[],early:[],holders:null,dev:null,m5:{source:'live',buys:0,sells:0,buyUsd:0,sellUsd:0,volUsd:0,netUsd:0,traders:0},info:{holders:version?600:500,top10:version?12:25,devPct:0,source:'fixture',checked:now,lpLocked:100,safety:99}};}
@@ -96,12 +98,27 @@ try{for(const width of [1920,390]){
  jupFail=false;await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await about.getByText('Reconnecting',{exact:true}).waitFor({state:'hidden'});
  await page.evaluate(m=>location.hash='#/coin/'+m,N);await page.getByRole('heading',{name:'About Second coin'}).waitFor();
  const second=page.getByRole('heading',{name:'About Second coin'}).locator('../../..');assert.equal(await second.getByText('4,000',{exact:true}).count(),0,'coin switch cannot retain previous window stats');
- if(width>1000){await page.evaluate(()=>localStorage.setItem('blix:trade:paper','false'));await page.reload();await page.locator('#boot').waitFor({state:'hidden'});await position.getByText('0.500',{exact:true}).waitFor();txVersion=1;await position.getByText('0.750',{exact:true}).waitFor();}
+ if(width>1000){await page.evaluate(()=>localStorage.setItem('blix:trade:paper','false'));await page.reload({waitUntil:"domcontentloaded",timeout:30000});await page.locator('#boot').waitFor({state:'hidden'});await position.getByText('0.500',{exact:true}).waitFor();txVersion=1;await position.getByText('0.750',{exact:true}).waitFor();}
  await page.evaluate(w=>location.hash='#/trader/'+w,N);
  await page.getByText('Portfolio value',{exact:true}).waitFor();
- await emit('metrics',{boot:100,coins:[{mint:M,revision:3,fields:{mc:field(300000,Date.now())}}]});
+ const profileAt=Date.now();
+ await emit('metrics',{boot:100,coins:[{mint:M,revision:3,fields:{mc:field(300000,profileAt),priceUsd:field(.0003,profileAt)}}]});
  await page.getByText('$3,500.00',{exact:true}).waitFor({timeout:1500});
  await page.getByText('+$2,500.00',{exact:true}).first().waitFor({timeout:1500});
+ await page.evaluate(()=>location.hash='#/account');
+ await page.getByText('$3,500.00',{exact:true}).filter({visible:true}).first().waitFor();
+ await emit('metrics',{boot:100,coins:[{mint:M,revision:4,fields:{mc:field(400000,Date.now())}}]});
+ await page.getByText('$4,500.00',{exact:true}).filter({visible:true}).first().waitFor({timeout:1500});
+ await page.screenshot({path:`${out}/account-live-${width}.png`});
+ await page.evaluate(()=>location.hash='#/u/fixture');
+ await page.getByText('$4,500.00',{exact:true}).filter({visible:true}).first().waitFor();
+ await emit('metrics',{boot:100,coins:[{mint:M,revision:5,fields:{mc:field(500000,Date.now())}}]});
+ await page.getByText('$5,500.00',{exact:true}).filter({visible:true}).first().waitFor({timeout:1500});
+ await page.evaluate(()=>location.hash='#/settings');
+ await page.getByText('104.000 SOL',{exact:true}).waitFor();
+ await emit('metrics',{boot:100,coins:[{mint:M,revision:6,fields:{mc:field(600000,Date.now())}}]});
+ await page.getByText('105.000 SOL',{exact:true}).waitFor({timeout:1500});
+ await page.screenshot({path:`${out}/paper-live-${width}.png`});
  assert.deepEqual(errors,[]);results.push({width,calls,passed:true});console.log('PASS',width,'synchronized market cap/tracked-wallet PnL, profile totals, shared totals, holders, errors/recovery, coin switch');
  await page.unrouteAll({behavior:'ignoreErrors'});await page.close();
 }}finally{await browser.close();writeFileSync(`${out}/results.json`,JSON.stringify(results,null,2))}

@@ -1,3 +1,4 @@
+import { useLiveMc } from "@/lib/livepx";
 // Practice (#/practice): pick a coin that is trending now, or paste any coin's address, and it opens as its
 // normal coin page replayed from its last day (lib/replay.ts), ready to rewind on 1s candles and paper-trade.
 import { useMemo, useState } from "react";
@@ -17,6 +18,7 @@ const age = (ms: number) => { const m = Math.max(1, Math.round(ms / 60000)); ret
 // Each row shows the coin's high of the replayable day (from the radar's own trades, /api/replay/peaks), when it
 // was, and where it is now: the moment worth practising, not a list's stale market cap.
 function Row({ mint, img, symbol, name, peak, sub }: { mint: string; img?: string | null; symbol?: string; name?: string; peak?: Peak; sub?: string }) {
+  const mc = useLiveMc(mint) ?? peak?.mc;
   return (
     <button onClick={() => open(mint)} className="flex w-full items-center gap-3 border-b border-rule px-4 py-2.5 text-left hover:bg-paper-3/60">
       <img src={img || `img/${mint}.webp`} alt="" className="size-9 shrink-0 rounded-full bg-paper-3 object-cover" loading="lazy" />
@@ -26,7 +28,7 @@ function Row({ mint, img, symbol, name, peak, sub }: { mint: string; img?: strin
       </span>
       <span className="num text-right">
         <span className="block text-ink"><span className="text-xs text-muted">ATH </span>{peak ? compact(peak.ath) : "–"}</span>
-        {peak && <span className="block text-xs text-muted">{peak.athAt ? `${age(Date.now() - peak.athAt)} ago · ` : ""}now <span className={peak.mc >= peak.ath * 0.5 ? "text-up" : "text-down"}>{compact(peak.mc)}</span></span>}
+        {peak && <span className="block text-xs text-muted">{peak.athAt ? `${age(Date.now() - peak.athAt)} ago · ` : ""}now <span className={(mc ?? 0) >= peak.ath * 0.5 ? "text-up" : "text-down"}>{compact(mc)}</span></span>}
       </span>
       <span className="h-7 rounded-control border border-rule px-3 text-sm leading-7 font-semibold text-ink-2">Practice</span>
     </button>

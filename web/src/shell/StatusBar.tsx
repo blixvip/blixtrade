@@ -1,3 +1,4 @@
+import { useMarkedPaperWallet, useMarkedHoldings } from "@/lib/live-wallet";
 // The strip along the bottom of every page, laid out like Axiom's: connection, settings, Watchlist, Wallets,
 // PnL, Activity, then Pulse, Discover, Trending (the Feed's "Hot right now" box as a window, 2026-10-11) and Alerts
 // (named as the side rail names those pages),
@@ -148,7 +149,9 @@ function WatchRows({ open, stars, here, hereSymbol, onSave }: { open: boolean; s
 
 // ---------- PnL ----------
 function Pnl() {
-  const wallet = useTrade((s) => s.wallet), me = useMe((s) => s.me);
+  const wallet = useMarkedPaperWallet(), rawMe = useMe((s) => s.me);
+  const holdings = useMarkedHoldings(rawMe?.wallet);
+  const me = rawMe ? { ...rawMe, wallet: holdings } : rawMe;
   return (
     <Pop label="PnL" icon={<Ico.pnl className="size-3.5" />} width="w-72">
       {() => <PnlBody wallet={wallet} me={me} />}

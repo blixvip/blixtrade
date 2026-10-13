@@ -366,7 +366,7 @@ export function About({ r, c, market: j, error, refresh }: { r: TokenDetail; c: 
           <div className="flex flex-col gap-2 text-sm leading-relaxed text-ink-2">
             {t.description ? <p className="whitespace-pre-wrap">{t.description}</p> : <p className="text-muted">No description on this coin.</p>}
             {t.themes?.length ? <div className="flex flex-wrap gap-1.5">{t.themes.map((x) => <span key={x} className="rounded-md bg-paper-3 px-2 py-0.5 text-xs text-muted">{x}</span>)}</div> : null}
-            {j?.holders != null && <span className="num text-xs text-muted">{j.holders.toLocaleString()} holders{j.mcap ? ` · ${usdK(j.mcap)} market cap` : ""}</span>}
+            {(c?.info.holders ?? j?.holders) != null && <span className="num text-xs text-muted">{(c?.info.holders ?? j?.holders)!.toLocaleString()} holders{(c?.mcUsd ?? j?.mcap) ? ` · ${usdK(c?.mcUsd ?? j?.mcap)} market cap` : ""}</span>}
           </div>
         </div>
       </div>

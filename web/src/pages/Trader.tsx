@@ -1,3 +1,5 @@
+import { useWalletPrices } from "@/lib/live-wallet";
+import { markTraderPositions } from "@/lib/wallet-values";
 import { TrackWalletButton } from "@/components/TrackWalletButton";
 // A Fomo trader's profile (#/trader/<handle>), laid out like Fomo's: cover and avatar, name, badges, bio and
 // stats; portfolio value with the PnL chart (24H / 7D / 30D / ALL); best trades; open positions; recent
@@ -40,7 +42,9 @@ export function Trader({ handle }: { handle: string }) {
 }
 
 function FomoTrader({ handle }: { handle: string }) {
-  const [p, setP] = useState<Profile | null>(null);
+  const [snapshot, setP] = useState<Profile | null>(null);
+  const prices = useWalletPrices(snapshot?.positions.filter(x => x.chain === SOLANA).map(x => x.mint) ?? []);
+  const p = useMemo(() => snapshot ? { ...snapshot, positions: markTraderPositions(snapshot.positions, prices, Date.now()) } : null, [snapshot, prices]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<Range>("24h");
@@ -142,7 +146,7 @@ function FomoTrader({ handle }: { handle: string }) {
           <section className={cn(card, "p-5")}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <span className="text-xs font-semibold tracking-[0.06em] text-muted uppercase">Portfolio value</span>
+                <span className="text-xs font-semibold tracking-[0.06em] text-muted uppercase">Portfolio history</span>
                 <div className="num mt-1 text-3xl font-bold tracking-tight">{exactUsd(equity, false)}</div>
                 <div className={cn("num mt-0.5 text-md font-semibold", tone(change))}>{exactUsd(change)} <span className="font-normal text-muted">{RANGES.find(([v]) => v === range)?.[1]}</span></div>
               </div>

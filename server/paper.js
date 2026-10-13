@@ -89,18 +89,20 @@ export function wallet() {
   const afterId = Number(meta.get(isOwner() ? 'paper_reset_id' : `paper_reset_id:${me()}`, 0)) || 0;
   const rows = rowsMine("SELECT * FROM paper WHERE t >= ? AND id > ? AND $MINE", since, afterId);
   let cash = start, openCost = 0, openValue = 0, unpriced = 0, realized = 0;
+  const valuationPositions = [];
   for (const p of rows) {
     cash -= p.sol;
     if (p.status === "closed") { const back = Math.max(0, returned(p)); cash += back; realized += back - p.sol; }
     else {
       openCost += p.sol;
       const o = out(p), v = o.valueSol ?? (o.mult != null ? p.sol * o.mult : null);
+      valuationPositions.push({ mint: p.mint, valueSol: v, mcap: o.mcapNow, priceAt: now() });
       if (v == null) { unpriced++; openValue += p.sol; } else openValue += v;
     }
   }
   cash = Math.max(0, cash);
   return { start, cash: +cash.toFixed(6), equity: +(cash + openValue).toFixed(6), openCost: +openCost.toFixed(6), realized: +realized.toFixed(6),
-    pnl: +(cash + openValue - start).toFixed(6), open: rows.filter((p) => p.status === "open").length, trades: rows.length, unpriced, since: since || null, solUsd: feed.solUsd };
+    pnl: +(cash + openValue - start).toFixed(6), open: rows.filter((p) => p.status === "open").length, trades: rows.length, unpriced, since: since || null, solUsd: feed.solUsd, valuationPositions };
 }
 // A member's desk has limits the owner's does not: every open position is re-priced every second for everyone,
 // so one person opening thousands of dust positions would slow the whole site.

@@ -95,6 +95,7 @@ const Narratives = page(() => import("@/pages/Narratives"), (m) => gated("narrat
 const AiPicks = page(() => import("@/pages/AiPicks"), (m) => gated("picks", m.AiPicks));
 const Settings = page(() => import("@/pages/Settings"), (m) => m.Settings);
 const Traders = page(() => import("@/pages/Traders"), (m) => m.Traders);
+const Wallets = page(() => import("@/pages/Wallets"), (m) => m.Wallets);   // Top wallets: the Top traders and Top devs tabs
 const XTracker = page(() => import("@/pages/XTracker"), (m) => m.XTracker);
 const Tracker = page(() => import("@/pages/Tracker"), (m) => m.Tracker);
 // The wallet tracker's floating window (components/WalletTracker.tsx): its code loads only once it is opened.
@@ -162,7 +163,7 @@ class PageGuard extends Component<{ route: string; children: ReactNode }, { erro
   }
 }
 const PAGES: Record<string, PageOf> = { api: Api, mcp: Mcp, settings: Settings, "": Pulse, account: Account, coins: Coins, feed: Feed,
-  launch: Launch, narratives: Narratives, "ai-picks": AiPicks, health: Health, traders: Traders, tracker: Tracker, x: XTracker, u: Profile, practice: Practice };
+  launch: Launch, narratives: Narratives, "ai-picks": AiPicks, health: Health, traders: Wallets, devs: Wallets, tracker: Tracker, x: XTracker, u: Profile, practice: Practice };
 for (const [route, P] of Object.entries({ ...PAGES, coin: Coin, trader: Trader })) pageCode[route] = P.code;
 
 // Tab names for pages that aren't in the rail.

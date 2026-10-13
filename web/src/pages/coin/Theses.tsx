@@ -18,6 +18,8 @@ import { SiteLogo } from "@/components/logos";
 import { movePosition, useArrivals, useMcNow } from "@/components/postLive";
 import { Avatar, traderHref } from "../traders/parts";
 import type { CoinFomo } from "./FomoTabs";
+import { useLivePrice } from "@/lib/livepx";
+import { markOpenHolding } from "@/lib/wallet-values";
 import { CIcon, Empty } from "./parts";
 
 interface Callout {
@@ -52,17 +54,20 @@ export function AllTheses({ mint, f }: { mint: string; f: CoinFomo | null }) {
   const [src, setSrc] = useState<"all" | "pump" | "fomo">("all");
   const now = useNow();
   const { data: pc } = usePoll<Callouts>(`coin/${mint}/callouts`, 4_000);
+  const price = useLivePrice(mint);
 
   const pump: Post[] = (pc?.items || []).map((x) => ({
     id: x.id, src: "pump", name: x.user.name, handle: x.user.pump, href: x.user.wallet ? `#/trader/${x.user.wallet}` : undefined, external: false,
     pic: x.user.pic, t: x.posted || x.t || 0, mc: x.entryMc, text: clean(x.comment || ""), likes: x.likes, replies: x.replies, views: x.views, verified: x.user.verified,
     media: x.media, multiple: x.multiple, entryMc: x.entryMc, snapMc: x.entryMc && x.multiple ? x.entryMc * x.multiple : null, updates: (x.updates || []).map((u) => ({ ...u, text: clean(u.text) })), hold: { value: x.sizeUsd, pnl: x.pnlUsd, pct: x.pnlPct },
   }));
-  const fomo: Post[] = (f?.theses || []).map((x) => ({
+  const fomo: Post[] = (f?.theses || []).map((original) => {
+    const x = { ...original, position: original.position ? markOpenHolding(original.position, price, now) : null };
+    return ({
     id: `fomo:${x.id}`, src: "fomo", name: x.name || x.handle || "anon", handle: x.handle, href: traderHref(x.handle), pic: x.pic, t: Date.parse(x.t) || 0, mc: x.mcap, text: x.text,
     likes: x.likes || 0, replies: x.replies || 0, dev: x.dev, tracked: Boolean(x.wallet), verified: x.verified,
     hold: x.position ? { value: x.position.value, pnl: x.position.closed ? x.position.realized : x.position.unrealized, pct: x.position.pct, closed: Boolean(x.position.closed) } : null,
-  }));
+  }); });
   const mcNow = useMcNow(mint, null);
   const all = [...(src !== "fomo" ? pump : []), ...(src !== "pump" ? fomo : [])]
     .sort((a, b) => (sort === "new" ? b.t - a.t : b.likes - a.likes || b.t - a.t));

@@ -1,3 +1,4 @@
+import { usePulse } from "@/lib/pulse";
 import "./wallet-tracker.css";
 import { fitTrackerBox, fitTrackerDockWidth, trackerDockTarget, TRACKER_DOCK_MIN_VIEWPORT, type TrackerDockSide } from "@/lib/tracker-window";
 // The wallet tracker (server/wtrack.js): the member's own list of wallets and what they do as it happens.
@@ -18,7 +19,7 @@ import { solNum, tokN, usdK, usePoll } from "@/lib/coin";
 import { ageStr, shortAddr } from "@/lib/format";
 import { useTrade } from "@/lib/mode";
 import { onTracker } from "@/lib/pulse";
-import { useLivePrices } from '@/lib/livepx';
+import { useWalletPrices as useLivePrices } from '@/lib/live-wallet';
 import { markMonitor } from '@/lib/wallet-values';
 import { useNow } from "@/lib/route";
 import { thumb } from "@/lib/thumb";
@@ -233,6 +234,7 @@ function Transfers({ rows }: { rows: TTransfer[] }) {
 
 // ---------- Monitor ----------
 function Monitor({ active }: { active: boolean }) {
+  const liveSolUsd = usePulse(s => s.live.solUsd);
   const { data, error } = usePoll<{ wallets: MonitorWallet[]; solUsd: number }>(active ? "wtrack/monitor" : null, 30_000, true);
   const prices = useLivePrices(active ? (data?.wallets || []).flatMap(w => (w.pnl.valuationPositions ?? w.pnl.positions).map(p => p.mint)) : []);
   const wallets = data?.wallets.map(w => markMonitor(w, prices, Date.now())) || [];
@@ -249,7 +251,7 @@ function Monitor({ active }: { active: boolean }) {
           {wallets.map((w) => (
             <tr key={w.address} className="border-t border-rule hover:bg-paper-3/60">
               <td className="px-3 py-2"><a href={`#/trader/${w.address}`} className="hover:text-ink"><Name w={w} /></a></td>
-              <td className="num px-3 py-2 text-right whitespace-nowrap">{w.balance == null ? <span className="text-muted">—</span> : <><b className="font-semibold">{solNum(w.balance)}</b> <span className="text-muted">SOL · {usdK(w.balance * data.solUsd)}</span></>}</td>
+              <td className="num px-3 py-2 text-right whitespace-nowrap">{w.balance == null ? <span className="text-muted">—</span> : <><b className="font-semibold">{solNum(w.balance)}</b> <span className="text-muted">SOL · {usdK(w.balance * (liveSolUsd || data.solUsd))}</span></>}</td>
               <td className={cn("num px-3 py-2 text-right whitespace-nowrap", tone(w.pnl.realized))}>{signed(w.pnl.realized)}<span className="block text-2xs text-muted">{w.pnl.closed} closed</span></td>
               <td className={cn("num px-3 py-2 text-right whitespace-nowrap", tone(w.pnl.unrealized))}>{signed(w.pnl.unrealized)}<span className="block text-2xs text-muted">{w.pnl.openValue ? `${usdK(w.pnl.openValue)} held` : `${w.pnl.open} open`}</span></td>
               <td className="num px-3 py-2 text-right whitespace-nowrap">{w.pnl.winRate == null ? <span className="text-muted">—</span> : `${Math.round(w.pnl.winRate * 100)}%`}<span className="block text-2xs text-muted">{w.pnl.trades} trades</span></td>
