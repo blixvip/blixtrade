@@ -247,18 +247,35 @@ function fromLive(mint, s, solAmt, buy, x = {}) {
   if (!user || !tracked.has(user)) return;
   const solUsd = liveFeed.solUsd || 150;
   const supply = s.supply > 0 ? s.supply : 1e9;
+// The cap a trade happened at, from the trade itself: the SOL paid over the tokens received is the fill price;
+// on the coin's supply at the SOL price that is the cap. Exact per trade (a buy's cap used to be the cap after the
+// buy had moved it, 10% high on a fresh coin; a bonded coin's cap had its supply counted twice: the live feed's
+// cap already carries it). Tokens come in whole tokens from the live feeds; the chain reader's may be raw units
+// (six decimals), so both readings are tried and the one in a believable range wins, nearest the cap on record.
+// (The user, 2026-10-12: "showing false information and a wrong market cap".)
+const capFromFill = (sol, tokens, supply, solUsd, near = null) => {
+  if (!(sol > 0) || !(tokens > 0) || !(solUsd > 0)) return null;
+  const sup = supply > 0 ? supply : 1e9;
+  const picks = [tokens, tokens / 1e6].map((tk) => (sol / tk) * solUsd * sup).filter((c) => c >= 300 && c <= 5e10);
+  if (!picks.length) return null;
+  return near > 0 ? picks.sort((a, b) => Math.abs(Math.log(a / near)) - Math.abs(Math.log(b / near)))[0] : picks[0];
+};
   wtStats.live++; wtStats.lastLive = now();
   health.ok("wtrack");
   record({ wallet: user, sig: x.sig || `slot:${x.slot ?? now()}:${mint}:${buy ? "b" : "s"}`, mint, side: buy ? "buy" : "sell", solAmt, usd: solAmt * solUsd, tokens: x.tokens ?? null,
-    mcUsd: s.mc > 0 ? s.mc * solUsd * (supply / 1e9) : null, t: now(), src: s.pool ? "pool" : "curve" });
+    mcUsd: capFromFill(solAmt, x.tokens, supply, solUsd, onRecord) ?? onRecord, t: now(), src: s.pool ? "pool" : "curve" });
 }
 
 // A swap the chain reader decoded (engine.js bus "walletTrade"): { wallet: row, trade: { mint, side, tokens, sol, usd, t, sig } }.
+  // The live feed's cap (SOL) is already on the coin's supply; it is the fallback when the trade's tokens are unknown.
+  const onRecord = s.mc > 0 ? s.mc * solUsd : null;
 export function fromEngine(ev) {
   const a = ev?.wallet?.address, tr = ev?.trade;
   if (!a || !tr?.sig || !tracked.has(a)) return;
-  wtStats.chain++; wtStats.lastChain = now();
-  record({ wallet: a, sig: tr.sig, mint: tr.mint, side: tr.side, solAmt: tr.sol, usd: tr.usd ?? null, tokens: tr.tokens ?? null, mcUsd: mcOf(tr.mint), t: tr.t || now(), src: "chain" });
+  const near = mcOf(tr.mint), sup = liveStats.get(tr.mint)?.supply;
+  if (record({ wallet: a, sig: tr.sig, mint: tr.mint, side: tr.side, solAmt: tr.sol, usd: tr.usd ?? null, tokens: tr.tokens ?? null, mcUsd: capFromFill(tr.sol, tr.tokens, sup, liveFeed.solUsd || 150, near) ?? near, t: tr.t || now(), src: "chain" })) {
+    wtStats.chain++; wtStats.lastChain = now();
+  }
 }
 
 // ---------- transfers ----------
@@ -458,4 +475,12 @@ export function start(emitFn) {
   const sweep = () => { if (tracked.size) confirmSweep().catch(() => {}); };
   timers.push(setInterval(sweep, 10_000));
   for (const t of timers) t.unref?.();
+  // Rows kept before caps came from the fill: a week's worth get theirs once (whole-token reading, believable range).
+  try {
+    const upd = db.prepare("UPDATE wt_feed SET mc_usd = ? WHERE id = ?");
+    for (const r of db.prepare("SELECT id, mint, sol, tokens, mc_usd FROM wt_feed WHERE t > ? AND sol > 0 AND tokens > 0 AND src != 'history'").all(now() - FEED_KEEP_DAYS * 86400_000)) {
+      const c = capFromFill(r.sol, r.tokens, liveStats.get(r.mint)?.supply, liveFeed.solUsd || 150, r.mc_usd);
+      if (c && (r.mc_usd == null || Math.abs(Math.log(c / r.mc_usd)) > 0.03)) upd.run(c, r.id);
+    }
+  } catch (e) { logEvent("error", `wallet tracker caps: ${e.message}`); }
 }
