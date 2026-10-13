@@ -390,7 +390,8 @@ async function handleMember(req, env, ctx, url, member, owner) {
     // once; when it is over 30 s old a fresh one is fetched behind it for the next view, so a rebuild shows on the
     // second view after it (the old build's files stay on the server for a week). The browser revalidates it each
     // time (no-cache, not no-store, so back/forward keeps the page), and the caller adds the member cookie.
-    const pageKey = isPageView(req, url) && req.method === "GET" ? edgeKey(`/page${url.pathname}`, req) : null;
+    // Not the Forge (/forge/, the editor in the Create page): a kept copy showed the old editor after each update.
+    const pageKey = isPageView(req, url) && req.method === "GET" && !url.pathname.startsWith("/forge") ? edgeKey(`/page${url.pathname}`, req) : null;
     const keepPage = (r) => {
       if (!(r && r.status === 200 && /text\/html/.test(r.headers.get("content-type") || ""))) return r;
       const [a, b] = r.body.tee();

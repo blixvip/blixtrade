@@ -1834,6 +1834,35 @@ if (EMBED && window.parent !== window) {
   window.parent.postMessage({ type: 'forge-ready' }, location.origin);
 }
 
+// ---- staying current ----------------------------------------------------------
+// The Create page keeps this editor open for as long as the page lives, so an update to the Forge would never reach
+// it. Once a minute while it is on screen (and on coming back to it) it compares its own script and stylesheet with
+// the server's: an empty editor reloads at once; one with work in it offers an Update button instead, so nothing
+// is lost. (The user, 2026-10-13, saw the old editor after an update.)
+const fingerprint = async () => {
+  const parts = await Promise.all(['/forge/js/ui.js', '/forge/app.css', '/forge/index.html'].map(u => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.text() : '')).catch(() => '')));
+  const t = parts.join(' ');
+  if (!t.replace(/ /g, '')) return null;
+  let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+  return t.length + ':' + h;
+};
+let builtAs = null, updateShown = false;
+async function checkForUpdate() {
+  if (document.visibilityState !== 'visible' || updateShown) return;
+  const now = await fingerprint();
+  if (!now) return;
+  if (!builtAs) { builtAs = now; return; }
+  if (now === builtAs) return;
+  if (!doc.layers.length) { location.reload(); return; }
+  updateShown = true;
+  const b = el('button', { class: 'btn pri', title: 'A newer Forge is ready. Reloading starts a fresh canvas: download or use your picture first.', onclick: () => location.reload() }, 'Update the Forge');
+  $('header').insertBefore(b, $('header .grow')?.nextSibling || null);
+  toast('A newer version of the Forge is ready: press Update when your picture is saved');
+}
+fingerprint().then(f => { builtAs = f; });
+setInterval(checkForUpdate, 60_000);
+document.addEventListener('visibilitychange', checkForUpdate);
+
 // Handle for the CDP tests (and for poking at a document from the console).
 window.MF = {
   doc, hist, S, view, D, C,
