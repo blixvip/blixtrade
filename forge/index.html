@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blix Forge</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23333'/><path d='M8 22l5-12 3 7 3-4 5 9z' fill='%23bbb'/></svg>">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">Blix <b>Forge</b></div>
+    <div class="hsep"></div>
+    <div class="chips" id="presetChips"></div>
+    <div class="grow"></div>
+    <span class="badge" id="epBadge" hidden>cpu</span>
+    <button class="iconbtn" id="undo" title="Undo (Ctrl+Z)">&#8630;</button>
+    <button class="iconbtn" id="redo" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
+    <div class="hsep"></div>
+    <button class="btn" id="copyBtn" title="Copy image (Ctrl+C)">Copy</button>
+    <button class="btn" id="dlBtn" title="Download PNG (Ctrl+S)">Download</button>
+    <button class="btn pri" id="useBtn" title="Set this as the coin's picture" hidden>Use as coin picture</button>
+  </header>
+
+  <div id="body">
+    <nav id="rail">
+      <button class="tool" data-tool="looks" aria-pressed="true" title="Looks (1)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>Looks</button>
+      <button class="tool" data-tool="cut" title="Cut out (2)">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M8 7.6L20 18M8 16.4L20 6"/></svg>Cut Out</button>
+      <button class="tool" data-tool="aura" title="Aura (3)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.4"/><path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.3 5.3l1.9 1.9M16.8 16.8l1.9 1.9M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9"/></svg>Aura</button>
+      <button class="tool" data-tool="bg" title="Background (4)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 5 5 3-3 5 5"/><circle cx="15" cy="8" r="1.6"/></svg>Backdrop</button>
+      <button class="tool" data-tool="style" title="Style (5)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3.6 9h16.8M3.6 15h16.8"/></svg>Style</button>
+      <button class="tool" data-tool="text" title="Text (6)">
+        <svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M8.5 19h7"/></svg>Text</button>
+      <div class="grow"></div>
+      <button class="tool" data-tool="export" title="Export (7)">
+        <svg viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>Export</button>
+    </nav>
+
+    <section id="panel"></section>
+
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div id="cursor"></div>
+      <div id="drop">
+        <div class="big">Drop a photo here</div>
+        <div class="hint">or paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd><br>the background comes off by itself, then you pick a look</div>
+        <button class="btn pri pick" id="openBtn">Choose file</button>
+      </div>
+      <div id="hud">
+        <button class="iconbtn" id="zoomOut" title="Zoom out (-)">&minus;</button>
+        <b id="zoomLabel">100%</b>
+        <button class="iconbtn" id="zoomIn" title="Zoom in (+)">+</button>
+        <button class="chip" id="fitBtn" title="Fit (0)">Fit</button>
+        <span id="dims">1600 × 1600</span>
+      </div>
+      <div id="busy"><div class="ring"></div><div class="msg" id="busyMsg">working…</div></div>
+      <div id="toast"></div>
+    </div>
+
+    <aside id="layers">
+      <div class="ldhead">
+        <span>Layers</span>
+        <div class="grow"></div>
+        <button class="iconbtn" id="addText" title="Add text layer">T</button>
+        <button class="iconbtn" id="addEmoji" title="Add a sticker">&#9786;</button>
+        <button class="iconbtn" id="addImg" title="Add an image layer">+</button>
+      </div>
+      <div id="emojiBar" hidden></div>
+      <div id="layerList"></div>
+      <div id="layerProps"></div>
+    </aside>
+  </div>
+</div>
+<input type="file" id="file" accept="image/*" hidden multiple>
+<input type="file" id="bgFile" accept="image/*" hidden>
+<script type="module" src="js/ui.js"></script>
+</body>
+</html>

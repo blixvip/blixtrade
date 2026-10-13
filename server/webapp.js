@@ -32,6 +32,55 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8" };
 export const webStats = { on: false, port: PORT, built: null, error: null };
 
+// The Forge (forge/): the photo editor on the Create coin page, its runtime (forge/vendor, forge/models, fetched by
+// forge/setup.mjs) and the Remilio backgrounds (forge/bg, forge/thumb). Static files beside web/dist; the big ones
+// (models, wasm, pictures) stream as they are instead of going through the byte cache. Its page may sit in Blix's
+// own frame (the Create coin page) and nowhere else. On its own at /forge/ it gets cross-origin isolation, so the
+// cutout runs on every core; inside the app's frame it runs on one (the app page is not isolated, and must not
+// be: sign-in pop-ups need the opener).
+const FORGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "forge");
+const FORGE_TYPES = { ...TYPES, ".mjs": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".onnx": "application/octet-stream", ".jpeg": "image/jpeg", ".gif": "image/gif" };
+const FORGE_ZIP = new Set([".js", ".mjs", ".css", ".html", ".json", ".svg"]);
+const FORGE_HEAVY = /^(vendor|models|bg|thumb|fonts)\//;
+function serveForge(req, res, p) {
+  const notFound = () => { res.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" }); res.end("Not found"); };
+  if (p === "/forge") { const q = String(req.url).indexOf("?"); res.writeHead(301, { location: "/forge/" + (q >= 0 ? String(req.url).slice(q) : ""), "cache-control": "no-store" }); return res.end(); }
+  const rel = p === "/forge/" ? "index.html" : p.slice("/forge/".length);
+  const file = path.join(FORGE, rel);
+  if (!file.startsWith(FORGE + path.sep) || /(^|[\\/])\./.test(rel) || /^(setup\.mjs|UPSTREAM)$/.test(rel)) return notFound();
+  let st = null;
+  try { st = fs.statSync(file); } catch {}
+  if (!st || !st.isFile()) return notFound();
+  const ext = path.extname(file), heavy = FORGE_HEAVY.test(rel);
+  const headers = {
+    "content-type": FORGE_TYPES[ext] || "application/octet-stream",
+    "cache-control": heavy ? "public, max-age=604800" : "no-cache",
+    "x-content-type-options": "nosniff",
+    // On every file, not just the page: a worker script without them is blocked under the page's COEP.
+    "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "credentialless", "cross-origin-resource-policy": "same-origin",
+    ...(ext === ".html" ? {
+      "content-security-policy": "frame-ancestors 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'",
+      "x-frame-options": "SAMEORIGIN", "referrer-policy": "strict-origin-when-cross-origin",
+    } : {}),
+  };
+  if (st.size > 4 * 1024 ** 2 || !FORGE_ZIP.has(ext)) {
+    res.writeHead(200, { ...headers, "content-length": st.size });
+    if (req.method === "HEAD") return res.end();
+    return fs.createReadStream(file).on("error", () => res.destroy()).pipe(res);
+  }
+  const body = read(file);
+  if (!body) return notFound();
+  const accepts = String(req.headers["accept-encoding"] || ""), enc = /\bbr\b/.test(accepts) ? "br" : /gzip/.test(accepts) ? "gzip" : null;
+  const local = LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase());
+  const send = (zip) => {
+    if (res.destroyed) return;
+    res.writeHead(200, { ...headers, ...(zip ? { "content-encoding": enc, vary: "accept-encoding" } : {}) });
+    res.end(req.method === "HEAD" ? undefined : zip || body);
+  };
+  const zipping = !local && enc ? compressed(file, body, enc) : null;
+  if (zipping) zipping.then(send, () => send(null)); else send(null);
+}
+
 const files = createByteCache({ maxBytes: 64 * 1024 ** 2, maxEntries: 400, sizeOf: v => v.body.length });
 function read(file) {
   const c = files.get(file);
@@ -473,6 +522,10 @@ export function startWebApp(radar, radarPort, { retryMs = 30_000 } = {}) {
     if (p.startsWith("/api/edge/") && req.edgeCall) return toAccountsHere(req, res);
     // What this process is keeping and how often it was enough, for checking by hand on this PC.
     if (p === "/__cache" && LOCAL_HOSTS.has(String(req.headers.host || "").toLowerCase())) return json(res, 200, JSON.stringify({ answers: cacheReport(), pictures: picStats, far: farStats }));
+    if (p === "/forge" || p.startsWith("/forge/")) {
+      if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405); return res.end(); }
+      return serveForge(req, res, p);
+    }
     if (p.startsWith("/api/") || p.startsWith("/img/")) {
       if (!radar) return fromHere(req, res, p, radarPort);
       // Hand the request to the radar as the local page it is (a member's, as them).

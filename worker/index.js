@@ -333,7 +333,8 @@ async function handleMember(req, env, ctx, url, member, owner) {
     // The page's built files never change under the same name (assets/<name>-<hash>.js), and brand images and coin
     // logos barely do: kept at the edge, so a new visitor's 35 script files come from the nearest Cloudflare site
     // instead of one by one through the tunnel. Only answers the server gave an owner or member are kept.
-    const KEEP = /^\/assets\/[\w.-]+$/.test(url.pathname) ? 31536000 : /^\/(brand\/[\w./-]+|favicon\.ico|img\/[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(url.pathname) ? 86400 : 0;
+    // The Forge's runtime, models, fonts and backgrounds (server/webapp.js serveForge) never change under a name: a week.
+    const KEEP = /^\/assets\/[\w.-]+$/.test(url.pathname) ? 31536000 : /^\/(brand\/[\w./-]+|favicon\.ico|img\/[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(url.pathname) ? 86400 : /^\/forge\/(vendor\/ort|models|bg|thumb|fonts)\/[\w.-]+$/.test(url.pathname) ? 604800 : 0;
     // The headers that vouch for a member to the server (checked in server/webapp.js memberOf): their email, the
     // time, and a signature over both (with ".owner" for the owner).
     const vouch = member ? await vouchFor(member, owner, env) : null;

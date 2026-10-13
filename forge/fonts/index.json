@@ -1,0 +1,98 @@
+[
+  {
+    "fam": "Anton",
+    "wght": "400",
+    "file": "anton.woff2",
+    "kb": 18
+  },
+  {
+    "fam": "Bebas Neue",
+    "wght": "400",
+    "file": "bebas-neue.woff2",
+    "kb": 13
+  },
+  {
+    "fam": "Archivo Black",
+    "wght": "400",
+    "file": "archivo-black.woff2",
+    "kb": 18
+  },
+  {
+    "fam": "Oswald",
+    "wght": "700",
+    "file": "oswald.woff2",
+    "kb": 12
+  },
+  {
+    "fam": "Titan One",
+    "wght": "400",
+    "file": "titan-one.woff2",
+    "kb": 11
+  },
+  {
+    "fam": "Luckiest Guy",
+    "wght": "400",
+    "file": "luckiest-guy.woff2",
+    "kb": 17
+  },
+  {
+    "fam": "Bangers",
+    "wght": "400",
+    "file": "bangers.woff2",
+    "kb": 23
+  },
+  {
+    "fam": "Permanent Marker",
+    "wght": "400",
+    "file": "permanent-marker.woff2",
+    "kb": 29
+  },
+  {
+    "fam": "Rubik Mono One",
+    "wght": "400",
+    "file": "rubik-mono-one.woff2",
+    "kb": 12
+  },
+  {
+    "fam": "Lilita One",
+    "wght": "400",
+    "file": "lilita-one.woff2",
+    "kb": 10
+  },
+  {
+    "fam": "Press Start 2P",
+    "wght": "400",
+    "file": "press-start-2p.woff2",
+    "kb": 12
+  },
+  {
+    "fam": "VT323",
+    "wght": "400",
+    "file": "vt323.woff2",
+    "kb": 18
+  },
+  {
+    "fam": "Space Mono",
+    "wght": "700",
+    "file": "space-mono.woff2",
+    "kb": 16
+  },
+  {
+    "fam": "Space Grotesk",
+    "wght": "700",
+    "file": "space-grotesk.woff2",
+    "kb": 13
+  },
+  {
+    "fam": "Chakra Petch",
+    "wght": "700",
+    "file": "chakra-petch.woff2",
+    "kb": 10
+  },
+  {
+    "fam": "Orbitron",
+    "wght": "900",
+    "file": "orbitron.woff2",
+    "kb": 6
+  }
+]

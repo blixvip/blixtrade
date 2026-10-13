@@ -379,6 +379,45 @@ export function Launch() {
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The Forge (forge/, the photo editor) over the page: the picture goes in, the finished art comes back as the
+  // coin's picture. Mounted once it is first opened and only hidden after, so the work stays while the form is
+  // filled in and more can be made (the user, 2026-10-12: "add this into Create a Coin page where I can work
+  // with it and create more"). forge-ready / forge-load / forge-picture: forge/js/ui.js, the end.
+  const [forge, setForge] = useState<"closed" | "open" | "hidden">("closed");
+  const forgeFrame = useRef<HTMLIFrameElement>(null), forgeReady = useRef(false), sentToForge = useRef<string | null>(null);
+  const imageNow = useRef<string | null>(null), fromForge = useRef(false); imageNow.current = image;
+  // The picture the Forge just made counts as already in it: reopening must not add it again as a layer.
+  useEffect(() => { if (fromForge.current && image) { sentToForge.current = image; fromForge.current = false; } }, [image]);
+  const sendToForge = () => {
+    const w = forgeFrame.current?.contentWindow, url = imageNow.current;
+    if (!w || !forgeReady.current || !url || url === sentToForge.current) return;
+    sentToForge.current = url;
+    w.postMessage({ type: "forge-load", dataUrl: url, name: d.name.trim() || "Coin" }, location.origin);
+  };
+  const openForge = () => { setForge("open"); if (forgeReady.current) sendToForge(); };
+  useEffect(() => {
+    const onMsg = async (e: MessageEvent) => {
+      if (e.origin !== location.origin || e.source !== forgeFrame.current?.contentWindow || !e.data || typeof e.data.type !== "string") return;
+      if (e.data.type === "forge-ready") { forgeReady.current = true; sendToForge(); }
+      if (e.data.type === "forge-picture" && typeof e.data.dataUrl === "string") {
+        try {
+          const b = await (await fetch(e.data.dataUrl)).blob();
+          fromForge.current = true;   // the art is the picture now: not sent back in as a new layer
+          await pick(new File([b], "forge.png", { type: b.type || "image/png" }));
+          setForge("hidden");
+          toast("The art is the coin's picture. Open the Forge again to keep working on it.");
+        } catch { toast("The art could not be read."); }
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (forge !== "open") return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setForge("hidden"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [forge]);
   const [cropping, setCropping] = useState(false);
   const makeSquare = async () => {
     if (!image || cropping) return;
@@ -572,6 +611,10 @@ export function Launch() {
                     <button type="button" onClick={() => choose(null)} className="text-muted underline-offset-2 hover:text-down hover:underline">Remove</button>
                   </div>
                 ) : <span className="text-center text-xs text-muted">Square, 500px+<br />PNG, JPG, GIF, WebP · up to 4 MB<br />or paste a picture here</span>}
+                <button type="button" onClick={openForge} title="Cut the subject out, add a glow, put it on one of 104 backgrounds, add text"
+                  className="mt-1 flex h-9 w-full items-center justify-center gap-2 rounded-control border border-rule-2 bg-paper-3 text-sm font-semibold text-ink transition-colors hover:border-muted hover:bg-paper-4">
+                  <Icon.sliders className="size-4" />{image ? "Edit in the Forge" : "Make the art"}
+                </button>
               </div>
               <input ref={file} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
               <div className="flex w-full min-w-0 flex-1 flex-col gap-3.5">
@@ -766,6 +809,18 @@ export function Launch() {
         </aside>
       </div>
 
+      {forge !== "closed" && (
+        <div className={cn("fixed inset-0 z-50 flex flex-col bg-paper", forge === "hidden" && "hidden")} role="dialog" aria-labelledby="forge-title">
+          <div className="flex h-11 shrink-0 items-center gap-3 border-b border-rule-2 px-4">
+            <span id="forge-title" className="text-sm font-semibold text-ink">The Forge</span>
+            <span className="truncate text-xs text-muted max-sm:hidden">Drop or paste a photo: the background comes off by itself. Pick a look or a Remilio background, add text, then “Use as coin picture”.</span>
+            <span className="grow" />
+            <a href="/forge/" target="_blank" rel="noopener" className="text-xs text-muted hover:text-ink">Open in its own tab</a>
+            <button type="button" onClick={() => setForge("hidden")} aria-label="Close the Forge" className="grid size-8 place-items-center rounded-full text-ink-2 hover:bg-white/[0.08] hover:text-ink"><Icon.close className="size-4" /></button>
+          </div>
+          <iframe ref={forgeFrame} src="/forge/?embed=1" aria-label="The Forge editor" className="min-h-0 w-full flex-1 border-0 bg-paper" allow="clipboard-write" />
+        </div>
+      )}
       <Dialog open={asking} onOpenChange={setAsking} title={`Launch $${sym}?`}>
         <div className="flex items-center gap-3">
           <span className="size-14 shrink-0 overflow-hidden rounded-[14px] border border-rule-2 bg-paper-3">{image && <img src={image} alt="" className="size-full object-cover" />}</span>

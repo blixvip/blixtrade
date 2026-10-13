@@ -143,6 +143,30 @@ if (!NO_WEB && fs.existsSync(path.join(dist, "index.html"))) {
   fs.rmSync(tgz, { force: true });
 }
 
+// ---------- 4b. the Forge (forge/: the editor, its runtime, the backgrounds; no restart) ----------
+// Every file under forge/ the server lacks: the runtime, models and pictures by size (big, never edited), the
+// editor's own files by content. --no-web leaves it alone too. forge/setup.mjs fetches the runtime here first.
+if (!NO_WEB && fs.existsSync(path.join(ROOT, "forge", "index.html"))) {
+  const FORGE_HEAVY = /^(vendor|models|bg|thumb|fonts)\//;
+  const walk = (dir, base = "") => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name), base + e.name + "/") : [base + e.name]);
+  const mine = walk(path.join(ROOT, "forge")).filter((f) => !/^(setup\.mjs|UPSTREAM)$/.test(f) && !/(^|\/)\./.test(f));
+  const out = ssh(`cd ${REMOTE}/forge 2>/dev/null || exit 0; find . -type f -printf '%P %s\\n'; echo '--hashes--'; find . -type f -not -path './vendor/*' -not -path './models/*' -not -path './bg/*' -not -path './thumb/*' -not -path './fonts/*' -exec sh -c 'printf "%s " "$1"; tr -d "\\r" < "$1" | sha256sum | cut -c1-16' _ {} \\;`);
+  const [sizes, hashes] = out.split("--hashes--");
+  const thereSize = new Map(), thereHash = new Map();
+  for (const l of (sizes || "").trim().split("\n")) { const [f, s] = l.trim().split(/\s+/); if (f) thereSize.set(f, Number(s)); }
+  for (const l of (hashes || "").trim().split("\n")) { const [f, h] = l.trim().split(/\s+/); if (f && h) thereHash.set(f.replace(/^\.\//, ""), h); }
+  const ship = mine.filter((f) => FORGE_HEAVY.test(f) ? thereSize.get(f) !== fs.statSync(path.join(ROOT, "forge", f)).size : thereHash.get(f) !== hash(fs.readFileSync(path.join(ROOT, "forge", f))));
+  if (ship.length) {
+    const bytes = ship.reduce((n, f) => n + fs.statSync(path.join(ROOT, "forge", f)).size, 0);
+    say(`Shipping forge/ (${ship.length} files, ${(bytes / 1048576).toFixed(1)} MB)…`);
+    const tgz = path.join(os.tmpdir(), `blix-forge-${process.pid}.tgz`), listFile = path.join(os.tmpdir(), "blix-forge-files.txt");
+    fs.writeFileSync(listFile, ship.map((f) => `forge/${f}`).join(String.fromCharCode(10)) + String.fromCharCode(10));
+    execFileSync("tar", ["czf", path.basename(tgz), "-C", ROOT, "-T", listFile], { cwd: os.tmpdir() });
+    ssh(`mkdir -p /tmp/blix-dist ${REMOTE}/forge && cat > /tmp/blix-dist/f.tgz && cd ${REMOTE} && tar xzf /tmp/blix-dist/f.tgz && rm -f /tmp/blix-dist/f.tgz`, fs.readFileSync(tgz));
+    fs.rmSync(tgz, { force: true });
+  } else say("forge/: the server has every file.");
+}
+
 // ---------- 5. server (one restart, rollback on failure) ----------
 const record = () => {
   const m = Object.fromEntries(manifest);
