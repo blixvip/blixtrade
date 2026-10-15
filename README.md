@@ -7,6 +7,8 @@
 **The open-source Solana memecoin trading terminal.**
 Axiom / GMGN-style Pulse, live pump.fun feed, holder ledgers, real Jupiter quotes, Fomo one-tap buys, AI reads on every coin, smart-money tracking, and a track record that scores its own calls. Runs on your machine. Zero dependencies. MIT.
 
+**▶ Use the hosted version at [blixvip.com](https://blixvip.com)**: no install, sign in with Google, paper mode or real SOL.
+
 [![Solana](https://img.shields.io/badge/chain-Solana-9945FF?logo=solana&logoColor=white)](https://solana.com)
 [![pump.fun](https://img.shields.io/badge/feed-pump.fun%20live-1fd18e)](https://pump.fun)
 [![Node 24](https://img.shields.io/badge/node-%E2%89%A5%2024-5FA04E?logo=node.js&logoColor=white)](https://nodejs.org)
