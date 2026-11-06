@@ -301,6 +301,12 @@ Open an issue to vote or add to it.
 
 PRs and issues welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [design.md](design.md) (the locked design system) first. `npm test` must pass; new data sources must go through the safety policy in `server/quality.js`.
 
+## Contributors
+
+Thank you to everyone who has helped build blixtrade. New here? Read [CONTRIBUTING.md](CONTRIBUTING.md) and pick one of the [good first issues](https://github.com/blixvip/blixtrade/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+
+<a href="https://github.com/blixvip/blixtrade/graphs/contributors"><img src="https://contrib.rocks/image?repo=blixvip/blixtrade" alt="Contributors" /></a>
+
 <!-- more-from-blixvip:start -->
 ## More from blixvip
 
