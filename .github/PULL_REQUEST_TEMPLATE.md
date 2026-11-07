@@ -1,3 +1,4 @@
+<!-- Not in the contributor Discord yet? Join before your PR: https://discord.gg/wJfHQXfEMM -->
 ## What
 
 <!-- One or two sentences. Link the issue if there is one. -->

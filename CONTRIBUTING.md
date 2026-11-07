@@ -1,5 +1,7 @@
 # Contributing to Blix
 
+> 💬 **Before you open a PR, join the [blix open source Discord](https://discord.gg/wJfHQXfEMM).** It's the home for contributors across every blixvip repo: ask questions, run ideas by us, and talk through your PR.
+
 Thanks for looking. Blix is a small, dependency-free Node codebase, so most changes are a single file and a test.
 
 ## Ground rules
